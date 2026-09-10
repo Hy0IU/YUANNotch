@@ -46,9 +46,16 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    @Published var isFileShelfEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isFileShelfEnabled, forKey: Self.fileShelfEnabledKey)
+        }
+    }
+
     private static let triggerModeKey = "yuanNotch.triggerMode"
     private static let expandedWidthKey = "yuanNotch.expandedWidth"
     private static let expandedHeightKey = "yuanNotch.expandedHeight"
+    private static let fileShelfEnabledKey = "yuanNotch.fileShelfEnabled"
 
     init() {
         let rawMode = UserDefaults.standard.string(forKey: Self.triggerModeKey)
@@ -57,5 +64,7 @@ final class AppSettingsStore: ObservableObject {
         let w = UserDefaults.standard.double(forKey: Self.expandedWidthKey)
         let h = UserDefaults.standard.double(forKey: Self.expandedHeightKey)
         customExpandedSize = (w > 0 && h > 0) ? CGSize(width: w, height: h) : nil
+
+        isFileShelfEnabled = UserDefaults.standard.object(forKey: Self.fileShelfEnabledKey) as? Bool ?? true
     }
 }

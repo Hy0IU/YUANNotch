@@ -18,7 +18,7 @@ final class NotchPanel: NSPanel {
 }
 
 @MainActor
-final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
     }
@@ -29,14 +29,18 @@ final class NotchPanelController: NSObject {
     private let store = NoteStore()
     private let settingsStore = AppSettingsStore()
     private let imageStore = LocalImageStore()
+    private let fileShelfStore = FileShelfStore()
+    private let workspaceState = NotebookWorkspaceState()
     private let drawerState = DrawerState()
     private let editorInteractionState = EditorInteractionState()
-    private lazy var settingsPopoverController = SettingsPopoverController(settingsStore: settingsStore)
+    private lazy var settingsWindowController = SettingsWindowController(settingsStore: settingsStore)
     private var hotPanels: [String: NotchPanel] = [:]
-    private var hotHostingViews: [String: NSHostingView<CompactNotchView>] = [:]
+    private var hotHostingViews: [String: CompactFileDropHostingView<CompactNotchView>] = [:]
+    private var fileDragTrackingState = FileDragTrackingState()
     private let drawerPanel: NotchPanel
     private var hostingView: NSHostingView<NotebookView>?
     private var mousePollingTimer: Timer?
+    private var globalMouseDownMonitor: Any?
     private var globalMouseDragMonitor: Any?
     private var globalMouseUpMonitor: Any?
     private var cachedLayout: NotchLayout?
@@ -60,6 +64,16 @@ final class NotchPanelController: NSObject {
         configurePanel(drawerPanel)
         drawerPanel.onMouseEvent = { [weak self] event in
             guard let self else { return }
+            switch event.type {
+            case .leftMouseDown:
+                self.beginFileDragTracking(at: self.screenLocation(for: event))
+            case .leftMouseDragged:
+                self.noteFileDragMouseDragged(at: self.screenLocation(for: event))
+            case .leftMouseUp:
+                self.endFileDragTracking()
+            default:
+                break
+            }
             if self.handleResizeMouseEvent(event) { return }
             self.editorInteractionState.handleMouseEvent(event, searchingIn: self.hostingView)
         }
@@ -81,22 +95,29 @@ final class NotchPanelController: NSObject {
         drawerPanel.orderOut(nil)
     }
 
-    func expand(animated: Bool) {
+    func expand(animated: Bool, activate: Bool = true) {
         guard !isExpanded else { return }
         let layout = NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
         cancelCollapse()
         isExpanded = true
         drawerScreen = currentScreen
+        workspaceState.isShelfDropTargeted = false
         rebuildContent(layout: layout)
         // Rebuild hot panels with the same layout so compact widths match exactly
         rebuildAllHotPanels()
         drawerPanel.setFrame(drawerFrame(for: layout, screen: currentScreen), display: true)
-        NSApp.activate(ignoringOtherApps: true)
-        drawerPanel.makeKeyAndOrderFront(nil)
+        if activate {
+            NSApp.activate(ignoringOtherApps: true)
+            drawerPanel.makeKeyAndOrderFront(nil)
+        } else {
+            // Revealed as a drop target — don't steal focus mid-drag
+            drawerPanel.orderFrontRegardless()
+        }
         if let panel = hotPanelForScreen(currentScreen) {
             panel.orderOut(nil)
         }
         setDrawerExpanded(true, animated: animated)
+        guard activate else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
             guard let self else { return }
             guard self.isExpanded else { return }
@@ -114,7 +135,6 @@ final class NotchPanelController: NSObject {
         if let range = editorInteractionState.currentSelectionRange() {
             store.updateSelection(for: store.activeTabID, range: range)
         }
-        settingsPopoverController.close(animated: false)
         isExpanded = false
 
         stopCollapseAnimation()
@@ -157,10 +177,12 @@ final class NotchPanelController: NSObject {
             store: store,
             settingsStore: settingsStore,
             imageStore: imageStore,
+            fileShelfStore: fileShelfStore,
+            workspaceState: workspaceState,
             drawerState: drawerState,
             editorInteractionState: editorInteractionState,
             layout: layout,
-            onOpenSettings: { [weak self] in self?.openSettingsPopover() }
+            onOpenSettings: { [weak self] in self?.openSettings() }
         )
 
         if let hostingView {
@@ -207,10 +229,11 @@ final class NotchPanelController: NSObject {
                     guard event.type == .leftMouseDown else { return }
                     self.expand(animated: true)
                 }
-                let host = FirstMouseHostingView(rootView: hotView)
+                let host = CompactFileDropHostingView(rootView: hotView)
                 host.translatesAutoresizingMaskIntoConstraints = false
                 host.wantsLayer = true
                 host.layer?.masksToBounds = true
+                configureCompactFileDrop(host, screen: screen)
                 panel.contentView = host
                 panel.setFrame(hotFrame(for: layout, screen: screen), display: true)
                 panel.orderFrontRegardless()
@@ -229,6 +252,29 @@ final class NotchPanelController: NSObject {
     private func hotPanelForScreen(_ screen: NSScreen?) -> NotchPanel? {
         guard let screen else { return nil }
         return hotPanels[screen.uniqueID]
+    }
+
+    private func configureCompactFileDrop(_ host: CompactFileDropHostingView<CompactNotchView>, screen: NSScreen) {
+        host.onFileDragTargeted = { [weak self, weak screen] targeted in
+            guard let self, let screen, targeted else { return }
+            guard self.settingsStore.isFileShelfEnabled, !self.isExpanded else { return }
+            self.currentScreen = screen
+            self.expand(animated: true, activate: false)
+        }
+        host.onFilesDropped = { [weak self] urls in
+            self?.receiveDroppedFiles(urls) ?? false
+        }
+    }
+
+    private func receiveDroppedFiles(_ urls: [URL]) -> Bool {
+        guard settingsStore.isFileShelfEnabled, fileShelfStore.acceptDrop(urls) else { return false }
+        // Reveal the shelf as drop feedback. Defer so AppKit can finish the
+        // drop callback before the window order changes.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isExpanded else { return }
+            self.expand(animated: true, activate: false)
+        }
+        return true
     }
 
     private func showAllHotPanels() {
@@ -278,15 +324,28 @@ final class NotchPanelController: NSObject {
 
 
     private func observeGlobalSelectionMouseEvents() {
-        globalMouseDragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
+        globalMouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
+            let changeCount = NSPasteboard(name: .drag).changeCount
+            let location = NSEvent.mouseLocation
             Task { @MainActor in
+                self?.beginFileDragTracking(at: location, pasteboardChangeCount: changeCount)
+            }
+        }
+
+        globalMouseDragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
+            let location = NSEvent.mouseLocation
+            Task { @MainActor in
+                self?.noteFileDragMouseDragged(at: location)
                 self?.editorInteractionState.noteGlobalMouseDragged()
             }
         }
 
         globalMouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
             Task { @MainActor in
-                self?.editorInteractionState.noteGlobalMouseUp()
+                guard let self else { return }
+                self.endFileDragTracking()
+                self.editorInteractionState.noteGlobalMouseUp()
+                self.workspaceState.isDraggingShelfItem = false
             }
         }
     }
@@ -351,6 +410,16 @@ final class NotchPanelController: NSObject {
                 return
             }
 
+            if workspaceState.isDraggingShelfItem {
+                cancelCollapse()
+                return
+            }
+
+            if workspaceState.isPreviewingShelfItem {
+                cancelCollapse()
+                return
+            }
+
             if isPointInExpandedStayRegion(point) {
                 cancelCollapse()
             } else {
@@ -359,7 +428,23 @@ final class NotchPanelController: NSObject {
             return
         }
 
-        if settingsStore.triggerMode == .hover {
+        // A file being dragged toward the notch reveals the drawer so it can
+        // be dropped onto the shelf
+        if settingsStore.isFileShelfEnabled, isFileDragInProgress() {
+            for screenID in hotPanels.keys {
+                guard let screen = NSScreen.screens.first(where: { $0.uniqueID == screenID }) else { continue }
+                let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
+                if fileDropFrame(for: layout, screen: screen).contains(point) {
+                    currentScreen = screen
+                    expand(animated: true, activate: false)
+                    break
+                }
+            }
+            return
+        }
+
+        // Don't expand on hover while the mouse button is held (e.g. dragging)
+        if settingsStore.triggerMode == .hover, NSEvent.pressedMouseButtons & 1 == 0 {
             for (screenID, panel) in hotPanels {
                 let activationZone = panel.frame.insetBy(dx: 0, dy: -6)
                 if activationZone.contains(point) {
@@ -381,6 +466,8 @@ final class NotchPanelController: NSObject {
             guard self.activeMenuTrackingCount == 0 else { return }
             guard !self.editorInteractionState.isDraggingSelection else { return }
             guard !self.isResizingDrawer else { return }
+            guard !self.workspaceState.isDraggingShelfItem else { return }
+            guard !self.workspaceState.isPreviewingShelfItem else { return }
             guard !self.isPointInExpandedStayRegion(NSEvent.mouseLocation) else { return }
             self.collapse(animated: true)
         }
@@ -411,7 +498,6 @@ final class NotchPanelController: NSObject {
         let hotRect = hotFrame(for: layout, screen: currentScreen)
         return drawerPanel.frame.insetBy(dx: -margin, dy: -margin).contains(point)
             || hotRect.contains(point)
-            || settingsPopoverController.contains(point)
     }
 
     private var isResizingDrawer = false
@@ -485,15 +571,54 @@ final class NotchPanelController: NSObject {
         rebuildContent(layout: layout)
     }
 
-    private func openSettingsPopover() {
+    func openSettings() {
         cancelCollapse()
-        settingsPopoverController.show(relativeTo: drawerPanel)
+        if isExpanded {
+            collapse(animated: true)
+        }
+        settingsWindowController.show()
     }
 
 
     private func hotFrame(for layout: NotchLayout, screen: NSScreen?) -> NSRect {
         let screenFrame = screen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         return frame(for: layout.compactSize, topY: screenFrame.maxY + layout.compactTopOffset, in: screenFrame)
+    }
+
+    /// Extended drop target below the compact notch, so an approaching file
+    /// drag reveals the drawer before the cursor reaches the tiny notch area.
+    private func fileDropFrame(for layout: NotchLayout, screen: NSScreen?) -> NSRect {
+        var frame = hotFrame(for: layout, screen: screen)
+        frame.origin.y -= 28
+        frame.size.height += 28
+        return frame
+    }
+
+    private func isFileDragInProgress() -> Bool {
+        fileDragTrackingState.isFileDragInProgress(
+            isLeftMouseButtonDown: NSEvent.pressedMouseButtons & 1 == 1,
+            pasteboard: NSPasteboard(name: .drag)
+        )
+    }
+
+    private func beginFileDragTracking(at location: NSPoint, pasteboardChangeCount: Int? = nil) {
+        fileDragTrackingState.mouseDown(
+            at: location,
+            pasteboardChangeCount: pasteboardChangeCount ?? NSPasteboard(name: .drag).changeCount
+        )
+    }
+
+    private func noteFileDragMouseDragged(at location: NSPoint) {
+        fileDragTrackingState.mouseDragged(to: location)
+    }
+
+    private func endFileDragTracking() {
+        fileDragTrackingState.mouseUp()
+    }
+
+    private func screenLocation(for event: NSEvent) -> NSPoint {
+        guard let window = event.window else { return event.locationInWindow }
+        return window.convertToScreen(NSRect(origin: event.locationInWindow, size: .zero)).origin
     }
 
     private func drawerFrame(for layout: NotchLayout, screen: NSScreen?) -> NSRect {

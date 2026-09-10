@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ("notchNotes.triggerMode", "yuanNotch.triggerMode"),
             ("notchNotes.expandedWidth", "yuanNotch.expandedWidth"),
             ("notchNotes.expandedHeight", "yuanNotch.expandedHeight"),
+            ("notchNotes.fileShelf.v1", "yuanNotch.fileShelf.v1"),
         ]
 
         let legacyDomains = ["io.github.oiloil.NotchNotes", "NotchNotes"]
@@ -72,6 +73,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hideItem = NSMenuItem(title: "Hide Notes", action: #selector(hideNotes), keyEquivalent: "w")
         hideItem.target = self
         appMenu.addItem(hideItem)
+
+        appMenu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        appMenu.addItem(settingsItem)
 
         appMenu.addItem(.separator())
 
@@ -123,6 +130,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func hideNotes() {
         panelController?.collapse(animated: true)
+    }
+
+    @objc private func openSettings() {
+        panelController?.openSettings()
     }
 
     @objc private func quit() {

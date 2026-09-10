@@ -12,6 +12,8 @@ struct NotebookView: View {
     @ObservedObject var store: NoteStore
     @ObservedObject var settingsStore: AppSettingsStore
     let imageStore: LocalImageStore
+    @ObservedObject var fileShelfStore: FileShelfStore
+    @ObservedObject var workspaceState: NotebookWorkspaceState
     @ObservedObject var drawerState: DrawerState
     @ObservedObject var editorInteractionState: EditorInteractionState
     let layout: NotchLayout
@@ -25,6 +27,19 @@ struct NotebookView: View {
         // animation always converges to the panel's center even if the panel
         // frame and the layout size ever disagree
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .dropDestination(for: URL.self) { urls, _ in
+            guard settingsStore.isFileShelfEnabled, !workspaceState.isDraggingShelfItem else {
+                workspaceState.isShelfDropTargeted = false
+                return false
+            }
+            return receiveDroppedFiles(urls)
+        } isTargeted: { isTargeted in
+            withAnimation(shelfAnimation) {
+                workspaceState.isShelfDropTargeted = settingsStore.isFileShelfEnabled
+                    && isTargeted
+                    && !workspaceState.isDraggingShelfItem
+            }
+        }
     }
 
     private var drawer: some View {
@@ -87,14 +102,31 @@ struct NotebookView: View {
                 }
                 .frame(height: toolbarHeight, alignment: .center)
 
-                MarkdownEditorPanel(
-                    store: store,
-                    imageStore: imageStore,
-                    editorInteractionState: editorInteractionState,
-                    size: editorSize
-                )
-                .frame(width: editorSize.width, height: editorSize.height)
-                .background(Color(red: 0.06, green: 0.06, blue: 0.07))
+                VStack(spacing: shelfSpacing) {
+                    MarkdownEditorPanel(
+                        store: store,
+                        imageStore: imageStore,
+                        editorInteractionState: editorInteractionState,
+                        size: editorSize
+                    )
+                    .frame(width: editorSize.width, height: editorSize.height)
+                    .background(Color(red: 0.06, green: 0.06, blue: 0.07))
+
+                    if isFileShelfVisible {
+                        FileShelfView(
+                            store: fileShelfStore,
+                            workspaceState: workspaceState,
+                            size: fileShelfSize
+                        )
+                        .frame(width: fileShelfSize.width, height: fileShelfSize.height)
+                        .transition(
+                            .move(edge: .bottom)
+                                .combined(with: .opacity)
+                                .combined(with: .scale(scale: 0.97, anchor: .bottom))
+                        )
+                    }
+                }
+                .animation(shelfAnimation, value: isFileShelfVisible)
             }
         }
         .padding(.top, toolbarTopPadding)
@@ -110,6 +142,10 @@ struct NotebookView: View {
         .onChange(of: store.activeTabID) { _, newTabID in
             editorInteractionState.restoreSelection(store.selectionRange(for: newTabID))
             editorInteractionState.requestLayoutRefresh(resetScroll: false)
+        }
+        .onDisappear {
+            workspaceState.isShelfDropTargeted = false
+            workspaceState.isDraggingShelfItem = false
         }
     }
 
@@ -145,8 +181,46 @@ struct NotebookView: View {
     private var editorSize: CGSize {
         CGSize(
             width: layout.expandedSize.width - contentHorizontalPadding * 2,
-            height: layout.expandedSize.height - toolbarTopPadding - contentBottomPadding - toolbarHeight - editorSpacing
+            height: max(
+                layout.expandedSize.height
+                    - toolbarTopPadding
+                    - contentBottomPadding
+                    - toolbarHeight
+                    - editorSpacing
+                    - (isFileShelfVisible ? fileShelfHeight + shelfSpacing : 0),
+                160
+            )
         )
+    }
+
+    private var fileShelfSize: CGSize {
+        CGSize(
+            width: layout.expandedSize.width - contentHorizontalPadding * 2,
+            height: fileShelfHeight
+        )
+    }
+
+    private var fileShelfHeight: CGFloat {
+        72
+    }
+
+    private var shelfSpacing: CGFloat {
+        8
+    }
+
+    private var isFileShelfVisible: Bool {
+        settingsStore.isFileShelfEnabled
+            && (workspaceState.isShelfDropTargeted || !fileShelfStore.items.isEmpty)
+    }
+
+    private var shelfAnimation: Animation {
+        .spring(response: 0.30, dampingFraction: 0.84)
+    }
+
+    private func receiveDroppedFiles(_ urls: [URL]) -> Bool {
+        let didAcceptDrop = fileShelfStore.acceptDrop(urls)
+        workspaceState.isShelfDropTargeted = false
+        return didAcceptDrop
     }
 
     private var toolbarTopPadding: CGFloat {
