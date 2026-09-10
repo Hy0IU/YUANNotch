@@ -245,6 +245,12 @@ final class NotchPanelController: NSObject {
                     // the new expansion uses a different display's panel
                     if self.activeDrawerPanel !== collapsingPanel {
                         collapsingPanel?.orderOut(nil)
+                        // The collapsing display's hot panel must come back
+                        // even though a new drawer opened on another display
+                        // (rebuildAllHotPanels does not re-show existing
+                        // hidden panels — only this restores it).
+                        self.showAllHotPanels()
+                        self.hotPanelForScreen(self.drawerScreen)?.orderOut(nil)
                     }
                     return
                 }
@@ -305,10 +311,14 @@ final class NotchPanelController: NSObject {
     private func rebuildContent(layout: NotchLayout? = nil) {
         let layout = layout ?? NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
         cachedLayout = layout
-        // Refresh every existing drawer hosting view so state (e.g. resized
-        // layout) stays consistent no matter which display shows next. Each
-        // display keeps its own DrawerState, so views are rebuilt per host.
-        for (key, host) in drawerHostingViews {
+        // Rebuild ONLY the active display's content. Another display's
+        // panel may be mid-collapse with its own per-screen layout —
+        // replacing its view would shift the collapse interpolation
+        // endpoints (compact sizes differ between notched and fallback
+        // displays) and glitch the running animation. Inactive displays
+        // rebuild on their next expand.
+        let key = (drawerScreen ?? currentScreen)?.uniqueID ?? "unknown-screen"
+        if let host = drawerHostingViews[key] {
             host.rootView = makeNotebookView(layout: layout, drawerState: drawerState(for: key))
         }
     }
