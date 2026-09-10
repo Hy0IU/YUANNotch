@@ -99,7 +99,14 @@ final class NotchPanelController: NSObject {
         drawerPanel.orderOut(nil)
     }
 
-    func expand(animated: Bool, activate: Bool = true) {
+    /// Shows the drawer on the screen containing `currentScreen`.
+    ///
+    /// The drawer is ONLY ever ordered front, never programmatically made
+    /// key: making a window key while another of the app's windows is key
+    /// on a different display makes the Window Server relocate it onto that
+    /// display a moment later. The drawer becomes key naturally when the
+    /// user clicks into it (first-mouse is accepted).
+    func expand(animated: Bool) {
         guard !isExpanded else { return }
         let layout = NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
         cancelCollapse()
@@ -109,29 +116,12 @@ final class NotchPanelController: NSObject {
         rebuildContent(layout: layout)
         // Rebuild hot panels with the same layout so compact widths match exactly
         rebuildAllHotPanels()
-        let targetDrawerFrame = drawerFrame(for: layout, screen: currentScreen)
-        drawerPanel.setFrame(targetDrawerFrame, display: true)
-        if activate {
-            NSApp.activate(ignoringOtherApps: true)
-            drawerPanel.makeKeyAndOrderFront(nil)
-            // Making the drawer key while another window of ours is key on a
-            // different display can make the Window Server yank the drawer
-            // onto that display. Re-assert the target frame immediately and
-            // once more after the activation settles.
-            drawerPanel.setFrame(targetDrawerFrame, display: true)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                guard let self, self.isExpanded else { return }
-                self.drawerPanel.setFrame(targetDrawerFrame, display: true)
-            }
-        } else {
-            // Revealed as a drop target — don't steal focus mid-drag
-            drawerPanel.orderFrontRegardless()
-        }
+        drawerPanel.setFrame(drawerFrame(for: layout, screen: currentScreen), display: true)
+        drawerPanel.orderFrontRegardless()
         if let panel = hotPanelForScreen(currentScreen) {
             panel.orderOut(nil)
         }
         setDrawerExpanded(true, animated: animated)
-        guard activate else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
             guard let self else { return }
             guard self.isExpanded else { return }
@@ -278,7 +268,7 @@ final class NotchPanelController: NSObject {
             guard let self, let screen, targeted else { return }
             guard self.settingsStore.isFileShelfEnabled, !self.isExpanded else { return }
             self.currentScreen = screen
-            self.expand(animated: true, activate: false)
+            self.expand(animated: true)
         }
         host.onFilesDropped = { [weak self] urls in
             self?.receiveDroppedFiles(urls) ?? false
@@ -291,7 +281,7 @@ final class NotchPanelController: NSObject {
         // drop callback before the window order changes.
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.isExpanded else { return }
-            self.expand(animated: true, activate: false)
+            self.expand(animated: true)
         }
         return true
     }
@@ -466,7 +456,7 @@ final class NotchPanelController: NSObject {
                 let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
                 if fileDropFrame(for: layout, screen: screen).contains(point) {
                     currentScreen = screen
-                    expand(animated: true, activate: false)
+                    expand(animated: true)
                     break
                 }
             }

@@ -176,8 +176,10 @@ final class EditorInteractionState: ObservableObject {
 
         pendingFocus = false
         focusAttemptsRemaining = 0
-        NSApp.activate(ignoringOtherApps: true)
-        textView.window?.makeKeyAndOrderFront(nil)
+        // Never activate the app or make the window key here: doing so while
+        // another of the app's windows is key on a different display makes
+        // the Window Server relocate the panel. The window becomes key
+        // naturally when the user clicks into it.
         textView.window?.makeFirstResponder(textView)
     }
 

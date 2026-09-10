@@ -39,10 +39,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if !window.isVisible {
             window.center()
         }
-        // Like Atoll: become a regular app while settings is visible so the
-        // window can actually become key and receive clicks/focus.
+        // Become a regular app so the window can be key and interactive.
+        // Deliberately no NSApp.activate: programmatic activation (or making
+        // a window key) while another of the app's windows is key on a
+        // different display makes the Window Server relocate that window.
+        // Clicking the settings window activates the app naturally.
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
     }
 
