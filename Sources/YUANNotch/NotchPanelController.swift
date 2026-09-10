@@ -60,6 +60,7 @@ final class NotchPanelController: NSObject {
         configurePanel(drawerPanel)
         drawerPanel.onMouseEvent = { [weak self] event in
             guard let self else { return }
+            if self.handleResizeMouseEvent(event) { return }
             self.editorInteractionState.handleMouseEvent(event, searchingIn: self.hostingView)
         }
         startMousePolling()
@@ -125,8 +126,10 @@ final class NotchPanelController: NSObject {
             // SwiftUI easeOut is 0.16s; use 0.20s to ensure animation is fully complete
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
                 guard let self, !self.isExpanded else { return }
-                self.drawerPanel.orderOut(nil)
+                // Show hot panels before removing the drawer so the handoff
+                // overlaps instead of leaving a one-frame gap
                 self.showAllHotPanels()
+                self.drawerPanel.orderOut(nil)
             }
         } else {
             drawerPanel.orderOut(nil)
@@ -157,8 +160,7 @@ final class NotchPanelController: NSObject {
             drawerState: drawerState,
             editorInteractionState: editorInteractionState,
             layout: layout,
-            onOpenSettings: { [weak self] in self?.openSettingsPopover() },
-            onResize: { [weak self] dw, dh in self?.handleResize(dw: dw, dh: dh) }
+            onOpenSettings: { [weak self] in self?.openSettingsPopover() }
         )
 
         if let hostingView {
@@ -344,6 +346,11 @@ final class NotchPanelController: NSObject {
                 return
             }
 
+            if isResizingDrawer {
+                cancelCollapse()
+                return
+            }
+
             if isPointInExpandedStayRegion(point) {
                 cancelCollapse()
             } else {
@@ -373,6 +380,7 @@ final class NotchPanelController: NSObject {
             self.collapseTask = nil
             guard self.activeMenuTrackingCount == 0 else { return }
             guard !self.editorInteractionState.isDraggingSelection else { return }
+            guard !self.isResizingDrawer else { return }
             guard !self.isPointInExpandedStayRegion(NSEvent.mouseLocation) else { return }
             self.collapse(animated: true)
         }
@@ -406,16 +414,74 @@ final class NotchPanelController: NSObject {
             || settingsPopoverController.contains(point)
     }
 
-    private func handleResize(dw: CGFloat, dh: CGFloat) {
-        let oldFrame = drawerPanel.frame
-        let newWidth = max(360, oldFrame.width + dw)
-        let maxHeight = (drawerPanel.screen?.frame.height ?? 900) - 84
-        let newHeight = min(max(300, oldFrame.height + dh), maxHeight)
-        let newX = oldFrame.midX - newWidth / 2
-        let newY = oldFrame.maxY - newHeight
-        drawerPanel.setFrame(NSRect(x: newX, y: newY, width: newWidth, height: newHeight), display: true)
-        settingsStore.customExpandedSize = CGSize(width: newWidth, height: newHeight)
-        let layout = NotchGeometry.layout(for: drawerPanel.screen, customSize: CGSize(width: newWidth, height: newHeight))
+    private var isResizingDrawer = false
+    private var resizeGrabOffset: CGSize = .zero
+
+    /// Bottom-right hot zone of the drawer panel, in screen coordinates.
+    /// Aligned to the visible corner: the NotchShape insets the right edge
+    /// by the expanded top corner radius (10).
+    private var drawerGripRect: NSRect {
+        let frame = drawerPanel.frame
+        // Generous hot zone ending at the visible (inset) right edge,
+        // so the grip is easy to grab
+        return NSRect(x: frame.maxX - 58, y: frame.minY, width: 48, height: 44)
+    }
+
+    /// Panel-level resize handling. This lives on the panel (not a SwiftUI gesture)
+    /// because rebuildContent recreates the SwiftUI view tree on every size change,
+    /// which corrupts DragGesture translation state mid-drag.
+    private func handleResizeMouseEvent(_ event: NSEvent) -> Bool {
+        guard isExpanded else {
+            isResizingDrawer = false
+            return false
+        }
+
+        switch event.type {
+        case .leftMouseDown:
+            let mouse = NSEvent.mouseLocation
+            guard drawerGripRect.contains(mouse) else { return false }
+            isResizingDrawer = true
+            let frame = drawerPanel.frame
+            resizeGrabOffset = CGSize(width: frame.maxX - mouse.x, height: mouse.y - frame.minY)
+            return true
+
+        case .leftMouseDragged where isResizingDrawer:
+            resizeDrawer(to: NSEvent.mouseLocation)
+            return true
+
+        case .leftMouseUp where isResizingDrawer:
+            isResizingDrawer = false
+            return true
+
+        default:
+            return false
+        }
+    }
+
+    private func resizeDrawer(to mouse: NSPoint) {
+        guard let screen = drawerPanel.screen else { return }
+        let frame = drawerPanel.frame
+        let centerX = screen.frame.midX
+
+        // Keep the grabbed point under the mouse. The panel stays horizontally
+        // centered, so the width must grow twice as fast as the right edge moves.
+        let targetRightEdge = mouse.x + resizeGrabOffset.width
+        let targetBottomEdge = mouse.y - resizeGrabOffset.height
+        let proposed = CGSize(
+            width: (targetRightEdge - centerX) * 2,
+            height: frame.maxY - targetBottomEdge
+        )
+
+        // Route through NotchGeometry so the panel frame always matches the layout
+        // (including screen-edge clamping) — a mismatch shifts the collapse animation off-center
+        let layout = NotchGeometry.layout(for: screen, customSize: proposed)
+        let size = layout.expandedSize
+        guard size != frame.size else { return }
+
+        let newX = centerX - size.width / 2
+        let newY = frame.maxY - size.height
+        drawerPanel.setFrame(NSRect(x: newX, y: newY, width: size.width, height: size.height), display: true)
+        settingsStore.customExpandedSize = size
         rebuildContent(layout: layout)
     }
 

@@ -16,13 +16,15 @@ struct NotebookView: View {
     @ObservedObject var editorInteractionState: EditorInteractionState
     let layout: NotchLayout
     let onOpenSettings: () -> Void
-    var onResize: ((_ dw: CGFloat, _ dh: CGFloat) -> Void)? = nil
 
     var body: some View {
         ZStack(alignment: .top) {
             drawer
         }
-        .frame(width: layout.expandedSize.width, height: layout.expandedSize.height, alignment: .top)
+        // Fill the panel and center the drawer inside it, so the collapse
+        // animation always converges to the panel's center even if the panel
+        // frame and the layout size ever disagree
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var drawer: some View {
@@ -39,26 +41,24 @@ struct NotebookView: View {
         .frame(width: layout.expandedSize.width, height: layout.expandedSize.height, alignment: .top)
         .background(Color(red: 0.02, green: 0.02, blue: 0.025).opacity(0.98))
         .mask(alignment: .top) {
-            TopAttachedRoundedShape(radius: cornerRadius)
+            NotchShape(topCornerRadius: topCornerRadius, bottomCornerRadius: bottomCornerRadius)
                 .frame(width: revealWidth, height: revealHeight)
         }
         .overlay(alignment: .top) {
-            TopAttachedRoundedShape(radius: cornerRadius)
+            NotchShape(topCornerRadius: topCornerRadius, bottomCornerRadius: bottomCornerRadius)
                 .stroke(.white.opacity(0.09), lineWidth: 1)
                 .frame(width: revealWidth, height: revealHeight)
         }
         .contentShape(Rectangle())
         .allowsHitTesting(drawerState.isExpanded)
         .overlay(alignment: .bottomTrailing) {
+            // Visual indicator only — dragging is handled at the panel level
+            // (see NotchPanelController.handleResizeMouseEvent).
+            // Trailing padding tracks the visible (inset) right edge of the shape.
             if drawerState.isExpanded {
                 ResizeGrip()
-                    .gesture(
-                        DragGesture(minimumDistance: 1)
-                            .onChanged { value in
-                                onResize?(value.translation.width, value.translation.height)
-                            }
-                    )
-                    .padding(6)
+                    .padding(.trailing, topCornerRadius + 8)
+                    .padding(.bottom, 9)
             }
         }
     }
@@ -129,8 +129,12 @@ struct NotebookView: View {
         interpolate(from: layout.compactSize.height, to: layout.expandedSize.height)
     }
 
-    private var cornerRadius: CGFloat {
-        interpolate(from: 12, to: 18)
+    private var topCornerRadius: CGFloat {
+        interpolate(from: 0, to: 10)
+    }
+
+    private var bottomCornerRadius: CGFloat {
+        interpolate(from: 12, to: 20)
     }
 
     private var expandedContentOpacity: CGFloat {
@@ -150,7 +154,9 @@ struct NotebookView: View {
     }
 
     private var contentHorizontalPadding: CGFloat {
-        18
+        // The NotchShape insets both side edges by the expanded top corner
+        // radius (10), so add it back to keep a comfortable visible margin
+        26
     }
 
     private var contentBottomPadding: CGFloat {
@@ -340,9 +346,9 @@ struct CompactNotchView: View {
             .foregroundStyle(.white.opacity(0.82))
             .frame(width: layout.compactSize.width, height: layout.compactSize.height)
             .background(Color(red: 0.02, green: 0.02, blue: 0.025).opacity(0.98))
-            .clipShape(TopAttachedRoundedShape(radius: 12))
+            .clipShape(NotchShape(topCornerRadius: 0, bottomCornerRadius: 12))
             .overlay(
-                TopAttachedRoundedShape(radius: 12)
+                NotchShape(topCornerRadius: 0, bottomCornerRadius: 12)
                     .stroke(.white.opacity(0.09), lineWidth: 1)
             )
             .contentShape(Rectangle())
@@ -412,24 +418,45 @@ struct MarkdownNoteEditor: View {
     }
 }
 
-struct TopAttachedRoundedShape: Shape {
-    let radius: CGFloat
+/// Notch shape inspired by Atoll (https://github.com/Ebullioscopic/Atoll):
+/// small rounded corners where the panel meets the top edge of the screen,
+/// larger rounded corners at the bottom.
+struct NotchShape: Shape {
+    var topCornerRadius: CGFloat
+    var bottomCornerRadius: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { .init(topCornerRadius, bottomCornerRadius) }
+        set {
+            topCornerRadius = newValue.first
+            bottomCornerRadius = newValue.second
+        }
+    }
 
     func path(in rect: CGRect) -> Path {
-        let radius = min(radius, rect.width / 2, rect.height / 2)
+        let topRadius = min(topCornerRadius, rect.width / 2, rect.height / 2)
+        let bottomRadius = min(bottomCornerRadius, rect.width / 2 - topRadius, rect.height / 2)
         var path = Path()
 
         path.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
         path.addQuadCurve(
-            to: CGPoint(x: rect.maxX - radius, y: rect.maxY),
-            control: CGPoint(x: rect.maxX, y: rect.maxY)
+            to: CGPoint(x: rect.minX + topRadius, y: rect.minY + topRadius),
+            control: CGPoint(x: rect.minX + topRadius, y: rect.minY)
         )
-        path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + topRadius, y: rect.maxY - bottomRadius))
         path.addQuadCurve(
-            to: CGPoint(x: rect.minX, y: rect.maxY - radius),
-            control: CGPoint(x: rect.minX, y: rect.maxY)
+            to: CGPoint(x: rect.minX + topRadius + bottomRadius, y: rect.maxY),
+            control: CGPoint(x: rect.minX + topRadius, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - topRadius - bottomRadius, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX - topRadius, y: rect.maxY - bottomRadius),
+            control: CGPoint(x: rect.maxX - topRadius, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - topRadius, y: rect.minY + topRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY),
+            control: CGPoint(x: rect.maxX - topRadius, y: rect.minY)
         )
         path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
         path.closeSubpath()
