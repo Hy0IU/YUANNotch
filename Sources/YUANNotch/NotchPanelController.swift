@@ -109,10 +109,20 @@ final class NotchPanelController: NSObject {
         rebuildContent(layout: layout)
         // Rebuild hot panels with the same layout so compact widths match exactly
         rebuildAllHotPanels()
-        drawerPanel.setFrame(drawerFrame(for: layout, screen: currentScreen), display: true)
+        let targetDrawerFrame = drawerFrame(for: layout, screen: currentScreen)
+        drawerPanel.setFrame(targetDrawerFrame, display: true)
         if activate {
             NSApp.activate(ignoringOtherApps: true)
             drawerPanel.makeKeyAndOrderFront(nil)
+            // Making the drawer key while another window of ours is key on a
+            // different display can make the Window Server yank the drawer
+            // onto that display. Re-assert the target frame immediately and
+            // once more after the activation settles.
+            drawerPanel.setFrame(targetDrawerFrame, display: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self, self.isExpanded else { return }
+                self.drawerPanel.setFrame(targetDrawerFrame, display: true)
+            }
         } else {
             // Revealed as a drop target — don't steal focus mid-drag
             drawerPanel.orderFrontRegardless()
