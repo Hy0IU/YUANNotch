@@ -166,11 +166,11 @@ struct NotebookView: View {
     }
 
     private var topCornerRadius: CGFloat {
-        interpolate(from: 0, to: 10)
+        interpolate(from: 0, to: CGFloat(settingsStore.expandedTopCornerRadius))
     }
 
     private var bottomCornerRadius: CGFloat {
-        interpolate(from: 12, to: 20)
+        interpolate(from: 12, to: CGFloat(settingsStore.expandedBottomCornerRadius))
     }
 
     private var expandedContentOpacity: CGFloat {

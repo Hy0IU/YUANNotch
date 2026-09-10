@@ -47,28 +47,36 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 // MARK: - Tabs
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
-    case general
+    case appearance
+    case trigger
+    case fileShelf
     case about
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .general: return "General"
+        case .appearance: return "Appearance"
+        case .trigger: return "Trigger"
+        case .fileShelf: return "File Shelf"
         case .about: return "About"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .general: return "gear"
+        case .appearance: return "paintpalette"
+        case .trigger: return "cursorarrow.rays"
+        case .fileShelf: return "tray.full"
         case .about: return "info.circle"
         }
     }
 
     var tint: Color {
         switch self {
-        case .general: return .blue
+        case .appearance: return .purple
+        case .trigger: return .blue
+        case .fileShelf: return .orange
         case .about: return .gray
         }
     }
@@ -76,7 +84,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @ObservedObject var settingsStore: AppSettingsStore
-    @State private var selection: SettingsTab = .general
+    @State private var selection: SettingsTab = .appearance
 
     var body: some View {
         NavigationSplitView {
@@ -98,8 +106,12 @@ struct SettingsView: View {
             .navigationSplitViewColumnWidth(min: 170, ideal: 180, max: 210)
         } detail: {
             switch selection {
-            case .general:
-                GeneralSettingsView(settingsStore: settingsStore)
+            case .appearance:
+                AppearanceSettingsView(settingsStore: settingsStore)
+            case .trigger:
+                TriggerSettingsView(settingsStore: settingsStore)
+            case .fileShelf:
+                FileShelfSettingsView(settingsStore: settingsStore)
             case .about:
                 AboutSettingsView()
             }
@@ -108,32 +120,28 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - General
+// MARK: - Appearance
 
-private struct GeneralSettingsView: View {
+private struct AppearanceSettingsView: View {
     @ObservedObject var settingsStore: AppSettingsStore
 
     var body: some View {
         Form {
             Section {
-                Picker("Open panel:", selection: $settingsStore.triggerMode) {
-                    ForEach(TriggerMode.allCases) { mode in
-                        Label(mode.title, systemImage: mode.systemImage).tag(mode)
-                    }
-                }
-                .pickerStyle(.inline)
+                CornerRadiusSlider(
+                    title: "Top corners:",
+                    value: $settingsStore.expandedTopCornerRadius,
+                    range: 0...24
+                )
+                CornerRadiusSlider(
+                    title: "Bottom corners:",
+                    value: $settingsStore.expandedBottomCornerRadius,
+                    range: 0...32
+                )
             } header: {
-                Text("Trigger")
+                Text("Corner Radius")
             } footer: {
-                Text("Hover: moving the cursor to the top edge opens the panel. Click: click the notch area to open it.")
-            }
-
-            Section {
-                Toggle("Enable file shelf", isOn: $settingsStore.isFileShelfEnabled)
-            } header: {
-                Text("File Shelf")
-            } footer: {
-                Text("Drop files onto the notch or the open panel to stage them, then drag them out into other apps. Staged files stay in place on disk.")
+                Text("Corner radius of the expanded panel. Applies immediately.")
             }
 
             Section {
@@ -154,6 +162,64 @@ private struct GeneralSettingsView: View {
                 Text("Panel")
             } footer: {
                 Text("Drag the bottom-right corner of the panel to resize it. The new size applies the next time the panel opens.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+private struct CornerRadiusSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 10) {
+                Slider(value: $value, in: range, step: 1)
+                    .frame(maxWidth: 220)
+                Text("\(Int(value)) pt")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .trailing)
+            }
+        }
+    }
+}
+
+// MARK: - Trigger
+
+private struct TriggerSettingsView: View {
+    @ObservedObject var settingsStore: AppSettingsStore
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Open panel:", selection: $settingsStore.triggerMode) {
+                    ForEach(TriggerMode.allCases) { mode in
+                        Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                    }
+                }
+                .pickerStyle(.inline)
+            } footer: {
+                Text("Hover: moving the cursor to the top edge opens the panel. Click: click the notch area to open it.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+// MARK: - File Shelf
+
+private struct FileShelfSettingsView: View {
+    @ObservedObject var settingsStore: AppSettingsStore
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Enable file shelf", isOn: $settingsStore.isFileShelfEnabled)
+            } footer: {
+                Text("Drop files onto the notch or the open panel to stage them, then drag them out into other apps. Staged files stay in place on disk.")
             }
         }
         .formStyle(.grouped)

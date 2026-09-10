@@ -52,10 +52,29 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    /// Corner radii of the fully expanded panel. The compact notch shape
+    /// stays fixed; the reveal animation interpolates toward these values.
+    @Published var expandedTopCornerRadius: Double {
+        didSet {
+            UserDefaults.standard.set(expandedTopCornerRadius, forKey: Self.expandedTopCornerRadiusKey)
+        }
+    }
+
+    @Published var expandedBottomCornerRadius: Double {
+        didSet {
+            UserDefaults.standard.set(expandedBottomCornerRadius, forKey: Self.expandedBottomCornerRadiusKey)
+        }
+    }
+
+    static let defaultExpandedTopCornerRadius: Double = 10
+    static let defaultExpandedBottomCornerRadius: Double = 20
+
     private static let triggerModeKey = "yuanNotch.triggerMode"
     private static let expandedWidthKey = "yuanNotch.expandedWidth"
     private static let expandedHeightKey = "yuanNotch.expandedHeight"
     private static let fileShelfEnabledKey = "yuanNotch.fileShelfEnabled"
+    private static let expandedTopCornerRadiusKey = "yuanNotch.expandedTopCornerRadius"
+    private static let expandedBottomCornerRadiusKey = "yuanNotch.expandedBottomCornerRadius"
 
     init() {
         let rawMode = UserDefaults.standard.string(forKey: Self.triggerModeKey)
@@ -66,5 +85,20 @@ final class AppSettingsStore: ObservableObject {
         customExpandedSize = (w > 0 && h > 0) ? CGSize(width: w, height: h) : nil
 
         isFileShelfEnabled = UserDefaults.standard.object(forKey: Self.fileShelfEnabledKey) as? Bool ?? true
+
+        expandedTopCornerRadius = Self.loadRadius(
+            forKey: Self.expandedTopCornerRadiusKey,
+            fallback: Self.defaultExpandedTopCornerRadius
+        )
+        expandedBottomCornerRadius = Self.loadRadius(
+            forKey: Self.expandedBottomCornerRadiusKey,
+            fallback: Self.defaultExpandedBottomCornerRadius
+        )
+    }
+
+    private static func loadRadius(forKey key: String, fallback: Double) -> Double {
+        guard UserDefaults.standard.object(forKey: key) != nil else { return fallback }
+        let value = UserDefaults.standard.double(forKey: key)
+        return value >= 0 ? value : fallback
     }
 }
