@@ -8,20 +8,9 @@ final class NotchPanel: NSPanel {
     /// in the window cycle, app activation can make the Window Server drag
     /// them onto the active display.
     var allowsKeyboardFocus = true
-    /// Tiling window managers (AeroSpace, yabai, …) only manage windows
-    /// whose accessibility subrole is AXStandardWindow. A borderless panel
-    /// that can become key reports AXStandardWindow, so a WM would grab the
-    /// drawer via the AX API and drag it onto the focused workspace's
-    /// display. Reporting AXDialog (like our non-key hot panels already do)
-    /// keeps the drawer invisible to them.
-    var masqueradeAsDialog = false
 
     override var canBecomeKey: Bool { allowsKeyboardFocus }
     override var canBecomeMain: Bool { allowsKeyboardFocus }
-
-    override func accessibilitySubrole() -> NSAccessibility.Subrole? {
-        masqueradeAsDialog ? .dialog : super.accessibilitySubrole()
-    }
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown || event.type == .leftMouseDragged || event.type == .leftMouseUp {
@@ -103,18 +92,30 @@ final class NotchPanelController: NSObject {
     private func makeDrawerPanel() -> NotchPanel {
         let panel = NotchPanel(
             contentRect: .zero,
+            // Atoll-style window recipe: .borderless + .nonactivatingPanel,
+            // no .fullSizeContentView. Two effects with tiling WMs
+            // (AeroSpace):
+            // 1. No usable AX fullscreen button -> AeroSpace's
+            //    isDialogHeuristic floats the drawer instead of tiling it
+            //    (previously it dragged the drawer onto the focused
+            //    workspace's display).
+            // 2. Unlike an AX subrole masquerade, the drawer stays a real
+            //    (floating) window in the WM's tree, so focusing it updates
+            //    the WM's focus model and its click-arbitration
+            //    (clickedMonitor.activeWorkspace != focus.workspace ->
+            //    focusWorkspace) no longer yanks keyboard focus back right
+            //    after the first click.
             // .nonactivatingPanel (Spotlight-style): the drawer can become
             // key for typing WITHOUT making the app frontmost. Activating
             // the app would emit an AX focus event that window managers
-            // (AeroSpace) answer by summoning the workspace that last held
-            // one of our normal windows — visibly switching workspaces on
-            // another display.
-            styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
+            // answer by summoning the workspace that last held one of our
+            // normal windows — visibly switching workspaces on another
+            // display.
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         configurePanel(panel)
-        panel.masqueradeAsDialog = true
         panel.onMouseEvent = { [weak self, weak panel] event in
             guard let self, let panel else { return }
             switch event.type {
