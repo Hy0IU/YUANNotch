@@ -4,9 +4,13 @@ import SwiftUI
 @MainActor
 final class NotchPanel: NSPanel {
     var onMouseEvent: ((NSEvent) -> Void)?
+    /// Hot (compact) panels should never take keyboard focus; if they stay
+    /// in the window cycle, app activation can make the Window Server drag
+    /// them onto the active display.
+    var allowsKeyboardFocus = true
 
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    override var canBecomeKey: Bool { allowsKeyboardFocus }
+    override var canBecomeMain: Bool { allowsKeyboardFocus }
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown || event.type == .leftMouseDragged || event.type == .leftMouseUp {
@@ -136,6 +140,7 @@ final class NotchPanelController: NSObject {
             store.updateSelection(for: store.activeTabID, range: range)
         }
         isExpanded = false
+        drawerScreen = nil
 
         stopCollapseAnimation()
         setDrawerExpanded(false, animated: animated)
@@ -163,7 +168,7 @@ final class NotchPanelController: NSObject {
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.isMovable = false
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
@@ -199,7 +204,6 @@ final class NotchPanelController: NSObject {
     }
 
     private func rebuildAllHotPanels() {
-        let layout = cachedLayout ?? NotchGeometry.layout(for: currentScreen)
         let screens = NSScreen.screens
         var activeScreenIDs = Set<String>()
 
@@ -207,6 +211,10 @@ final class NotchPanelController: NSObject {
             let id = screen.uniqueID
             activeScreenIDs.insert(id)
 
+            // Per-screen layout: each display gets its own compact size
+            // (notched built-in vs. fallback for external displays).
+            let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
+            let frame = hotFrame(for: layout, screen: screen)
             let hotView = CompactNotchView(layout: layout, onTap: { [weak self, weak screen] in
                 guard let self, let screen else { return }
                 self.currentScreen = screen
@@ -214,7 +222,7 @@ final class NotchPanelController: NSObject {
             })
             if let existing = hotHostingViews[id], let panel = hotPanels[id] {
                 existing.rootView = hotView
-                panel.setFrame(hotFrame(for: layout, screen: screen), display: true)
+                panel.setFrame(frame, display: true)
             } else {
                 let panel = NotchPanel(
                     contentRect: .zero,
@@ -222,6 +230,7 @@ final class NotchPanelController: NSObject {
                     backing: .buffered,
                     defer: false
                 )
+                panel.allowsKeyboardFocus = false
                 configurePanel(panel)
                 panel.onMouseEvent = { [weak self, weak screen] event in
                     guard let self, let screen else { return }
@@ -235,7 +244,7 @@ final class NotchPanelController: NSObject {
                 host.layer?.masksToBounds = true
                 configureCompactFileDrop(host, screen: screen)
                 panel.contentView = host
-                panel.setFrame(hotFrame(for: layout, screen: screen), display: true)
+                panel.setFrame(frame, display: true)
                 panel.orderFrontRegardless()
                 hotPanels[id] = panel
                 hotHostingViews[id] = host
@@ -367,14 +376,25 @@ final class NotchPanelController: NSObject {
 
     @objc private func screenParametersChanged(_ notification: Notification) {
         cancelCollapse()
+        // If the drawer was open on a display that disappeared, fall back
+        if let drawerScreen, !NSScreen.screens.contains(where: { $0.uniqueID == drawerScreen.uniqueID }) {
+            self.drawerScreen = nil
+        }
         // Always refresh cachedLayout so the next expand uses current screen geometry
         let screen = drawerScreen ?? currentScreen ?? NotchGeometry.targetScreen()
         let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
         cachedLayout = layout
         rebuildAllHotPanels()
-        if !isExpanded { return }
-        rebuildContent(layout: layout)
-        drawerPanel.setFrame(drawerFrame(for: layout, screen: screen), display: true)
+        if isExpanded {
+            rebuildContent(layout: layout)
+            drawerPanel.setFrame(drawerFrame(for: layout, screen: screen), display: true)
+        }
+        // The notification can fire while display frames are still mid-transition;
+        // rebuild once more after the geometry settles so panels never keep
+        // stale (possibly off-screen) frames.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.rebuildAllHotPanels()
+        }
     }
 
     @objc private func mousePollingTick(_ timer: Timer) {

@@ -39,8 +39,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if !window.isVisible {
             window.center()
         }
-        window.makeKeyAndOrderFront(nil)
+        // Like Atoll: become a regular app while settings is visible so the
+        // window can actually become key and receive clicks/focus.
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        // Return to menu-bar accessory mode once settings is closed.
+        NSApp.setActivationPolicy(.accessory)
     }
 }
 
@@ -88,35 +100,66 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsTab.allCases, selection: $selection) { tab in
-                Label {
-                    Text(tab.title)
-                } icon: {
-                    Image(systemName: tab.systemImage)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 20, height: 20)
-                        .background(
-                            tab.tint.gradient,
-                            in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        )
+            List(selection: $selection) {
+                ForEach(SettingsTab.allCases) { tab in
+                    NavigationLink(value: tab) {
+                        sidebarRow(for: tab)
+                    }
                 }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 170, ideal: 180, max: 210)
+            .toolbar(removing: .sidebarToggle)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 190, max: 220)
         } detail: {
-            switch selection {
-            case .appearance:
-                AppearanceSettingsView(settingsStore: settingsStore)
-            case .trigger:
-                TriggerSettingsView(settingsStore: settingsStore)
-            case .fileShelf:
-                FileShelfSettingsView(settingsStore: settingsStore)
-            case .about:
-                AboutSettingsView()
-            }
+            detailView(for: selection)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .navigationSplitViewStyle(.balanced)
+        .toolbar(removing: .sidebarToggle)
         .frame(minWidth: 580, minHeight: 380)
+    }
+
+    @ViewBuilder
+    private func sidebarRow(for tab: SettingsTab) -> some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [tab.tint, tab.tint.opacity(0.7)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 22, height: 22)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.2), lineWidth: 0.7)
+                        .blendMode(.plusLighter)
+                }
+                .shadow(color: tab.tint.opacity(0.35), radius: 2, x: 0, y: 1)
+                .overlay {
+                    Image(systemName: tab.systemImage)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+
+            Text(tab.title)
+        }
+        .padding(.vertical, 3)
+    }
+
+    @ViewBuilder
+    private func detailView(for tab: SettingsTab) -> some View {
+        switch tab {
+        case .appearance:
+            AppearanceSettingsView(settingsStore: settingsStore)
+        case .trigger:
+            TriggerSettingsView(settingsStore: settingsStore)
+        case .fileShelf:
+            FileShelfSettingsView(settingsStore: settingsStore)
+        case .about:
+            AboutSettingsView()
+        }
     }
 }
 

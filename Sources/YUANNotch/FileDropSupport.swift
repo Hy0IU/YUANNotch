@@ -65,7 +65,7 @@ final class CompactFileDropHostingView<Content: View>: FirstMouseHostingView<Con
 
     private var isFileDragTargeted = false
 
-    override required init(rootView: Content) {
+    required init(rootView: Content) {
         super.init(rootView: rootView)
         registerForDraggedTypes([.fileURL])
     }
