@@ -103,7 +103,13 @@ final class NotchPanelController: NSObject {
     private func makeDrawerPanel() -> NotchPanel {
         let panel = NotchPanel(
             contentRect: .zero,
-            styleMask: [.borderless, .fullSizeContentView],
+            // .nonactivatingPanel (Spotlight-style): the drawer can become
+            // key for typing WITHOUT making the app frontmost. Activating
+            // the app would emit an AX focus event that window managers
+            // (AeroSpace) answer by summoning the workspace that last held
+            // one of our normal windows — visibly switching workspaces on
+            // another display.
+            styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -183,12 +189,19 @@ final class NotchPanelController: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
             guard let self else { return }
             guard self.isExpanded else { return }
-            self.editorInteractionState.restoreSelection(
-                self.store.selectionRange(for: self.store.activeTabID),
-                searchingIn: self.activeHostingView
-            )
+            // If the user already clicked into the editor, don't rebuild the
+            // editing session from under them: re-setting the first responder
+            // tears down the field editor (the caret visibly "blips" out and
+            // typing is dead until the next click).
+            let userAlreadyEditing = panel.isKeyWindow && panel.firstResponder is NSTextView
+            if !userAlreadyEditing {
+                self.editorInteractionState.restoreSelection(
+                    self.store.selectionRange(for: self.store.activeTabID),
+                    searchingIn: self.activeHostingView
+                )
+                self.editorInteractionState.requestFocus(searchingIn: self.activeHostingView)
+            }
             self.editorInteractionState.requestLayoutRefresh(searchingIn: self.activeHostingView)
-            self.editorInteractionState.requestFocus(searchingIn: self.activeHostingView)
         }
     }
 
@@ -346,7 +359,9 @@ final class NotchPanelController: NSObject {
             } else {
                 let panel = NotchPanel(
                     contentRect: .zero,
-                    styleMask: [.borderless, .fullSizeContentView],
+                    // .nonactivatingPanel: clicking the compact notch must
+                    // not activate the app either (see makeDrawerPanel).
+                    styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
                     backing: .buffered,
                     defer: false
                 )
