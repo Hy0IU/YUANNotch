@@ -46,7 +46,22 @@ final class NotchPanelController: NSObject {
     private let imageStore = LocalImageStore()
     private let fileShelfStore = FileShelfStore()
     private let workspaceState = NotebookWorkspaceState()
-    private let drawerState = DrawerState()
+    /// Drawer animation state is per display: when the mouse jumps to
+    /// another screen mid-collapse, the outgoing drawer finishes its
+    /// collapse animation while the incoming one expands — a single shared
+    /// state would snap the outgoing panel back open for a frame.
+    private var drawerStates: [String: DrawerState] = [:]
+
+    private func drawerState(for key: String) -> DrawerState {
+        if let existing = drawerStates[key] { return existing }
+        let state = DrawerState()
+        drawerStates[key] = state
+        return state
+    }
+
+    private func drawerState(for screen: NSScreen?) -> DrawerState {
+        drawerState(for: screen?.uniqueID ?? "unknown-screen")
+    }
     private let editorInteractionState = EditorInteractionState()
     private lazy var settingsWindowController = SettingsWindowController(settingsStore: settingsStore)
     private var hotPanels: [String: NotchPanel] = [:]
@@ -126,8 +141,10 @@ final class NotchPanelController: NSObject {
         rebuildContent(layout: layout)
         rebuildAllHotPanels()
         isExpanded = false
-        drawerState.isExpanded = false
-        drawerState.revealProgress = 0
+        for state in drawerStates.values {
+            state.isExpanded = false
+            state.revealProgress = 0
+        }
     }
 
     /// Shows the drawer on the screen containing `currentScreen`, using the
@@ -138,7 +155,14 @@ final class NotchPanelController: NSObject {
     /// cause erratic window placement. The drawer becomes key naturally when
     /// the user clicks into it (first-mouse is accepted).
     func expand(animated: Bool) {
-        guard !isExpanded else { return }
+        if isExpanded {
+            // Already open on this display: nothing to do.
+            guard drawerScreen?.uniqueID != currentScreen?.uniqueID else { return }
+            // Hovering/clicking another display's notch hands off: the
+            // outgoing drawer keeps playing its collapse animation (its
+            // state is per-display) while the new one expands on top.
+            handoffCollapse()
+        }
         let layout = NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
         cancelCollapse()
         isExpanded = true
@@ -155,7 +179,7 @@ final class NotchPanelController: NSObject {
         if let panel = hotPanelForScreen(currentScreen) {
             panel.orderOut(nil)
         }
-        setDrawerExpanded(true, animated: animated)
+        setDrawerExpanded(true, animated: animated, for: currentScreen?.uniqueID ?? "unknown-screen")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
             guard let self else { return }
             guard self.isExpanded else { return }
@@ -168,16 +192,46 @@ final class NotchPanelController: NSObject {
         }
     }
 
+    /// Cross-display handoff: unlike `collapse`, the outgoing panel stays
+    /// visible until its collapse animation has played out, so the two
+    /// displays animate independently.
+    private func handoffCollapse() {
+        let oldPanel = activeDrawerPanel
+        let oldKey = drawerScreen?.uniqueID
+        if let range = editorInteractionState.currentSelectionRange() {
+            store.updateSelection(for: store.activeTabID, range: range)
+        }
+        isExpanded = false
+        drawerScreen = nil
+        stopCollapseAnimation()
+        if let oldKey {
+            setDrawerExpanded(false, animated: true, for: oldKey)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
+            guard let self else { return }
+            // The user may have switched back to this display meanwhile
+            // (A→B→A within the animation window) — don't kill its panel.
+            let reclaimed = self.isExpanded && self.drawerScreen?.uniqueID == oldKey
+            if !reclaimed {
+                oldPanel?.orderOut(nil)
+            }
+            if !reclaimed, let oldKey, let screen = NSScreen.screens.first(where: { $0.uniqueID == oldKey }) {
+                self.hotPanelForScreen(screen)?.orderFrontRegardless()
+            }
+        }
+    }
+
     func collapse(animated: Bool) {
         guard isExpanded else { return }
         if let range = editorInteractionState.currentSelectionRange() {
             store.updateSelection(for: store.activeTabID, range: range)
         }
         isExpanded = false
+        let collapsingKey = drawerScreen?.uniqueID
         drawerScreen = nil
 
         stopCollapseAnimation()
-        setDrawerExpanded(false, animated: animated)
+        setDrawerExpanded(false, animated: animated, for: collapsingKey ?? "unknown-screen")
 
         if animated {
             // SwiftUI animation: easeOut 0.16s
@@ -218,7 +272,7 @@ final class NotchPanelController: NSObject {
         panel.acceptsMouseMovedEvents = true
     }
 
-    private func makeNotebookView(layout: NotchLayout) -> NotebookView {
+    private func makeNotebookView(layout: NotchLayout, drawerState: DrawerState) -> NotebookView {
         NotebookView(
             store: store,
             settingsStore: settingsStore,
@@ -239,7 +293,7 @@ final class NotchPanelController: NSObject {
     private func hostingView(for screen: NSScreen?, layout: NotchLayout) -> FirstMouseHostingView<NotebookView> {
         let key = screen?.uniqueID ?? "unknown-screen"
         if let existing = drawerHostingViews[key] { return existing }
-        let host = FirstMouseHostingView(rootView: makeNotebookView(layout: layout))
+        let host = FirstMouseHostingView(rootView: makeNotebookView(layout: layout, drawerState: drawerState(for: key)))
         host.autoresizingMask = [.width, .height]
         host.wantsLayer = true
         host.layer?.masksToBounds = true
@@ -251,11 +305,11 @@ final class NotchPanelController: NSObject {
     private func rebuildContent(layout: NotchLayout? = nil) {
         let layout = layout ?? NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
         cachedLayout = layout
-        let view = makeNotebookView(layout: layout)
         // Refresh every existing drawer hosting view so state (e.g. resized
-        // layout) stays consistent no matter which display shows next.
-        for host in drawerHostingViews.values {
-            host.rootView = view
+        // layout) stays consistent no matter which display shows next. Each
+        // display keeps its own DrawerState, so views are rebuilt per host.
+        for (key, host) in drawerHostingViews {
+            host.rootView = makeNotebookView(layout: layout, drawerState: drawerState(for: key))
         }
     }
 
@@ -348,10 +402,11 @@ final class NotchPanelController: NSObject {
         }
     }
 
-    private func setDrawerExpanded(_ expanded: Bool, animated: Bool) {
+    private func setDrawerExpanded(_ expanded: Bool, animated: Bool, for key: String) {
+        let state = drawerState(for: key)
         guard animated else {
-            drawerState.isExpanded = expanded
-            drawerState.revealProgress = expanded ? 1 : 0
+            state.isExpanded = expanded
+            state.revealProgress = expanded ? 1 : 0
             return
         }
 
@@ -360,8 +415,8 @@ final class NotchPanelController: NSObject {
             : .easeOut(duration: 0.16)
 
         withAnimation(animation) {
-            drawerState.isExpanded = expanded
-            drawerState.revealProgress = expanded ? 1 : 0
+            state.isExpanded = expanded
+            state.revealProgress = expanded ? 1 : 0
         }
     }
 
@@ -450,6 +505,7 @@ final class NotchPanelController: NSObject {
             panel.orderOut(nil)
             drawerPanels.removeValue(forKey: key)
             drawerHostingViews.removeValue(forKey: key)
+            drawerStates.removeValue(forKey: key)
         }
         rebuildAllHotPanels()
         if isExpanded {
@@ -505,6 +561,19 @@ final class NotchPanelController: NSObject {
             if workspaceState.isPreviewingShelfItem {
                 cancelCollapse()
                 return
+            }
+
+            // Quick handoff: hovering another display's notch while this
+            // drawer is open switches over immediately, without waiting for
+            // the collapse to play out first.
+            if settingsStore.triggerMode == .hover, NSEvent.pressedMouseButtons & 1 == 0 {
+                for (screenID, panel) in hotPanels where screenID != drawerScreen?.uniqueID {
+                    if panel.frame.insetBy(dx: 0, dy: -6).contains(point) {
+                        currentScreen = NSScreen.screens.first { $0.uniqueID == screenID }
+                        expand(animated: true)
+                        return
+                    }
+                }
             }
 
             if isPointInExpandedStayRegion(point) {
