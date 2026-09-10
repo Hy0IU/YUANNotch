@@ -43,6 +43,13 @@ enum FileDragPasteboard {
     }
 }
 
+extension NSPasteboard.PasteboardType {
+    /// Internal drag type marking a drag session as "reorder shelf items"
+    /// rather than "drag files out". The payload is a JSON array of the
+    /// dragged items' UUIDs, in shelf order.
+    static let shelfReorder = NSPasteboard.PasteboardType("io.github.hy0iu.YUANNotch.shelf-reorder")
+}
+
 enum FileDragOperationPolicy {
     static let allowedOperations: NSDragOperation = [.copy, .generic]
 }

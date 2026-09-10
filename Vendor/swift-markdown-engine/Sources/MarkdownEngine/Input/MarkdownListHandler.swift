@@ -28,7 +28,10 @@ struct MarkdownLists {
     }
 
     static let listRegex = try! NSRegularExpression(
-        pattern: #"^\s*((?:(\d+)\.|[-•])(?:\s+\[[ xX]\])?\s+)"#
+        // Trailing whitespace after the marker is optional (end-of-line also
+        // qualifies) so that a marker-only line keeps its list identity —
+        // e.g. right after the user deletes the space following the marker.
+        pattern: #"^\s*((?:(\d+)\.|[-•])(?:\s+\[[ xX]\])?(?:\s+|$))"#
     )
     static let dashNoSpaceRegex = try! NSRegularExpression(pattern: #"^\s*-(?!\s)"#)
     static let numberRegex = try! NSRegularExpression(pattern: #"^\s*(\d+)\.$"#)
@@ -38,6 +41,41 @@ struct MarkdownLists {
         let tabCount = leadingWhitespace.filter { $0 == "\t" }.count
         let spaceCount = leadingWhitespace.filter { $0 == " " }.count
         return tabCount + (spaceCount / 2)
+    }
+
+    /// One-backspace marker removal (Notes/Typora style).
+    ///
+    /// A list marker is several characters (tab + bullet/number + space, plus
+    /// a possible `[ ]`), so deleting item content normally leaves the user
+    /// backspacing through the marker character by character. When a caret
+    /// backspace lands strictly inside the marker range, we remove the whole
+    /// marker (including leading whitespace) in a single edit and park the
+    /// caret at the line start. Selection deletions and deletions at the very
+    /// start of the marker are left alone so normal behavior is preserved.
+    ///
+    /// - Returns: `true` when the deletion was handled (the caller must veto
+    ///   the original edit).
+    static func handleDeletion(textView: NSTextView, affectedCharRange: NSRange) -> Bool {
+        guard affectedCharRange.length > 0 else { return false }
+        let nsText = textView.string as NSString
+        let caret = affectedCharRange.location + affectedCharRange.length
+        guard caret <= nsText.length, affectedCharRange.location < nsText.length else { return false }
+
+        let lineRange = nsText.lineRange(for: NSRange(location: affectedCharRange.location, length: 0))
+        let line = nsText.substring(with: lineRange)
+        guard let match = listRegex.firstMatch(in: line, range: NSRange(location: 0, length: line.utf16.count)) else { return false }
+
+        let markerStart = lineRange.location + match.range.location
+        let markerEnd = markerStart + match.range.length
+        // The deleted character(s) must sit strictly inside the marker: the
+        // caret is at/within the marker end and the deletion does not cross
+        // the line start. A caret exactly at markerStart is deleting the
+        // previous line's newline — leave that alone.
+        guard caret > markerStart, caret <= markerEnd, affectedCharRange.location >= markerStart else { return false }
+
+        performEdit(textView, replace: NSRange(location: markerStart, length: markerEnd - markerStart), with: "")
+        textView.setSelectedRange(NSRange(location: markerStart, length: 0))
+        return true
     }
 
     // MARK: - Paragraph Attributes for List Styling
@@ -91,14 +129,18 @@ struct MarkdownLists {
             }
         }
 
-        // Ordered lists
-        let orderedListPattern = #"^([ \t]*)(\d+\.(?:[ \t]+\[[ xX]\])?[ \t]+)(.*)$"#
+        // Ordered lists. The trailing whitespace after the marker may also
+        // be end-of-line: without that, deleting the space after a marker
+        // briefly drops the list paragraph style and the leading tab falls
+        // back to AppKit's default (wider) tab interval, making the marker
+        // visibly jump right before the restyle recovers.
+        let orderedListPattern = #"^([ \t]*)(\d+\.(?:[ \t]+\[[ xX]\])?(?:[ \t]+|$))(.*)$"#
         if let orderedListRegex = try? NSRegularExpression(pattern: orderedListPattern, options: [.anchorsMatchLines]) {
             applyListMatches(orderedListRegex.matches(in: text, options: [], range: fullRange))
         }
 
-        // Bullet lists
-        let bulletListPattern = #"^([ \t]*)([-•](?:[ \t]+\[[ xX]\])?[ \t]+)(.*)$"#
+        // Bullet lists (same end-of-line tolerance as ordered lists).
+        let bulletListPattern = #"^([ \t]*)([-•](?:[ \t]+\[[ xX]\])?(?:[ \t]+|$))(.*)$"#
         if let bulletListRegex = try? NSRegularExpression(pattern: bulletListPattern, options: [.anchorsMatchLines]) {
             applyListMatches(bulletListRegex.matches(in: text, options: [], range: fullRange))
         }
@@ -108,7 +150,9 @@ struct MarkdownLists {
     // MARK: - Input Handling
 
     static func handleInsertion(textView: NSTextView, affectedCharRange: NSRange, replacementString: String?) -> Bool {
-        guard let replacementString = replacementString else { return true }
+        guard let replacementString = replacementString, !replacementString.isEmpty else {
+            return !handleDeletion(textView: textView, affectedCharRange: affectedCharRange)
+        }
 
         // Fast path: skip the expensive isInsideCodeBlock scan for ordinary typing.
         if replacementString.count == 1,
@@ -293,7 +337,21 @@ struct MarkdownLists {
                 let contentLength = listLine.utf16.count - contentStart
                 let contentRangeLocal = NSRange(location: contentStart, length: contentLength)
                 let contentText = (listLine as NSString).substring(with: contentRangeLocal).trimmingCharacters(in: .whitespacesAndNewlines)
-                if contentText.isEmpty {
+                let coord = textView.delegate as? NativeTextViewWrapper.Coordinator
+                // Exit the list only when Enter is pressed on a still-empty
+                // item that was itself just created by an Enter continuation
+                // (i.e. the second consecutive Enter on an empty item). The
+                // first Enter on an empty item continues the list instead.
+                let isFreshContinuation: Bool = {
+                    guard let coord,
+                          coord.freshListContinuationDocumentId == coord.documentId,
+                          let lineStart = coord.freshListContinuationLineStart else {
+                        return false
+                    }
+                    return lineStart == currentLineRange.location
+                }()
+                if contentText.isEmpty && isFreshContinuation {
+                    coord?.freshListContinuationLineStart = nil
                     let removalLengthRaw = match.range.location + match.range.length
                     let lineEnd = currentLineRange.location + currentLineRange.length
                     let hasNewline = currentLineRange.length > 0 && (textView.string as NSString).substring(with: NSRange(location: lineEnd - 1, length: 1)) == "\n"
@@ -322,7 +380,10 @@ struct MarkdownLists {
                         newListItem = "\n" + leadingWhitespace + "\(number + 1). "
                     }
                 } else {
-                    let prefixIndent = leadingWhitespace.isEmpty ? "  " : leadingWhitespace
+                    // Continue at the parent's indentation. (Previously an
+                    // unindented parent forced two spaces here, so the
+                    // continued item rendered deeper than its parent.)
+                    let prefixIndent = leadingWhitespace
                     if hasCheckbox {
                         let bulletChar = marker.contains("•") ? "•" : "-"
                         newListItem = "\n" + prefixIndent + "\(bulletChar) [ ] "
@@ -331,6 +392,11 @@ struct MarkdownLists {
                     }
                 }
                 MarkdownLists.performEdit(textView, replace: affectedCharRange, with: newListItem)
+                // Remember the continued line (starts right after the
+                // inserted "\n") so a second Enter on it while still empty
+                // exits the list instead of adding yet another item.
+                coord?.freshListContinuationLineStart = affectedCharRange.location + 1
+                coord?.freshListContinuationDocumentId = coord?.documentId
                 return false
             }
         }

@@ -126,11 +126,14 @@ final class EditorInteractionState: ObservableObject {
         case .quote:
             prefixSelectedLines(with: "> ", in: textView)
         case .unorderedList:
-            prefixSelectedLines(with: "- ", in: textView)
+            // Same canonical form the typing shortcut produces ("-" + space
+            // converts to a tab-indented bullet), so toolbar-created lists
+            // and typed lists render and continue identically.
+            prefixSelectedLines(with: "\t• ", in: textView)
         case .orderedList:
-            prefixSelectedLines(in: textView) { index in "\(index + 1). " }
+            prefixSelectedLines(in: textView) { index in "\t\(index + 1). " }
         case .todoList:
-            prefixSelectedLines(with: "- [ ] ", in: textView)
+            prefixSelectedLines(with: "\t• [ ] ", in: textView)
         }
 
         requestLayoutRefresh()
@@ -257,8 +260,11 @@ final class EditorInteractionState: ObservableObject {
             .map { index, line in prefixForLine(index) + line }
             .joined(separator: "\n")
         let replacement = replacementBody + (hasTrailingNewline ? "\n" : "")
-        let selection = NSRange(location: lineRange.location, length: replacement.utf16.count)
-        replaceText(in: textView, range: lineRange, with: replacement, selectionAfter: selection)
+        // Caret at the end of the inserted content, NOT a selection: selecting
+        // the inserted prefix meant the user's first keystroke replaced (and
+        // destroyed) the marker they just added.
+        let caret = lineRange.location + replacementBody.utf16.count
+        replaceText(in: textView, range: lineRange, with: replacement, selectionAfter: NSRange(location: caret, length: 0))
     }
 
     private func replaceText(in textView: NSTextView, range: NSRange, with replacement: String, selectionAfter: NSRange) {

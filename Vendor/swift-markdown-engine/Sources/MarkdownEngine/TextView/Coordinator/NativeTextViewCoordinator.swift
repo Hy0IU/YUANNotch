@@ -43,6 +43,11 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     var didEnsureLayoutForCurrentDocument: Bool = false
     var lastSyncedText: String
     var isProgrammaticEdit: Bool = false
+    /// Line-start location of the list item most recently created by an
+    /// Enter continuation. A second Enter on that item while it is still
+    /// empty exits the list; an Enter on any other empty item continues it.
+    var freshListContinuationLineStart: Int?
+    var freshListContinuationDocumentId: String?
     var isWritingToolsActive: Bool = false
     var wtStartDocumentId: String?
     weak var wtChildWindow: NSWindow?

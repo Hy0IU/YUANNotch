@@ -6,6 +6,9 @@ final class NotebookWorkspaceState: ObservableObject {
     @Published var isShelfDropTargeted = false
     @Published var isDraggingShelfItem = false
     @Published var isPreviewingShelfItem = false
+    /// IDs of the shelf items being dragged right now (for dimming the
+    /// dragged chips and excluding them from reorder hit-testing).
+    @Published var draggedShelfItemIDs: Set<UUID> = []
 }
 
 struct FileShelfItem: Identifiable, Codable, Equatable {
@@ -96,6 +99,19 @@ final class FileShelfStore: ObservableObject {
     func removeAll() {
         items.removeAll()
         availabilityByID.removeAll()
+        save()
+    }
+
+    /// Reorders the shelf by inserting the dragged block at `index`, counted
+    /// over the items that are NOT being dragged. Called continuously while
+    /// a reorder drag hovers the shelf; no-ops when the order is unchanged.
+    func move(ids: Set<UUID>, toIndex index: Int) {
+        let moving = items.filter { ids.contains($0.id) }
+        guard !moving.isEmpty else { return }
+        var reordered = items.filter { !ids.contains($0.id) }
+        reordered.insert(contentsOf: moving, at: max(0, min(index, reordered.count)))
+        guard reordered != items else { return }
+        items = reordered
         save()
     }
 

@@ -38,6 +38,13 @@ struct TextStylingService {
         paragraph.paragraphSpacing = baseParagraphSpacing
         paragraph.paragraphSpacingBefore = 0
         paragraph.lineBreakMode = .byWordWrapping
+        // Match the list tab width everywhere: list markers lead with a tab
+        // and get their indent from a paragraph style that only applies while
+        // the line still parses as a list item. While the user deletes marker
+        // characters the style briefly drops out, and AppKit's wider default
+        // tab interval made the marker visibly jump right.
+        paragraph.tabStops = []
+        paragraph.defaultTabInterval = configuration.lists.indentPerLevel
         return (baseFont, paragraph)
     }
 

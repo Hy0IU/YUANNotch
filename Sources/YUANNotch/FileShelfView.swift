@@ -32,6 +32,20 @@ struct FileShelfView: View {
                     .padding(.horizontal, 6)
             }
 
+            // Reorder drop target. Only hit-testable while a shelf drag is
+            // in progress, so it never interferes with clicks, marquee
+            // selection, or external file drops (those keep flowing to the
+            // panel-level destination).
+            FileShelfReorderTargetView(
+                isShelfDragActive: { workspaceState.isDraggingShelfItem },
+                insertionIndexProvider: { x, draggedIDs in
+                    insertionIndex(forX: x, excluding: draggedIDs)
+                },
+                onReorder: { draggedIDs, index in
+                    store.move(ids: draggedIDs, toIndex: index)
+                }
+            )
+
             marqueeEdgeZones
                 .allowsHitTesting(!workspaceState.isShelfDropTargeted)
 
@@ -126,54 +140,91 @@ struct FileShelfView: View {
     }
 
     private var shelfItems: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: 0) {
-                ForEach(Array(store.items.enumerated()), id: \.element.id) { index, item in
-                    if index > 0 {
-                        marqueeGap
-                    }
-
-                    FileShelfChip(
-                        item: item,
-                        store: store,
-                        workspaceState: workspaceState,
-                        isSelected: selection.selectedIDs.contains(item.id),
-                        onSelect: { modifiers in
-                            selectForMouseDown(item.id, modifiers: modifiers)
-                        },
-                        onSelectExclusive: {
-                            selection.selectExclusively(item.id)
-                        },
-                        dragURLs: {
-                            selectedURLs(startingAt: item.id)
-                        },
-                        onSelectAll: selectAllItems,
-                        onPreview: {
-                            previewSelection(preferredID: item.id)
-                        },
-                        onDeleteSelected: removeSelectedItems
-                    )
-                    .background {
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: FileShelfItemFramePreferenceKey.self,
-                                value: [
-                                    item.id: proxy.frame(
-                                        in: .named(selectionCoordinateSpace)
-                                    )
-                                ]
-                            )
+        HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 0) {
+                    ForEach(Array(store.items.enumerated()), id: \.element.id) { index, item in
+                        if index > 0 {
+                            marqueeGap
                         }
+
+                        FileShelfChip(
+                            item: item,
+                            store: store,
+                            workspaceState: workspaceState,
+                            isSelected: selection.selectedIDs.contains(item.id),
+                            isDragged: workspaceState.draggedShelfItemIDs.contains(item.id),
+                            onSelect: { modifiers in
+                                selectForMouseDown(item.id, modifiers: modifiers)
+                            },
+                            onSelectExclusive: {
+                                selection.selectExclusively(item.id)
+                            },
+                            dragURLs: {
+                                selectedURLs(startingAt: item.id)
+                            },
+                            dragItemIDs: {
+                                draggedItemIDs(startingAt: item.id)
+                            },
+                            onSelectAll: selectAllItems,
+                            onPreview: {
+                                previewSelection(preferredID: item.id)
+                            },
+                            onDeleteSelected: removeSelectedItems,
+                            onDragBegan: {
+                                workspaceState.draggedShelfItemIDs = Set(
+                                    draggedItemIDs(startingAt: item.id)
+                                )
+                            },
+                            onDragEnded: {
+                                workspaceState.draggedShelfItemIDs = []
+                            }
+                        )
+                        .background {
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: FileShelfItemFramePreferenceKey.self,
+                                    value: [
+                                        item.id: proxy.frame(
+                                            in: .named(selectionCoordinateSpace)
+                                        )
+                                    ]
+                                )
+                            }
+                        }
+                        .transition(
+                            .move(edge: .bottom)
+                                .combined(with: .opacity)
+                                .combined(with: .scale(scale: 0.92))
+                        )
                     }
-                    .transition(
-                        .move(edge: .bottom)
-                            .combined(with: .opacity)
-                            .combined(with: .scale(scale: 0.92))
-                    )
                 }
+                .padding(.vertical, 6)
             }
-            .padding(.vertical, 6)
+
+            dumpAllButton
         }
+    }
+
+    /// One-click "pour out": clears the shelf list only — the files on disk
+    /// are never touched. Rendered inside the shelf, which itself only
+    /// exists while the shelf is enabled in Settings.
+    private var dumpAllButton: some View {
+        Button {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) {
+                store.removeAll()
+            }
+        } label: {
+            Image(systemName: "tray.and.arrow.up")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.6))
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Clear shelf (files stay on disk)")
+        .padding(.leading, 2)
+        .padding(.trailing, 4)
     }
 
     private var marqueeGap: some View {
@@ -272,6 +323,28 @@ struct FileShelfView: View {
         }
     }
 
+    /// The IDs that travel with a drag started on `id`, in shelf order —
+    /// mirrors `selectedURLs`' availability filtering.
+    private func draggedItemIDs(startingAt id: UUID) -> [UUID] {
+        let itemByID = Dictionary(uniqueKeysWithValues: store.items.map { ($0.id, $0) })
+        return selection.orderedSelection(from: store.items.map(\.id), startingAt: id)
+            .filter { id in
+                guard let item = itemByID[id] else { return false }
+                return store.isAvailable(item)
+            }
+    }
+
+    /// Insertion position for a reorder drag at shelf-local x, counted over
+    /// the items that are NOT being dragged (matching `FileShelfStore.move`).
+    private func insertionIndex(forX x: CGFloat, excluding draggedIDs: Set<UUID>) -> Int {
+        var index = 0
+        for item in store.items where !draggedIDs.contains(item.id) {
+            guard let frame = itemFrames[item.id], frame.midX < x else { return index }
+            index += 1
+        }
+        return index
+    }
+
     private func previewSelection(preferredID: UUID? = nil) {
         let urls = selectedURLs(startingAt: preferredID)
         guard !urls.isEmpty else { return }
@@ -303,12 +376,16 @@ private struct FileShelfChip: View {
     @ObservedObject var store: FileShelfStore
     @ObservedObject var workspaceState: NotebookWorkspaceState
     let isSelected: Bool
+    let isDragged: Bool
     let onSelect: (NSEvent.ModifierFlags) -> Void
     let onSelectExclusive: () -> Void
     let dragURLs: () -> [URL]
+    let dragItemIDs: () -> [UUID]
     let onSelectAll: () -> Void
     let onPreview: () -> Void
     let onDeleteSelected: () -> Void
+    let onDragBegan: () -> Void
+    let onDragEnded: () -> Void
     @State private var isHovering = false
     @State private var thumbnail: NSImage?
 
@@ -335,13 +412,16 @@ private struct FileShelfChip: View {
                         url: url,
                         displayName: displayName,
                         dragURLs: dragURLs,
+                        dragItemIDs: dragItemIDs,
                         onDragBegan: {
                             workspaceState.isDraggingShelfItem = true
                             workspaceState.isShelfDropTargeted = false
+                            onDragBegan()
                         },
                         onDragEnded: {
                             workspaceState.isDraggingShelfItem = false
                             workspaceState.isShelfDropTargeted = false
+                            onDragEnded()
                         },
                         onHoverChange: { isHovering = $0 },
                         onSelect: onSelect,
@@ -413,6 +493,7 @@ private struct FileShelfChip: View {
                 .stroke(.white.opacity(isSelected ? 0.20 : 0), lineWidth: 1)
         }
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .opacity(isDragged ? 0.35 : 1)
         .animation(.easeOut(duration: 0.13), value: isHovering)
         .animation(.easeOut(duration: 0.12), value: isSelected)
         .help(
@@ -522,6 +603,7 @@ private struct FileDragSourceView: NSViewRepresentable {
     let url: URL
     let displayName: String
     let dragURLs: () -> [URL]
+    let dragItemIDs: () -> [UUID]
     let onDragBegan: () -> Void
     let onDragEnded: () -> Void
     let onHoverChange: (Bool) -> Void
@@ -542,6 +624,7 @@ private struct FileDragSourceView: NSViewRepresentable {
         nsView.url = url
         nsView.displayName = displayName
         nsView.dragURLs = dragURLs
+        nsView.dragItemIDs = dragItemIDs
         nsView.onDragBegan = onDragBegan
         nsView.onDragEnded = onDragEnded
         nsView.onHoverChange = onHoverChange
@@ -561,6 +644,7 @@ private final class FileDragSourceNSView: NSView, NSDraggingSource {
     var url: URL?
     var displayName = ""
     var dragURLs: (() -> [URL])?
+    var dragItemIDs: (() -> [UUID])?
     var onDragBegan: (() -> Void)?
     var onDragEnded: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
@@ -661,13 +745,29 @@ private final class FileDragSourceNSView: NSView, NSDraggingSource {
         onHoverChange?(false)
         onDragBegan?()
 
+        // The first dragging item also carries the reorder payload, so
+        // dropping back onto the shelf reorders instead of re-adding.
+        let reorderPayload: String? = {
+            let ids = dragItemIDs?() ?? []
+            guard !ids.isEmpty,
+                  let data = try? JSONEncoder().encode(ids) else { return nil }
+            return String(data: data, encoding: .utf8)
+        }()
+
         let draggingItems = urls.enumerated().map { index, draggedURL in
             let icon = NSWorkspace.shared.icon(forFile: draggedURL.path)
             icon.size = NSSize(width: 44, height: 44)
             let offset = CGFloat(min(index, 3)) * 3
-            let draggingItem = NSDraggingItem(
-                pasteboardWriter: FileDragPasteboard.writer(for: draggedURL)
-            )
+            let writer: NSPasteboardWriting
+            if index == 0, let reorderPayload {
+                let pasteboardItem = NSPasteboardItem()
+                pasteboardItem.setString(draggedURL.absoluteString, forType: .fileURL)
+                pasteboardItem.setString(reorderPayload, forType: .shelfReorder)
+                writer = pasteboardItem
+            } else {
+                writer = FileDragPasteboard.writer(for: draggedURL)
+            }
+            let draggingItem = NSDraggingItem(pasteboardWriter: writer)
             draggingItem.setDraggingFrame(
                 NSRect(
                     x: location.x - 22 + offset,
@@ -899,5 +999,82 @@ private struct ShelfRemoveButtonStyle: ButtonStyle {
                     .fill(.black.opacity(configuration.isPressed ? 0.72 : 0.58))
             )
             .contentShape(Circle())
+    }
+}
+
+/// Drop target overlay that turns shelf-internal drags into live reorders.
+/// Hit-tests to nil unless a shelf drag is in progress, so it is completely
+/// transparent to clicks, marquee selection, and external file drops.
+private struct FileShelfReorderTargetView: NSViewRepresentable {
+    let isShelfDragActive: () -> Bool
+    let insertionIndexProvider: (CGFloat, Set<UUID>) -> Int
+    let onReorder: (Set<UUID>, Int) -> Void
+
+    func makeNSView(context: Context) -> FileShelfReorderNSView {
+        FileShelfReorderNSView()
+    }
+
+    func updateNSView(_ nsView: FileShelfReorderNSView, context: Context) {
+        nsView.isShelfDragActive = isShelfDragActive
+        nsView.insertionIndexProvider = insertionIndexProvider
+        nsView.onReorder = onReorder
+    }
+}
+
+@MainActor
+private final class FileShelfReorderNSView: NSView {
+    var isShelfDragActive: (() -> Bool)?
+    var insertionIndexProvider: ((CGFloat, Set<UUID>) -> Int)?
+    var onReorder: ((Set<UUID>, Int) -> Void)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes([.shelfReorder, .fileURL])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard isShelfDragActive?() == true, bounds.contains(point) else { return nil }
+        return self
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        applyReorder(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        applyReorder(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        draggedIDs(from: sender.draggingPasteboard) != nil
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        applyReorder(sender) == .generic
+    }
+
+    private func applyReorder(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let ids = draggedIDs(from: sender.draggingPasteboard) else { return [] }
+        let x = convert(sender.draggingLocation, from: nil).x
+        let index = insertionIndexProvider?(x, ids) ?? 0
+        onReorder?(ids, index)
+        return .generic
+    }
+
+    private func draggedIDs(from pasteboard: NSPasteboard) -> Set<UUID>? {
+        guard let raw = pasteboard.pasteboardItems?
+                .compactMap({ $0.string(forType: .shelfReorder) })
+                .first,
+              let data = raw.data(using: .utf8),
+              let ids = try? JSONDecoder().decode([UUID].self, from: data),
+              !ids.isEmpty else {
+            return nil
+        }
+        return Set(ids)
     }
 }
