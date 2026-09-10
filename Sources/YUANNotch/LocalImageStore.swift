@@ -22,10 +22,23 @@ final class LocalImageStore: EmbeddedImageFileProvider, @unchecked Sendable {
     init() {
         let supportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        directoryURL = supportURL.appendingPathComponent("NotchNotes/Images", isDirectory: true)
+        directoryURL = supportURL.appendingPathComponent("YUANNotch/Images", isDirectory: true)
+        Self.migrateLegacyDirectory(in: supportURL)
         try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         manifestURL = directoryURL.appendingPathComponent("manifest.json")
         records = Self.loadRecords(from: manifestURL)
+    }
+
+    /// Moves images stored under the previous app identity (NotchNotes).
+    private static func migrateLegacyDirectory(in supportURL: URL) {
+        let fileManager = FileManager.default
+        let legacyDirectory = supportURL.appendingPathComponent("NotchNotes", isDirectory: true)
+        let newDirectory = supportURL.appendingPathComponent("YUANNotch", isDirectory: true)
+
+        guard fileManager.fileExists(atPath: legacyDirectory.path),
+              !fileManager.fileExists(atPath: newDirectory.path) else { return }
+
+        try? fileManager.moveItem(at: legacyDirectory, to: newDirectory)
     }
 
     func saveImage(from pasteboard: NSPasteboard) -> String? {

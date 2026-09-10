@@ -6,15 +6,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        migrateLegacyData()
         panelController = NotchPanelController()
         panelController?.showDocked()
         buildStatusItem()
         buildMenu()
     }
 
+    /// One-time migration of notes and settings stored under the previous
+    /// app identity (NotchNotes / io.github.oiloil.NotchNotes).
+    private func migrateLegacyData() {
+        let defaults = UserDefaults.standard
+        let migratedFlag = "yuanNotch.didMigrateLegacyData"
+        guard !defaults.bool(forKey: migratedFlag) else { return }
+
+        let keyRenames: [(legacy: String, new: String)] = [
+            ("notchNotes.text", "yuanNotch.text"),
+            ("notchNotes.tabs.v1", "yuanNotch.tabs.v1"),
+            ("notchNotes.activeTabID", "yuanNotch.activeTabID"),
+            ("notchNotes.triggerMode", "yuanNotch.triggerMode"),
+            ("notchNotes.expandedWidth", "yuanNotch.expandedWidth"),
+            ("notchNotes.expandedHeight", "yuanNotch.expandedHeight"),
+        ]
+
+        let legacyDomains = ["io.github.oiloil.NotchNotes", "NotchNotes"]
+        for domain in legacyDomains {
+            guard let legacyDefaults = UserDefaults(suiteName: domain) else { continue }
+            for (legacyKey, newKey) in keyRenames where defaults.object(forKey: newKey) == nil {
+                if let value = legacyDefaults.object(forKey: legacyKey) {
+                    defaults.set(value, forKey: newKey)
+                }
+            }
+        }
+
+        defaults.set(true, forKey: migratedFlag)
+    }
+
     private func buildStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "NotchNotes")
+        item.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "YUANNotch")
         item.button?.imagePosition = .imageOnly
         item.menu = makeAppMenu()
         statusItem = item
@@ -45,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         appMenu.addItem(.separator())
 
-        let quitItem = NSMenuItem(title: "Quit NotchNotes", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit YUANNotch", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         appMenu.addItem(quitItem)
 

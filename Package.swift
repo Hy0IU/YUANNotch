@@ -3,23 +3,23 @@
 import PackageDescription
 
 let package = Package(
-    name: "NotchNotes",
+    name: "YUANNotch",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "NotchNotes", targets: ["NotchNotes"])
+        .executable(name: "YUANNotch", targets: ["YUANNotch"])
     ],
     dependencies: [
         .package(path: "Vendor/swift-markdown-engine")
     ],
     targets: [
         .executableTarget(
-            name: "NotchNotes",
+            name: "YUANNotch",
             dependencies: [
                 .product(name: "MarkdownEngine", package: "swift-markdown-engine")
             ],
-            path: "Sources/NotchNotes"
+            path: "Sources/YUANNotch"
         )
     ]
 )

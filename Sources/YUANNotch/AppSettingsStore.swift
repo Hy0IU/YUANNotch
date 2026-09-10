@@ -46,9 +46,9 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
-    private static let triggerModeKey = "notchNotes.triggerMode"
-    private static let expandedWidthKey = "notchNotes.expandedWidth"
-    private static let expandedHeightKey = "notchNotes.expandedHeight"
+    private static let triggerModeKey = "yuanNotch.triggerMode"
+    private static let expandedWidthKey = "yuanNotch.expandedWidth"
+    private static let expandedHeightKey = "yuanNotch.expandedHeight"
 
     init() {
         let rawMode = UserDefaults.standard.string(forKey: Self.triggerModeKey)

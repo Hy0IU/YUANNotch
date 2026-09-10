@@ -2,8 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_DIR="$ROOT_DIR/NotchNotes.app"
-APPLICATIONS_APP_DIR="/Applications/NotchNotes.app"
+APP_DIR="$ROOT_DIR/YUANNotch.app"
+APPLICATIONS_APP_DIR="/Applications/YUANNotch.app"
+LEGACY_APPLICATIONS_APP_DIR="/Applications/NotchNotes.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -15,7 +16,7 @@ swift build -c release
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
-cp ".build/release/NotchNotes" "$MACOS_DIR/NotchNotes"
+cp ".build/release/YUANNotch" "$MACOS_DIR/YUANNotch"
 
 if [[ -f "$SOURCE_ICON" ]]; then
   TMP_DIR="$(mktemp -d)"
@@ -42,11 +43,11 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key>
-  <string>NotchNotes</string>
+  <string>YUANNotch</string>
   <key>CFBundleIdentifier</key>
-  <string>io.github.oiloil.NotchNotes</string>
+  <string>io.github.hy0iu.YUANNotch</string>
   <key>CFBundleName</key>
-  <string>NotchNotes</string>
+  <string>YUANNotch</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundlePackageType</key>
@@ -67,6 +68,7 @@ codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR"
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
 rm -rf "$APPLICATIONS_APP_DIR"
+rm -rf "$LEGACY_APPLICATIONS_APP_DIR"
 cp -R "$APP_DIR" "$APPLICATIONS_APP_DIR"
 
 echo "Built $APP_DIR"

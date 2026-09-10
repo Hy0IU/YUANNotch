@@ -22,9 +22,9 @@ final class NoteStore: ObservableObject {
     @Published private(set) var tabs: [NoteTab]
     @Published private(set) var activeTabID: UUID
 
-    private static let legacyTextKey = "notchNotes.text"
-    private static let tabsKey = "notchNotes.tabs.v1"
-    private static let activeTabIDKey = "notchNotes.activeTabID"
+    private static let legacyTextKey = "yuanNotch.text"
+    private static let tabsKey = "yuanNotch.tabs.v1"
+    private static let activeTabIDKey = "yuanNotch.activeTabID"
 
     init() {
         let storedTabs = Self.loadStoredTabs()

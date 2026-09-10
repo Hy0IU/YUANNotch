@@ -1,4 +1,4 @@
-# NotchNotes
+# YUANNotch
 
 A native macOS note app that lives at the top edge of your screen. Move the cursor to the notch/menu-bar area and it unfolds into a dark Markdown notebook.
 
@@ -10,11 +10,11 @@ Requires macOS 14+ and Xcode Command Line Tools.
 
 ```bash
 git clone <repo-url>
-cd NotchNotes
+cd YUANNotch
 bash ./Scripts/package-app.sh
 ```
 
-The script will build the release binary, bundle it into `NotchNotes.app`, and copy it to `/Applications`. Launch from Launchpad or Spotlight.
+The script will build the release binary, bundle it into `YUANNotch.app`, and copy it to `/Applications`. Launch from Launchpad or Spotlight.
 
 On first launch, right-click the app in Finder and choose **Open** to bypass Gatekeeper.
 
@@ -23,5 +23,5 @@ On first launch, right-click the app in Finder and choose **Open** to bypass Gat
 Quit from Activity Monitor, or run in Terminal:
 
 ```bash
-killall NotchNotes
+killall YUANNotch
 ```
