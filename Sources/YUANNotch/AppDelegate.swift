@@ -43,6 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         defaults.set(true, forKey: migratedFlag)
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        panelController?.flushPendingSave()
+        return .terminateNow
+    }
+
     private func buildStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "YUANNotch")

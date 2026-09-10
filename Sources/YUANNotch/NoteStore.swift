@@ -26,26 +26,44 @@ final class NoteStore: ObservableObject {
     private static let tabsKey = "yuanNotch.tabs.v1"
     private static let activeTabIDKey = "yuanNotch.activeTabID"
 
-    init() {
-        let storedTabs = Self.loadStoredTabs()
-        let initialTabs: [NoteTab]
+    private let persistence: NotePersistence
+    private var pendingSaveTask: Task<Void, Never>?
+    private var isDirty = false
 
-        if storedTabs.isEmpty {
-            let legacyText = UserDefaults.standard.string(forKey: Self.legacyTextKey) ?? ""
-            initialTabs = [NoteTab(text: legacyText)]
-        } else {
-            initialTabs = storedTabs
+    init() {
+        let persistence = NotePersistence()
+        self.persistence = persistence
+
+        let loadResult = persistence.load()
+        let workspace: NotePersistence.Workspace
+        switch loadResult {
+        case .loaded(let storedWorkspace):
+            workspace = storedWorkspace
+        case .missing:
+            // The old defaults remain in place as a rollback source. Migration
+            // is complete only when this first workspace write succeeds.
+            workspace = Self.workspaceFromUserDefaults()
+        case .failed:
+            // Never save this fallback automatically: the unreadable workspace
+            // must not be replaced by an empty one.
+            let fallbackTab = NoteTab()
+            workspace = NotePersistence.Workspace(
+                version: NotePersistence.currentVersion,
+                tabs: [fallbackTab],
+                activeTabID: fallbackTab.id
+            )
+            NSLog("YUANNotch: workspace load failed; using an in-memory fallback without overwriting the existing file")
         }
 
-        tabs = initialTabs
+        tabs = workspace.tabs
+        activeTabID = workspace.activeTabID
 
-        let activeIDString = UserDefaults.standard.string(forKey: Self.activeTabIDKey)
-        let storedActiveID = activeIDString.flatMap(UUID.init(uuidString:))
-        activeTabID = storedActiveID.flatMap { activeID in
-            initialTabs.contains(where: { $0.id == activeID }) ? activeID : nil
-        } ?? initialTabs[0].id
-
-        save()
+        if case .missing = loadResult {
+            isDirty = true
+            if !saveIfDirty() {
+                NSLog("YUANNotch: workspace migration did not complete; it will be retried while the file is missing")
+            }
+        }
     }
 
     var text: String {
@@ -55,19 +73,22 @@ final class NoteStore: ObservableObject {
     func updateText(_ nextText: String) {
         tabs[activeIndex].text = nextText
         clampSelection(for: tabs[activeIndex].id)
-        save()
+        isDirty = true
+        scheduleDebouncedSave()
     }
 
     func clear() {
         updateText("")
         updateSelection(for: activeTabID, range: NSRange(location: 0, length: 0))
+        saveImmediately()
     }
 
     func addTab() {
         let tab = NoteTab()
         tabs.append(tab)
         activeTabID = tab.id
-        save()
+        isDirty = true
+        saveImmediately()
     }
 
     func removeActiveTab() {
@@ -76,21 +97,31 @@ final class NoteStore: ObservableObject {
         tabs.remove(at: removedIndex)
         let nextIndex = min(removedIndex, tabs.count - 1)
         activeTabID = tabs[nextIndex].id
-        save()
+        isDirty = true
+        saveImmediately()
     }
 
     func selectTab(_ id: UUID) {
         guard tabs.contains(where: { $0.id == id }) else { return }
         activeTabID = id
-        save()
+        isDirty = true
+        saveImmediately()
     }
 
     func updateSelection(for id: UUID, range: NSRange) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         let clamped = clampedRange(range, text: tabs[index].text)
+        guard tabs[index].selectionLocation != clamped.location
+                || tabs[index].selectionLength != clamped.length else { return }
         tabs[index].selectionLocation = clamped.location
         tabs[index].selectionLength = clamped.length
-        save()
+        isDirty = true
+        scheduleDebouncedSave()
+    }
+
+    func flushPendingSave() {
+        guard isDirty else { return }
+        saveImmediately()
     }
 
     func selectionRange(for id: UUID) -> NSRange {
@@ -123,20 +154,106 @@ final class NoteStore: ObservableObject {
         return NSRange(location: location, length: selectionLength)
     }
 
-    private func save() {
-        if let data = try? JSONEncoder().encode(tabs) {
-            UserDefaults.standard.set(data, forKey: Self.tabsKey)
+    private func scheduleDebouncedSave() {
+        guard isDirty else { return }
+        pendingSaveTask?.cancel()
+        pendingSaveTask = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 300_000_000)
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled, let self else { return }
+            self.pendingSaveTask = nil
+            self.saveIfDirty()
         }
-        UserDefaults.standard.set(activeTabID.uuidString, forKey: Self.activeTabIDKey)
-        UserDefaults.standard.set(text, forKey: Self.legacyTextKey)
     }
 
-    private static func loadStoredTabs() -> [NoteTab] {
-        guard let data = UserDefaults.standard.data(forKey: tabsKey),
-              let tabs = try? JSONDecoder().decode([NoteTab].self, from: data) else {
-            return []
+    private func saveImmediately() {
+        pendingSaveTask?.cancel()
+        pendingSaveTask = nil
+        saveIfDirty()
+    }
+
+    @discardableResult
+    private func saveIfDirty() -> Bool {
+        guard isDirty else { return true }
+
+        let workspace = NotePersistence.Workspace(
+            version: NotePersistence.currentVersion,
+            tabs: tabs,
+            activeTabID: activeTabID
+        )
+        let didSave = persistence.save(workspace)
+        if didSave {
+            isDirty = false
+        }
+        return didSave
+    }
+
+    private static func workspaceFromUserDefaults() -> NotePersistence.Workspace {
+        let defaults = UserDefaults.standard
+        if let workspace = workspace(
+            from: defaults,
+            tabsKey: tabsKey,
+            activeTabIDKey: activeTabIDKey
+        ) {
+            return workspace
         }
 
-        return tabs.isEmpty ? [] : tabs
+        let legacyDefaults = ["io.github.oiloil.NotchNotes", "NotchNotes"]
+            .compactMap(UserDefaults.init(suiteName:))
+        for defaults in legacyDefaults {
+            if let workspace = workspace(
+                from: defaults,
+                tabsKey: "notchNotes.tabs.v1",
+                activeTabIDKey: "notchNotes.activeTabID"
+            ) {
+                return workspace
+            }
+        }
+
+        for defaults in legacyDefaults {
+            if let text = defaults.string(forKey: "notchNotes.text") {
+                return workspaceFromText(text)
+            }
+        }
+
+        return workspaceFromText(defaults.string(forKey: legacyTextKey) ?? "")
+    }
+
+    private static func workspace(
+        from defaults: UserDefaults,
+        tabsKey: String,
+        activeTabIDKey: String
+    ) -> NotePersistence.Workspace? {
+        guard let data = defaults.data(forKey: tabsKey),
+              let storedTabs = try? JSONDecoder().decode([NoteTab].self, from: data),
+              !storedTabs.isEmpty else {
+            return nil
+        }
+
+        let storedActiveID = defaults.string(forKey: activeTabIDKey).flatMap(UUID.init(uuidString:))
+        let activeID = storedActiveID.flatMap { candidate in
+            storedTabs.contains(where: { $0.id == candidate }) ? candidate : nil
+        } ?? storedTabs[0].id
+        let workspace = NotePersistence.Workspace(
+            version: NotePersistence.currentVersion,
+            tabs: storedTabs,
+            activeTabID: activeID
+        )
+
+        guard (try? NotePersistence.validate(workspace)) != nil else { return nil }
+        return workspace
+    }
+
+    private static func workspaceFromText(_ text: String) -> NotePersistence.Workspace {
+        let tab = NoteTab(text: text)
+        return NotePersistence.Workspace(
+            version: NotePersistence.currentVersion,
+            tabs: [tab],
+            activeTabID: tab.id
+        )
     }
 }

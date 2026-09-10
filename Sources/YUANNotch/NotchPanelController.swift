@@ -2,33 +2,6 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class NotchPanel: NSPanel {
-    var onMouseEvent: ((NSEvent) -> Void)?
-    /// Hot (compact) panels should never take keyboard focus; if they stay
-    /// in the window cycle, app activation can make the Window Server drag
-    /// them onto the active display.
-    var allowsKeyboardFocus = true
-
-    override var canBecomeKey: Bool { allowsKeyboardFocus }
-    override var canBecomeMain: Bool { allowsKeyboardFocus }
-
-    override func sendEvent(_ event: NSEvent) {
-        if event.type == .leftMouseDown || event.type == .leftMouseDragged || event.type == .leftMouseUp {
-            onMouseEvent?(event)
-        }
-
-        super.sendEvent(event)
-    }
-}
-
-@MainActor
-class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
-        true
-    }
-}
-
-@MainActor
 final class NotchPanelController: NSObject {
     private let store = NoteStore()
     private let settingsStore = AppSettingsStore()
@@ -48,38 +21,27 @@ final class NotchPanelController: NSObject {
         return state
     }
 
-    private func drawerState(for screen: NSScreen?) -> DrawerState {
-        drawerState(for: screen?.uniqueID ?? "unknown-screen")
-    }
     private let editorInteractionState = EditorInteractionState()
     private lazy var settingsWindowController = SettingsWindowController(settingsStore: settingsStore)
-    private var hotPanels: [String: NotchPanel] = [:]
-    private var hotHostingViews: [String: CompactFileDropHostingView<CompactNotchView>] = [:]
+    private let displayPanelRegistry = DisplayPanelRegistry()
     private var fileDragTrackingState = FileDragTrackingState()
     /// One drawer panel per display, keyed by screen uniqueID. A window that
     /// has been key on one display gets asynchronously "returned" to it by
     /// the Window Server when later shown on another display — so a drawer
     /// panel never leaves its own display.
-    private var drawerPanels: [String: NotchPanel] = [:]
     /// The drawer panel currently shown (on `drawerScreen`) while expanded.
     private var activeDrawerPanel: NotchPanel?
     /// Each drawer panel owns its content view permanently. Moving one
     /// shared view between windows makes the Window Server relocate the
     /// receiving window onto the screen where the view was last visible.
-    private var drawerHostingViews: [String: FirstMouseHostingView<NotebookView>] = [:]
     private var activeHostingView: FirstMouseHostingView<NotebookView>?
     private var mousePollingTimer: Timer?
-    private var globalMouseDownMonitor: Any?
-    private var globalMouseDragMonitor: Any?
-    private var globalMouseUpMonitor: Any?
-    private var cachedLayout: NotchLayout?
+    private var mouseEventMonitor: MouseEventMonitor?
     private var isExpanded = false
     private var currentScreen: NSScreen?
     private var drawerScreen: NSScreen?
     private var activeMenuTrackingCount = 0
     private var collapseTask: DispatchWorkItem?
-    private var collapseDisplayLink: CVDisplayLink?
-    private var isCollapsingAnimationRunning = false
 
     override init() {
         super.init()
@@ -136,10 +98,14 @@ final class NotchPanelController: NSObject {
 
     private func drawerPanel(for screen: NSScreen?) -> NotchPanel {
         let key = screen?.uniqueID ?? "unknown-screen"
-        if let existing = drawerPanels[key] { return existing }
+        if let existing = displayPanelRegistry.drawerPanel(for: key) { return existing }
         let panel = makeDrawerPanel()
-        drawerPanels[key] = panel
+        displayPanelRegistry.setDrawerPanel(panel, for: key)
         return panel
+    }
+
+    func flushPendingSave() {
+        store.flushPendingSave()
     }
 
     func showDocked() {
@@ -217,7 +183,6 @@ final class NotchPanelController: NSObject {
         }
         isExpanded = false
         drawerScreen = nil
-        stopCollapseAnimation()
         if let oldKey {
             setDrawerExpanded(false, animated: true, for: oldKey)
         }
@@ -243,8 +208,6 @@ final class NotchPanelController: NSObject {
         isExpanded = false
         let collapsingKey = drawerScreen?.uniqueID
         drawerScreen = nil
-
-        stopCollapseAnimation()
         setDrawerExpanded(false, animated: animated, for: collapsingKey ?? "unknown-screen")
 
         if animated {
@@ -312,19 +275,18 @@ final class NotchPanelController: NSObject {
     /// window onto the screen where the view was last visible).
     private func hostingView(for screen: NSScreen?, layout: NotchLayout) -> FirstMouseHostingView<NotebookView> {
         let key = screen?.uniqueID ?? "unknown-screen"
-        if let existing = drawerHostingViews[key] { return existing }
+        if let existing = displayPanelRegistry.drawerHostingView(for: key) { return existing }
         let host = FirstMouseHostingView(rootView: makeNotebookView(layout: layout, drawerState: drawerState(for: key)))
         host.autoresizingMask = [.width, .height]
         host.wantsLayer = true
         host.layer?.masksToBounds = true
-        drawerHostingViews[key] = host
-        drawerPanels[key]?.contentView = host
+        displayPanelRegistry.setDrawerHostingView(host, for: key)
+        displayPanelRegistry.drawerPanel(for: key)?.contentView = host
         return host
     }
 
     private func rebuildContent(layout: NotchLayout? = nil) {
         let layout = layout ?? NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
-        cachedLayout = layout
         // Rebuild ONLY the active display's content. Another display's
         // panel may be mid-collapse with its own per-screen layout —
         // replacing its view would shift the collapse interpolation
@@ -332,7 +294,7 @@ final class NotchPanelController: NSObject {
         // displays) and glitch the running animation. Inactive displays
         // rebuild on their next expand.
         let key = (drawerScreen ?? currentScreen)?.uniqueID ?? "unknown-screen"
-        if let host = drawerHostingViews[key] {
+        if let host = displayPanelRegistry.drawerHostingView(for: key) {
             host.rootView = makeNotebookView(layout: layout, drawerState: drawerState(for: key))
         }
     }
@@ -354,7 +316,8 @@ final class NotchPanelController: NSObject {
                 self.currentScreen = screen
                 self.expand(animated: true)
             })
-            if let existing = hotHostingViews[id], let panel = hotPanels[id] {
+            if let existing = displayPanelRegistry.hotHostingView(for: id),
+               let panel = displayPanelRegistry.hotPanel(for: id) {
                 existing.rootView = hotView
                 panel.setFrame(frame, display: true)
             } else {
@@ -382,21 +345,21 @@ final class NotchPanelController: NSObject {
                 panel.contentView = host
                 panel.setFrame(frame, display: true)
                 panel.orderFrontRegardless()
-                hotPanels[id] = panel
-                hotHostingViews[id] = host
+                displayPanelRegistry.setHotPanel(panel, for: id)
+                displayPanelRegistry.setHotHostingView(host, for: id)
             }
         }
 
-        for (id, panel) in hotPanels where !activeScreenIDs.contains(id) {
+        for (id, panel) in displayPanelRegistry.hotPanelEntries where !activeScreenIDs.contains(id) {
             panel.orderOut(nil)
-            hotPanels.removeValue(forKey: id)
-            hotHostingViews.removeValue(forKey: id)
+            displayPanelRegistry.removeHotPanel(for: id)
+            displayPanelRegistry.removeHotHostingView(for: id)
         }
     }
 
     private func hotPanelForScreen(_ screen: NSScreen?) -> NotchPanel? {
         guard let screen else { return nil }
-        return hotPanels[screen.uniqueID]
+        return displayPanelRegistry.hotPanel(for: screen.uniqueID)
     }
 
     private func configureCompactFileDrop(_ host: CompactFileDropHostingView<CompactNotchView>, screen: NSScreen) {
@@ -423,7 +386,7 @@ final class NotchPanelController: NSObject {
     }
 
     private func showAllHotPanels() {
-        for (_, panel) in hotPanels {
+        for (_, panel) in displayPanelRegistry.hotPanelEntries {
             panel.orderFrontRegardless()
         }
     }
@@ -470,30 +433,30 @@ final class NotchPanelController: NSObject {
 
 
     private func observeGlobalSelectionMouseEvents() {
-        globalMouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
-            let changeCount = NSPasteboard(name: .drag).changeCount
-            let location = NSEvent.mouseLocation
-            Task { @MainActor in
-                self?.beginFileDragTracking(at: location, pasteboardChangeCount: changeCount)
+        mouseEventMonitor = MouseEventMonitor(
+            onMouseDown: { [weak self] _ in
+                let changeCount = NSPasteboard(name: .drag).changeCount
+                let location = NSEvent.mouseLocation
+                Task { @MainActor in
+                    self?.beginFileDragTracking(at: location, pasteboardChangeCount: changeCount)
+                }
+            },
+            onMouseDragged: { [weak self] _ in
+                let location = NSEvent.mouseLocation
+                Task { @MainActor in
+                    self?.noteFileDragMouseDragged(at: location)
+                    self?.editorInteractionState.noteGlobalMouseDragged()
+                }
+            },
+            onMouseUp: { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.endFileDragTracking()
+                    self.editorInteractionState.noteGlobalMouseUp()
+                    self.workspaceState.isDraggingShelfItem = false
+                }
             }
-        }
-
-        globalMouseDragMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] _ in
-            let location = NSEvent.mouseLocation
-            Task { @MainActor in
-                self?.noteFileDragMouseDragged(at: location)
-                self?.editorInteractionState.noteGlobalMouseDragged()
-            }
-        }
-
-        globalMouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
-            Task { @MainActor in
-                guard let self else { return }
-                self.endFileDragTracking()
-                self.editorInteractionState.noteGlobalMouseUp()
-                self.workspaceState.isDraggingShelfItem = false
-            }
-        }
+        )
     }
 
     private func observeMenuTracking() {
@@ -517,20 +480,18 @@ final class NotchPanelController: NSObject {
         if let drawerScreen, !NSScreen.screens.contains(where: { $0.uniqueID == drawerScreen.uniqueID }) {
             self.drawerScreen = nil
         }
-        // Always refresh cachedLayout so the next expand uses current screen geometry
         let screen = drawerScreen ?? currentScreen ?? NotchGeometry.targetScreen()
         let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
-        cachedLayout = layout
         // Drop drawer panels belonging to displays that are gone
         let connectedIDs = Set(NSScreen.screens.map(\.uniqueID))
-        for (key, panel) in drawerPanels where !connectedIDs.contains(key) {
+        for (key, panel) in displayPanelRegistry.drawerPanelEntries where !connectedIDs.contains(key) {
             if activeDrawerPanel === panel {
                 activeDrawerPanel = nil
                 activeHostingView = nil
             }
             panel.orderOut(nil)
-            drawerPanels.removeValue(forKey: key)
-            drawerHostingViews.removeValue(forKey: key)
+            displayPanelRegistry.removeDrawerPanel(for: key)
+            displayPanelRegistry.removeDrawerHostingView(for: key)
             drawerStates.removeValue(forKey: key)
         }
         rebuildAllHotPanels()
@@ -593,7 +554,7 @@ final class NotchPanelController: NSObject {
             // drawer is open switches over immediately, without waiting for
             // the collapse to play out first.
             if settingsStore.triggerMode == .hover, NSEvent.pressedMouseButtons & 1 == 0 {
-                for (screenID, panel) in hotPanels where screenID != drawerScreen?.uniqueID {
+                for (screenID, panel) in displayPanelRegistry.hotPanelEntries where screenID != drawerScreen?.uniqueID {
                     if panel.frame.insetBy(dx: 0, dy: -6).contains(point) {
                         currentScreen = NSScreen.screens.first { $0.uniqueID == screenID }
                         expand(animated: true)
@@ -613,7 +574,7 @@ final class NotchPanelController: NSObject {
         // A file being dragged toward the notch reveals the drawer so it can
         // be dropped onto the shelf
         if settingsStore.isFileShelfEnabled, isFileDragInProgress() {
-            for screenID in hotPanels.keys {
+            for screenID in displayPanelRegistry.hotDisplayIDs {
                 guard let screen = NSScreen.screens.first(where: { $0.uniqueID == screenID }) else { continue }
                 let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
                 if fileDropFrame(for: layout, screen: screen).contains(point) {
@@ -627,7 +588,7 @@ final class NotchPanelController: NSObject {
 
         // Don't expand on hover while the mouse button is held (e.g. dragging)
         if settingsStore.triggerMode == .hover, NSEvent.pressedMouseButtons & 1 == 0 {
-            for (screenID, panel) in hotPanels {
+            for (screenID, panel) in displayPanelRegistry.hotPanelEntries {
                 let activationZone = panel.frame.insetBy(dx: 0, dy: -6)
                 if activationZone.contains(point) {
                     currentScreen = NSScreen.screens.first { $0.uniqueID == screenID }
@@ -661,15 +622,6 @@ final class NotchPanelController: NSObject {
     private func cancelCollapse() {
         collapseTask?.cancel()
         collapseTask = nil
-        stopCollapseAnimation()
-    }
-
-    private func stopCollapseAnimation() {
-        if let link = collapseDisplayLink {
-            CVDisplayLinkStop(link)
-            collapseDisplayLink = nil
-        }
-        isCollapsingAnimationRunning = false
     }
 
 
