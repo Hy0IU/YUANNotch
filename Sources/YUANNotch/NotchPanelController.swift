@@ -8,9 +8,20 @@ final class NotchPanel: NSPanel {
     /// in the window cycle, app activation can make the Window Server drag
     /// them onto the active display.
     var allowsKeyboardFocus = true
+    /// Tiling window managers (AeroSpace, yabai, …) only manage windows
+    /// whose accessibility subrole is AXStandardWindow. A borderless panel
+    /// that can become key reports AXStandardWindow, so a WM would grab the
+    /// drawer via the AX API and drag it onto the focused workspace's
+    /// display. Reporting AXDialog (like our non-key hot panels already do)
+    /// keeps the drawer invisible to them.
+    var masqueradeAsDialog = false
 
     override var canBecomeKey: Bool { allowsKeyboardFocus }
     override var canBecomeMain: Bool { allowsKeyboardFocus }
+
+    override func accessibilitySubrole() -> NSAccessibility.Subrole? {
+        masqueradeAsDialog ? .dialog : super.accessibilitySubrole()
+    }
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown || event.type == .leftMouseDragged || event.type == .leftMouseUp {
@@ -41,8 +52,18 @@ final class NotchPanelController: NSObject {
     private var hotPanels: [String: NotchPanel] = [:]
     private var hotHostingViews: [String: CompactFileDropHostingView<CompactNotchView>] = [:]
     private var fileDragTrackingState = FileDragTrackingState()
-    private let drawerPanel: NotchPanel
-    private var hostingView: NSHostingView<NotebookView>?
+    /// One drawer panel per display, keyed by screen uniqueID. A window that
+    /// has been key on one display gets asynchronously "returned" to it by
+    /// the Window Server when later shown on another display — so a drawer
+    /// panel never leaves its own display.
+    private var drawerPanels: [String: NotchPanel] = [:]
+    /// The drawer panel currently shown (on `drawerScreen`) while expanded.
+    private var activeDrawerPanel: NotchPanel?
+    /// Each drawer panel owns its content view permanently. Moving one
+    /// shared view between windows makes the Window Server relocate the
+    /// receiving window onto the screen where the view was last visible.
+    private var drawerHostingViews: [String: FirstMouseHostingView<NotebookView>] = [:]
+    private var activeHostingView: FirstMouseHostingView<NotebookView>?
     private var mousePollingTimer: Timer?
     private var globalMouseDownMonitor: Any?
     private var globalMouseDragMonitor: Any?
@@ -57,17 +78,24 @@ final class NotchPanelController: NSObject {
     private var isCollapsingAnimationRunning = false
 
     override init() {
-        drawerPanel = NotchPanel(
+        super.init()
+        startMousePolling()
+        observeScreenChanges()
+        observeGlobalSelectionMouseEvents()
+        observeMenuTracking()
+    }
+
+    private func makeDrawerPanel() -> NotchPanel {
+        let panel = NotchPanel(
             contentRect: .zero,
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-
-        super.init()
-        configurePanel(drawerPanel)
-        drawerPanel.onMouseEvent = { [weak self] event in
-            guard let self else { return }
+        configurePanel(panel)
+        panel.masqueradeAsDialog = true
+        panel.onMouseEvent = { [weak self, weak panel] event in
+            guard let self, let panel else { return }
             switch event.type {
             case .leftMouseDown:
                 self.beginFileDragTracking(at: self.screenLocation(for: event))
@@ -79,12 +107,17 @@ final class NotchPanelController: NSObject {
                 break
             }
             if self.handleResizeMouseEvent(event) { return }
-            self.editorInteractionState.handleMouseEvent(event, searchingIn: self.hostingView)
+            self.editorInteractionState.handleMouseEvent(event, searchingIn: panel.contentView)
         }
-        startMousePolling()
-        observeScreenChanges()
-        observeGlobalSelectionMouseEvents()
-        observeMenuTracking()
+        return panel
+    }
+
+    private func drawerPanel(for screen: NSScreen?) -> NotchPanel {
+        let key = screen?.uniqueID ?? "unknown-screen"
+        if let existing = drawerPanels[key] { return existing }
+        let panel = makeDrawerPanel()
+        drawerPanels[key] = panel
+        return panel
     }
 
     func showDocked() {
@@ -95,17 +128,15 @@ final class NotchPanelController: NSObject {
         isExpanded = false
         drawerState.isExpanded = false
         drawerState.revealProgress = 0
-        drawerPanel.setFrame(drawerFrame(for: layout, screen: currentScreen), display: true)
-        drawerPanel.orderOut(nil)
     }
 
-    /// Shows the drawer on the screen containing `currentScreen`.
+    /// Shows the drawer on the screen containing `currentScreen`, using the
+    /// drawer panel dedicated to that display.
     ///
     /// The drawer is ONLY ever ordered front, never programmatically made
-    /// key: making a window key while another of the app's windows is key
-    /// on a different display makes the Window Server relocate it onto that
-    /// display a moment later. The drawer becomes key naturally when the
-    /// user clicks into it (first-mouse is accepted).
+    /// key or activated — programmatic focus changes on multi-display setups
+    /// cause erratic window placement. The drawer becomes key naturally when
+    /// the user clicks into it (first-mouse is accepted).
     func expand(animated: Bool) {
         guard !isExpanded else { return }
         let layout = NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
@@ -116,8 +147,11 @@ final class NotchPanelController: NSObject {
         rebuildContent(layout: layout)
         // Rebuild hot panels with the same layout so compact widths match exactly
         rebuildAllHotPanels()
-        drawerPanel.setFrame(drawerFrame(for: layout, screen: currentScreen), display: true)
-        drawerPanel.orderFrontRegardless()
+        let panel = drawerPanel(for: currentScreen)
+        activeDrawerPanel = panel
+        activeHostingView = hostingView(for: currentScreen, layout: layout)
+        panel.setFrame(drawerFrame(for: layout, screen: currentScreen), display: true)
+        panel.orderFrontRegardless()
         if let panel = hotPanelForScreen(currentScreen) {
             panel.orderOut(nil)
         }
@@ -127,10 +161,10 @@ final class NotchPanelController: NSObject {
             guard self.isExpanded else { return }
             self.editorInteractionState.restoreSelection(
                 self.store.selectionRange(for: self.store.activeTabID),
-                searchingIn: self.hostingView
+                searchingIn: self.activeHostingView
             )
-            self.editorInteractionState.requestLayoutRefresh(searchingIn: self.hostingView)
-            self.editorInteractionState.requestFocus(searchingIn: self.hostingView)
+            self.editorInteractionState.requestLayoutRefresh(searchingIn: self.activeHostingView)
+            self.editorInteractionState.requestFocus(searchingIn: self.activeHostingView)
         }
     }
 
@@ -149,15 +183,24 @@ final class NotchPanelController: NSObject {
             // SwiftUI animation: easeOut 0.16s
             // Order out drawer right as animation completes, then show hot panels
             // SwiftUI easeOut is 0.16s; use 0.20s to ensure animation is fully complete
+            let collapsingPanel = activeDrawerPanel
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
-                guard let self, !self.isExpanded else { return }
+                guard let self else { return }
+                if self.isExpanded {
+                    // Re-expanded meanwhile; only hide the collapsing panel if
+                    // the new expansion uses a different display's panel
+                    if self.activeDrawerPanel !== collapsingPanel {
+                        collapsingPanel?.orderOut(nil)
+                    }
+                    return
+                }
                 // Show hot panels before removing the drawer so the handoff
                 // overlaps instead of leaving a one-frame gap
                 self.showAllHotPanels()
-                self.drawerPanel.orderOut(nil)
+                collapsingPanel?.orderOut(nil)
             }
         } else {
-            drawerPanel.orderOut(nil)
+            activeDrawerPanel?.orderOut(nil)
             showAllHotPanels()
         }
     }
@@ -175,10 +218,8 @@ final class NotchPanelController: NSObject {
         panel.acceptsMouseMovedEvents = true
     }
 
-    private func rebuildContent(layout: NotchLayout? = nil) {
-        let layout = layout ?? NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
-        cachedLayout = layout
-        let view = NotebookView(
+    private func makeNotebookView(layout: NotchLayout) -> NotebookView {
+        NotebookView(
             store: store,
             settingsStore: settingsStore,
             imageStore: imageStore,
@@ -189,18 +230,33 @@ final class NotchPanelController: NSObject {
             layout: layout,
             onOpenSettings: { [weak self] in self?.openSettings() }
         )
+    }
 
-        if let hostingView {
-            hostingView.rootView = view
-            return
-        }
-
-        let host = FirstMouseHostingView(rootView: view)
+    /// Get-or-create the drawer content for a display. Each panel keeps its
+    /// own hosting view for its entire lifetime — views never move between
+    /// windows (doing so makes the Window Server relocate the receiving
+    /// window onto the screen where the view was last visible).
+    private func hostingView(for screen: NSScreen?, layout: NotchLayout) -> FirstMouseHostingView<NotebookView> {
+        let key = screen?.uniqueID ?? "unknown-screen"
+        if let existing = drawerHostingViews[key] { return existing }
+        let host = FirstMouseHostingView(rootView: makeNotebookView(layout: layout))
         host.autoresizingMask = [.width, .height]
         host.wantsLayer = true
         host.layer?.masksToBounds = true
-        drawerPanel.contentView = host
-        hostingView = host
+        drawerHostingViews[key] = host
+        drawerPanels[key]?.contentView = host
+        return host
+    }
+
+    private func rebuildContent(layout: NotchLayout? = nil) {
+        let layout = layout ?? NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
+        cachedLayout = layout
+        let view = makeNotebookView(layout: layout)
+        // Refresh every existing drawer hosting view so state (e.g. resized
+        // layout) stays consistent no matter which display shows next.
+        for host in drawerHostingViews.values {
+            host.rootView = view
+        }
     }
 
     private func rebuildAllHotPanels() {
@@ -384,10 +440,21 @@ final class NotchPanelController: NSObject {
         let screen = drawerScreen ?? currentScreen ?? NotchGeometry.targetScreen()
         let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
         cachedLayout = layout
+        // Drop drawer panels belonging to displays that are gone
+        let connectedIDs = Set(NSScreen.screens.map(\.uniqueID))
+        for (key, panel) in drawerPanels where !connectedIDs.contains(key) {
+            if activeDrawerPanel === panel {
+                activeDrawerPanel = nil
+                activeHostingView = nil
+            }
+            panel.orderOut(nil)
+            drawerPanels.removeValue(forKey: key)
+            drawerHostingViews.removeValue(forKey: key)
+        }
         rebuildAllHotPanels()
         if isExpanded {
             rebuildContent(layout: layout)
-            drawerPanel.setFrame(drawerFrame(for: layout, screen: screen), display: true)
+            activeDrawerPanel?.setFrame(drawerFrame(for: layout, screen: screen), display: true)
         }
         // The notification can fire while display frames are still mid-transition;
         // rebuild once more after the geometry settles so panels never keep
@@ -516,8 +583,9 @@ final class NotchPanelController: NSObject {
         let margin: CGFloat = 10
         let layout = NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
         let hotRect = hotFrame(for: layout, screen: currentScreen)
-        return drawerPanel.frame.insetBy(dx: -margin, dy: -margin).contains(point)
-            || hotRect.contains(point)
+        if hotRect.contains(point) { return true }
+        guard let panel = activeDrawerPanel else { return false }
+        return panel.frame.insetBy(dx: -margin, dy: -margin).contains(point)
     }
 
     private var isResizingDrawer = false
@@ -527,7 +595,7 @@ final class NotchPanelController: NSObject {
     /// Aligned to the visible corner: the NotchShape insets the right edge
     /// by the expanded top corner radius (10).
     private var drawerGripRect: NSRect {
-        let frame = drawerPanel.frame
+        guard let frame = activeDrawerPanel?.frame else { return .zero }
         // Generous hot zone ending at the visible (inset) right edge,
         // so the grip is easy to grab
         return NSRect(x: frame.maxX - 58, y: frame.minY, width: 48, height: 44)
@@ -545,9 +613,9 @@ final class NotchPanelController: NSObject {
         switch event.type {
         case .leftMouseDown:
             let mouse = NSEvent.mouseLocation
-            guard drawerGripRect.contains(mouse) else { return false }
+            guard drawerGripRect.contains(mouse), let panel = activeDrawerPanel else { return false }
             isResizingDrawer = true
-            let frame = drawerPanel.frame
+            let frame = panel.frame
             resizeGrabOffset = CGSize(width: frame.maxX - mouse.x, height: mouse.y - frame.minY)
             return true
 
@@ -565,8 +633,8 @@ final class NotchPanelController: NSObject {
     }
 
     private func resizeDrawer(to mouse: NSPoint) {
-        guard let screen = drawerPanel.screen else { return }
-        let frame = drawerPanel.frame
+        guard let panel = activeDrawerPanel, let screen = panel.screen else { return }
+        let frame = panel.frame
         let centerX = screen.frame.midX
 
         // Keep the grabbed point under the mouse. The panel stays horizontally
@@ -586,7 +654,7 @@ final class NotchPanelController: NSObject {
 
         let newX = centerX - size.width / 2
         let newY = frame.maxY - size.height
-        drawerPanel.setFrame(NSRect(x: newX, y: newY, width: size.width, height: size.height), display: true)
+        panel.setFrame(NSRect(x: newX, y: newY, width: size.width, height: size.height), display: true)
         settingsStore.customExpandedSize = size
         rebuildContent(layout: layout)
     }
@@ -598,7 +666,6 @@ final class NotchPanelController: NSObject {
         }
         settingsWindowController.show()
     }
-
 
     private func hotFrame(for layout: NotchLayout, screen: NSScreen?) -> NSRect {
         let screenFrame = screen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
