@@ -406,7 +406,9 @@ final class NotchPanelController: NSObject {
                 return
             }
 
-            guard self.settingsStore.isFileShelfEnabled else { return }
+            // A file drag brings the drawer up whatever the shelf setting is:
+            // the same gesture also carries a path the user may want to work
+            // with, and the shelf keeps itself hidden when it is disabled.
             // On the drawer's own display this callback can't fire while the
             // drawer is expanded (its hot panel is ordered out); on another
             // display, hand the drawer over mid-drag.
@@ -718,7 +720,7 @@ final class NotchPanelController: NSObject {
             // in and out of the stay region while the user aims at the
             // shelf, and re-triggering expand/collapse on each crossing
             // reads as flicker. (Shelf-item drags already returned above.)
-            if settingsStore.isFileShelfEnabled, isFileDragInProgress() {
+            if isFileDragInProgress() {
                 // Dragging toward another display's notch hands the drawer
                 // over; the plain quick-handoff below requires an
                 // unpressed button, which a drag never satisfies.
@@ -756,9 +758,11 @@ final class NotchPanelController: NSObject {
             return
         }
 
-        // A file being dragged toward the notch reveals the drawer so it can
-        // be dropped onto the shelf
-        if settingsStore.isFileShelfEnabled, isFileDragInProgress() {
+        // A file being dragged toward the notch brings the drawer up. This is
+        // deliberately independent of the file-shelf setting: dragging a file
+        // is also how a path is carried around, and the drawer is where it can
+        // be worked with. The shelf itself only appears when it is enabled.
+        if isFileDragInProgress() {
             for screenID in displayPanelRegistry.hotDisplayIDs {
                 guard let screen = NSScreen.screens.first(where: { $0.uniqueID == screenID }) else { continue }
                 let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
@@ -796,7 +800,7 @@ final class NotchPanelController: NSObject {
             guard !self.isResizingDrawer else { return }
             guard !self.workspaceState.isDraggingShelfItem else { return }
             guard !self.workspaceState.isPreviewingShelfItem else { return }
-            guard !(self.settingsStore.isFileShelfEnabled && self.isFileDragInProgress()) else { return }
+            guard !self.isFileDragInProgress() else { return }
             guard !self.isPointInExpandedStayRegion(NSEvent.mouseLocation) else { return }
             self.collapse(animated: true)
         }

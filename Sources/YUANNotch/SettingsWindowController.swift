@@ -36,16 +36,41 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     func show() {
         guard let window else { return }
-        if !window.isVisible {
-            window.center()
+
+        // Re-assert regular window semantics: the notch panels live at
+        // .statusBar level, this window must not inherit that.
+        window.level = .normal
+        window.collectionBehavior = [.managed, .participatesInCycle]
+
+        if window.isVisible {
+            // Already open: bring it forward and focus it again.
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            window.orderFrontRegardless()
+            window.makeKeyAndOrderFront(nil)
+            return
         }
-        // Become a regular app so the window can be key and interactive.
-        // Deliberately no NSApp.activate: programmatic activation (or making
-        // a window key) while another of the app's windows is key on a
-        // different display makes the Window Server relocate that window.
-        // Clicking the settings window activates the app naturally.
-        NSApp.setActivationPolicy(.regular)
+
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
+        window.center()
+
+        // The app runs as a menu-bar accessory and the notch panels never
+        // activate it — they are .nonactivatingPanel specifically so the
+        // frontmost app stays frontmost. The settings window therefore has to
+        // ask for activation itself: without it the window orders front but
+        // stays inactive, which renders its controls greyed out and leaves it
+        // unable to take keyboard focus (clicking it does not reliably fix
+        // that under a tiling window manager either).
+        // Same recipe as Atoll's SettingsWindowController.
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Activation completes asynchronously, so re-key once it has — this
+        // is what actually gives the window focus.
+        DispatchQueue.main.async { [weak window] in
+            window?.makeKeyAndOrderFront(nil)
+        }
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
@@ -53,8 +78,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        // Return to menu-bar accessory mode once settings is closed.
+        // Hand focus back and return to menu-bar accessory mode, so the app
+        // the user was working in gets the focus back instead of ours.
+        window?.orderOut(nil)
         NSApp.setActivationPolicy(.accessory)
+        NSApp.deactivate()
     }
 }
 
