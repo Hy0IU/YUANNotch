@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import SwiftUI
 
 @MainActor
@@ -38,10 +39,27 @@ final class NotchPanelController: NSObject {
     private var mousePollingTimer: Timer?
     private var mouseEventMonitor: MouseEventMonitor?
     private var isExpanded = false
+    /// True while the drawer is open only as a preview for an incoming file
+    /// drag, with the compact panel deliberately still on screen because it
+    /// owns the live drag session.
+    private var isRevealedForFileDrag = false
     private var currentScreen: NSScreen?
     private var drawerScreen: NSScreen?
     private var activeMenuTrackingCount = 0
     private var collapseTask: DispatchWorkItem?
+    /// Consecutive 60Hz ticks in which the shelf should no longer be shown.
+    /// The hide is held off for a few ticks so a single odd sample can't
+    /// blink the shelf while a drag is running.
+    private var pendingHideTickCount = 0
+    /// ~0.33s of grace before the shelf retracts, so travelling from the notch
+    /// down to the shelf does not blink it while parking over the editor does
+    /// dismiss it.
+    private static let hideTicksBeforeRetract = 20
+    /// Set from the compact notch panel's AppKit drag callbacks: a file drag
+    /// over the notch strip is what reveals the shelf on its way in.
+    private var isCompactDragTargeted = false
+    private var disarmTickCount = 0
+    private static let disarmTicksInterval = 30
 
     override init() {
         super.init()
@@ -80,16 +98,6 @@ final class NotchPanelController: NSObject {
         configurePanel(panel)
         panel.onMouseEvent = { [weak self, weak panel] event in
             guard let self, let panel else { return }
-            switch event.type {
-            case .leftMouseDown:
-                self.beginFileDragTracking(at: self.screenLocation(for: event))
-            case .leftMouseDragged:
-                self.noteFileDragMouseDragged(at: self.screenLocation(for: event))
-            case .leftMouseUp:
-                self.endFileDragTracking()
-            default:
-                break
-            }
             if self.handleResizeMouseEvent(event) { return }
             self.editorInteractionState.handleMouseEvent(event, searchingIn: panel.contentView)
         }
@@ -114,6 +122,7 @@ final class NotchPanelController: NSObject {
         rebuildContent(layout: layout)
         rebuildAllHotPanels()
         isExpanded = false
+        isRevealedForFileDrag = false
         for state in drawerStates.values {
             state.isExpanded = false
             state.revealProgress = 0
@@ -149,8 +158,18 @@ final class NotchPanelController: NSObject {
         activeHostingView = hostingView(for: currentScreen, layout: layout)
         panel.setFrame(drawerFrame(for: layout, screen: currentScreen), display: true)
         panel.orderFrontRegardless()
-        if let panel = hotPanelForScreen(currentScreen) {
-            panel.orderOut(nil)
+        // Never take the compact panel away while it is the window AppKit is
+        // delivering the file drag to: ordering out the live drag destination
+        // mid-session makes the drag feedback flap between the two windows and
+        // the drop is lost. On a file-drag reveal the compact panel therefore
+        // stays on screen — above the drawer — and stands down when the drag
+        // has moved on or ended.
+        if isFileDragInProgress() {
+            isRevealedForFileDrag = true
+            hotPanelForScreen(currentScreen)?.orderFrontRegardless()
+        } else {
+            isRevealedForFileDrag = false
+            hotPanelForScreen(currentScreen)?.orderOut(nil)
         }
         setDrawerExpanded(true, animated: animated, for: currentScreen?.uniqueID ?? "unknown-screen")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
@@ -169,6 +188,10 @@ final class NotchPanelController: NSObject {
                 self.editorInteractionState.requestFocus(searchingIn: self.activeHostingView)
             }
             self.editorInteractionState.requestLayoutRefresh(searchingIn: self.activeHostingView)
+            // The editor's text view arms itself for drags shortly after it
+            // joins the window; disarm it as soon as it is definitely there,
+            // in addition to the periodic sweep.
+            EditorFileDropGuard.disarm(in: self.activeHostingView)
         }
     }
 
@@ -206,6 +229,7 @@ final class NotchPanelController: NSObject {
             store.updateSelection(for: store.activeTabID, range: range)
         }
         isExpanded = false
+        isRevealedForFileDrag = false
         let collapsingKey = drawerScreen?.uniqueID
         drawerScreen = nil
         setDrawerExpanded(false, animated: animated, for: collapsingKey ?? "unknown-screen")
@@ -276,10 +300,11 @@ final class NotchPanelController: NSObject {
     private func hostingView(for screen: NSScreen?, layout: NotchLayout) -> FirstMouseHostingView<NotebookView> {
         let key = screen?.uniqueID ?? "unknown-screen"
         if let existing = displayPanelRegistry.drawerHostingView(for: key) { return existing }
-        let host = FirstMouseHostingView(rootView: makeNotebookView(layout: layout, drawerState: drawerState(for: key)))
+        let host = DrawerFileDropHostingView(rootView: makeNotebookView(layout: layout, drawerState: drawerState(for: key)))
         host.autoresizingMask = [.width, .height]
         host.wantsLayer = true
         host.layer?.masksToBounds = true
+        configureDrawerFileDrop(host)
         displayPanelRegistry.setDrawerHostingView(host, for: key)
         displayPanelRegistry.drawerPanel(for: key)?.contentView = host
         return host
@@ -296,6 +321,9 @@ final class NotchPanelController: NSObject {
         let key = (drawerScreen ?? currentScreen)?.uniqueID ?? "unknown-screen"
         if let host = displayPanelRegistry.drawerHostingView(for: key) {
             host.rootView = makeNotebookView(layout: layout, drawerState: drawerState(for: key))
+            // A rebuild installs a fresh editor view, which arms itself for
+            // file drops a moment later; the polling sweep catches that.
+            EditorFileDropGuard.disarm(in: host)
         }
     }
 
@@ -364,8 +392,25 @@ final class NotchPanelController: NSObject {
 
     private func configureCompactFileDrop(_ host: CompactFileDropHostingView<CompactNotchView>, screen: NSScreen) {
         host.onFileDragTargeted = { [weak self, weak screen] targeted in
-            guard let self, let screen, targeted else { return }
-            guard self.settingsStore.isFileShelfEnabled, !self.isExpanded else { return }
+            guard let self, let screen else { return }
+            self.isCompactDragTargeted = targeted
+
+            guard targeted else {
+                // The drag has left the compact panel. Whatever is under it
+                // now owns the session, so the compact panel may stand down —
+                // but only after AppKit has finished re-targeting, hence the
+                // async hop.
+                DispatchQueue.main.async { [weak self] in
+                    self?.finishFileDragRevealIfNeeded()
+                }
+                return
+            }
+
+            guard self.settingsStore.isFileShelfEnabled else { return }
+            // On the drawer's own display this callback can't fire while the
+            // drawer is expanded (its hot panel is ordered out); on another
+            // display, hand the drawer over mid-drag.
+            guard !self.isExpanded || self.drawerScreen?.uniqueID != screen.uniqueID else { return }
             self.currentScreen = screen
             self.expand(animated: true)
         }
@@ -374,12 +419,45 @@ final class NotchPanelController: NSObject {
         }
     }
 
+    private func configureDrawerFileDrop(_ host: DrawerFileDropHostingView<NotebookView>) {
+        // Claim external file drags only when the shelf can actually accept
+        // them, and never claim drags that originate from the shelf itself
+        // (dragging chips out writes file URLs to the drag pasteboard too).
+        host.isFileDragActive = { [weak self] in
+            guard let self else { return false }
+            return self.settingsStore.isFileShelfEnabled
+                && self.isFileDragInProgress()
+                && !self.workspaceState.isDraggingShelfItem
+        }
+        host.onFileDragTargeted = { [weak self] targeted in
+            guard let self, targeted else { return }
+            // Reveal-only, for the same reason as the SwiftUI callback: the
+            // show/hide decision must not flap with the cursor position.
+            FileDragDiagnostics.log("drawer drag entered -> reveal shelf")
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.84)) {
+                self.workspaceState.isShelfDropTargeted = true
+            }
+        }
+        host.onFilesDropped = { [weak self] urls in
+            self?.receiveDroppedFiles(urls) ?? false
+        }
+    }
+
     private func receiveDroppedFiles(_ urls: [URL]) -> Bool {
-        guard settingsStore.isFileShelfEnabled, fileShelfStore.acceptDrop(urls) else { return false }
+        let accepted = fileShelfStore.acceptDrop(urls)
+        FileDragDiagnostics.log(
+            "panel receiveDroppedFiles accepted=\(accepted) items=\(fileShelfStore.items.count)"
+        )
+        guard settingsStore.isFileShelfEnabled, accepted else { return false }
         // Reveal the shelf as drop feedback. Defer so AppKit can finish the
-        // drop callback before the window order changes.
+        // drop callback before the window order changes — replacing the
+        // window that owns an active dragging destination is not allowed.
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.isExpanded else { return }
+            guard let self else { return }
+            guard !self.isExpanded else {
+                self.finishFileDragRevealIfNeeded()
+                return
+            }
             self.expand(animated: true)
         }
         return true
@@ -432,26 +510,21 @@ final class NotchPanelController: NSObject {
 
 
 
+    /// Global monitors for the mouse *gestures* that can start outside our
+    /// windows and still affect the drawer. The file-drag detector does not
+    /// depend on these anymore — it polls the drag pasteboard instead, so a
+    /// monitor that never fires (sandboxed or unauthorized process) can no
+    /// longer silently disable it.
     private func observeGlobalSelectionMouseEvents() {
         mouseEventMonitor = MouseEventMonitor(
-            onMouseDown: { [weak self] _ in
-                let changeCount = NSPasteboard(name: .drag).changeCount
-                let location = NSEvent.mouseLocation
-                Task { @MainActor in
-                    self?.beginFileDragTracking(at: location, pasteboardChangeCount: changeCount)
-                }
-            },
             onMouseDragged: { [weak self] _ in
-                let location = NSEvent.mouseLocation
                 Task { @MainActor in
-                    self?.noteFileDragMouseDragged(at: location)
                     self?.editorInteractionState.noteGlobalMouseDragged()
                 }
             },
             onMouseUp: { [weak self] _ in
                 Task { @MainActor in
                     guard let self else { return }
-                    self.endFileDragTracking()
                     self.editorInteractionState.noteGlobalMouseUp()
                     self.workspaceState.isDraggingShelfItem = false
                 }
@@ -508,8 +581,85 @@ final class NotchPanelController: NSObject {
     }
 
     @objc private func mousePollingTick(_ timer: Timer) {
+        // Keep the drag-pasteboard baseline up to date while no button is
+        // held; during a drag the baseline stays frozen so the session's
+        // pasteboard write keeps reading as "changed".
+        let pasteboard = NSPasteboard(name: .drag)
+        if !Self.isLeftMouseButtonDown {
+            fileDragTrackingState.markPasteboardSettled(pasteboard)
+        }
+        updateShelfReveal()
+        if !isFileDragInProgress() {
+            isCompactDragTargeted = false
+            finishFileDragRevealIfNeeded()
+        }
+        // The editor's text view arms itself as a file-drop destination
+        // shortly after it joins a window; sweep often enough that a file
+        // drag can never find it armed.
+        disarmTickCount += 1
+        if disarmTickCount >= Self.disarmTicksInterval {
+            disarmTickCount = 0
+            EditorFileDropGuard.disarm(in: activeHostingView)
+        }
+        handleMouseLocation(NSEvent.mouseLocation)
+    }
+
+    /// Shows the shelf while a file drag is over the shelf's own strip (or
+    /// over the compact notch, which is where a drag toward the notch lands),
+    /// and hides it once the drag has been elsewhere for a moment.
+    ///
+    /// Both edges are derived from the *panel frame* and the cursor position,
+    /// so they stand still during a drag — the shelf changing the editor's
+    /// height cannot move the trigger region out from under the cursor, which
+    /// is what made the shelf oscillate before. The hide is held off for a
+    /// few ticks so travelling from the notch down to the shelf does not
+    /// blink it, while parking the drag over the editor does dismiss it.
+    private func updateShelfReveal() {
+        guard !workspaceState.isPreviewingShelfItem else { return }
+
+        let isFileDrag = settingsStore.isFileShelfEnabled && isFileDragInProgress()
         let mouseLocation = NSEvent.mouseLocation
-        handleMouseLocation(mouseLocation)
+        let isOverShelfStrip = activeDrawerPanel.map {
+            shelfRevealStrip(for: $0.frame).contains(mouseLocation)
+        } ?? false
+        let shouldReveal = isFileDrag
+            && (isOverShelfStrip || isCompactDragTargeted)
+            && !workspaceState.isDraggingShelfItem
+
+        if shouldReveal {
+            pendingHideTickCount = 0
+        } else if workspaceState.isShelfDropTargeted {
+            pendingHideTickCount += 1
+        } else {
+            pendingHideTickCount = 0
+        }
+
+        let keepRevealed = shouldReveal
+            || (workspaceState.isShelfDropTargeted && pendingHideTickCount < Self.hideTicksBeforeRetract)
+        guard keepRevealed != workspaceState.isShelfDropTargeted else { return }
+
+        FileDragDiagnostics.log(
+            """
+            shelf reveal=\(keepRevealed) fileDrag=\(isFileDrag) overShelfStrip=\(isOverShelfStrip) \
+            compactTargeted=\(isCompactDragTargeted) mouse=\(Int(mouseLocation.x)),\(Int(mouseLocation.y))
+            """
+        )
+        withAnimation(.spring(response: 0.30, dampingFraction: 0.84)) {
+            workspaceState.isShelfDropTargeted = keepRevealed
+        }
+    }
+
+    /// The shelf's strip in screen coordinates: its own height plus the
+    /// content padding and slack above it, anchored to the panel's bottom.
+    private func shelfRevealStrip(for panelFrame: NSRect) -> NSRect {
+        let height = ShelfMetrics.shelfHeight(forDrawerHeight: panelFrame.height)
+            + ShelfMetrics.revealBandSlack
+        return NSRect(
+            x: panelFrame.minX,
+            y: panelFrame.minY,
+            width: panelFrame.width,
+            height: height
+        )
     }
 
     @objc private func menuTrackingDidBegin(_ notification: Notification) {
@@ -521,6 +671,20 @@ final class NotchPanelController: NSObject {
         activeMenuTrackingCount = max(0, activeMenuTrackingCount - 1)
         guard activeMenuTrackingCount == 0, isExpanded else { return }
         handleMouseLocation(NSEvent.mouseLocation)
+    }
+
+    /// Stands the compact panel down once it is no longer the drag's owner.
+    ///
+    /// Called only from moments where the drag has already moved off the
+    /// compact panel (or the session is over), or after an async hop out of a
+    /// drop callback — never while the compact panel is still the active
+    /// drag destination.
+    private func finishFileDragRevealIfNeeded() {
+        guard isRevealedForFileDrag else { return }
+        isRevealedForFileDrag = false
+        guard isExpanded else { return }
+        FileDragDiagnostics.log("file-drag reveal finished: compact panel stands down")
+        hotPanelForScreen(drawerScreen)?.orderOut(nil)
     }
 
     private func handleMouseLocation(_ point: NSPoint) {
@@ -546,6 +710,27 @@ final class NotchPanelController: NSObject {
             }
 
             if workspaceState.isPreviewingShelfItem {
+                cancelCollapse()
+                return
+            }
+
+            // An external file drag pins the drawer open: the drag wanders
+            // in and out of the stay region while the user aims at the
+            // shelf, and re-triggering expand/collapse on each crossing
+            // reads as flicker. (Shelf-item drags already returned above.)
+            if settingsStore.isFileShelfEnabled, isFileDragInProgress() {
+                // Dragging toward another display's notch hands the drawer
+                // over; the plain quick-handoff below requires an
+                // unpressed button, which a drag never satisfies.
+                for screenID in displayPanelRegistry.hotDisplayIDs where screenID != drawerScreen?.uniqueID {
+                    guard let screen = NSScreen.screens.first(where: { $0.uniqueID == screenID }) else { continue }
+                    let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
+                    if fileDropFrame(for: layout, screen: screen).contains(point) {
+                        currentScreen = screen
+                        expand(animated: true)
+                        return
+                    }
+                }
                 cancelCollapse()
                 return
             }
@@ -611,6 +796,7 @@ final class NotchPanelController: NSObject {
             guard !self.isResizingDrawer else { return }
             guard !self.workspaceState.isDraggingShelfItem else { return }
             guard !self.workspaceState.isPreviewingShelfItem else { return }
+            guard !(self.settingsStore.isFileShelfEnabled && self.isFileDragInProgress()) else { return }
             guard !self.isPointInExpandedStayRegion(NSEvent.mouseLocation) else { return }
             self.collapse(animated: true)
         }
@@ -728,31 +914,42 @@ final class NotchPanelController: NSObject {
         return frame
     }
 
+    private var lastLoggedDragActive = false
+
     private func isFileDragInProgress() -> Bool {
-        fileDragTrackingState.isFileDragInProgress(
-            isLeftMouseButtonDown: NSEvent.pressedMouseButtons & 1 == 1,
-            pasteboard: NSPasteboard(name: .drag)
+        let pasteboard = NSPasteboard(name: .drag)
+        let isButtonDown = Self.isLeftMouseButtonDown
+        let isActive = fileDragTrackingState.isFileDragInProgress(
+            isLeftMouseButtonDown: isButtonDown,
+            pasteboard: pasteboard
         )
+        if isActive != lastLoggedDragActive {
+            lastLoggedDragActive = isActive
+            FileDragDiagnostics.log(
+                """
+                dragActive=\(isActive) buttonDown=\(isButtonDown) \
+                dragCC=\(pasteboard.changeCount) \
+                hasFileURL=\(FileDropPasteboardReader.containsFileURLs(pasteboard))
+                """
+            )
+        }
+        return isActive
     }
 
-    private func beginFileDragTracking(at location: NSPoint, pasteboardChangeCount: Int? = nil) {
-        fileDragTrackingState.mouseDown(
-            at: location,
-            pasteboardChangeCount: pasteboardChangeCount ?? NSPasteboard(name: .drag).changeCount
-        )
-    }
-
-    private func noteFileDragMouseDragged(at location: NSPoint) {
-        fileDragTrackingState.mouseDragged(to: location)
-    }
-
-    private func endFileDragTracking() {
-        fileDragTrackingState.mouseUp()
-    }
-
-    private func screenLocation(for event: NSEvent) -> NSPoint {
-        guard let window = event.window else { return event.locationInWindow }
-        return window.convertToScreen(NSRect(origin: event.locationInWindow, size: .zero)).origin
+    /// Whether the left mouse button is down, sampled from the session event
+    /// state in addition to the physical button.
+    ///
+    /// `NSEvent.pressedMouseButtons` reports the physical HID button, which
+    /// never goes down for gestures such as three-finger drag or
+    /// tap-and-drag: the system synthesizes the mouse events without a
+    /// physical press, so a drag driven that way was invisible to the file
+    /// drag detector and every feature gated on it silently did nothing.
+    /// The combined session state follows the synthesized events, so it
+    /// recognises every gesture. Both are read live, so the state can never
+    /// go stale and pin the drawer open.
+    private static var isLeftMouseButtonDown: Bool {
+        NSEvent.pressedMouseButtons & 1 == 1
+            || CGEventSource.buttonState(.combinedSessionState, button: .left)
     }
 
     private func drawerFrame(for layout: NotchLayout, screen: NSScreen?) -> NSRect {

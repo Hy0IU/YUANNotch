@@ -29,7 +29,13 @@ final class FileShelfReorderNSView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        registerForDraggedTypes([.shelfReorder, .fileURL])
+        // `.shelfReorder` only. Registering `.fileURL` as well made this view
+        // the deepest registered destination in the shelf's strip, and AppKit
+        // does not honour `hitTest` when resolving a drag destination — so
+        // external file drops over the shelf were claimed here, found no
+        // reorder payload, and were rejected. Internal reorders are
+        // unaffected: the chips' drag always carries the reorder payload.
+        registerForDraggedTypes([.shelfReorder])
     }
 
     @available(*, unavailable)

@@ -9,6 +9,36 @@ struct NotchLayout: Equatable {
     let expandedTopOffset: CGFloat
 }
 
+/// Size-independent metrics for the file shelf.
+///
+/// The shelf's height is a fraction of the drawer's height because the
+/// drawer is user-resizable: a fixed pixel height would change its
+/// relationship to the drawer every time the drawer is resized, and a shelf
+/// derived from the animated content layout would drift while it animates
+/// the editor's height.
+enum ShelfMetrics {
+    /// Target shelf height as a fraction of the drawer height.
+    static let heightRatio: CGFloat = 0.20
+    /// A chip is 54pt tall inside 6pt of vertical padding, so anything below
+    /// 66pt squeezes the row; keep comfortable slack at the small end and a
+    /// cap at the large end.
+    static let minShelfHeight: CGFloat = 72
+    static let maxShelfHeight: CGFloat = 120
+    /// How far above the shelf's own row a file drag still counts as
+    /// hovering the shelf: the content's bottom padding, the gap above the
+    /// shelf, and a little slack. Measured from the panel's bottom edge so
+    /// the shelf appearing underneath cannot move the region out from under
+    /// the cursor.
+    static let revealBandSlack: CGFloat = 44
+    /// Smallest drawer height that fits the toolbar, the editor's minimum
+    /// height and the shelf without overflowing the visible area.
+    static let minimumDrawerHeight: CGFloat = 340
+
+    static func shelfHeight(forDrawerHeight height: CGFloat) -> CGFloat {
+        min(max(height * heightRatio, minShelfHeight), maxShelfHeight)
+    }
+}
+
 extension NSScreen {
     var displayID: CGDirectDisplayID? {
         guard let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
@@ -74,7 +104,10 @@ enum NotchGeometry {
         let expandedHeight: CGFloat
         if let custom = customSize {
             expandedWidth = min(max(custom.width, 360), screenFrame.width - 36)
-            expandedHeight = min(max(custom.height, 300), screenFrame.height - 84)
+            // The lower bound keeps the toolbar, the editor's minimum height
+            // and the shelf inside the visible drawer: below it the shelf
+            // would render clipped under the bottom edge.
+            expandedHeight = min(max(custom.height, ShelfMetrics.minimumDrawerHeight), screenFrame.height - 84)
         } else {
             expandedWidth = defaultExpandedWidth
             expandedHeight = defaultExpandedHeight

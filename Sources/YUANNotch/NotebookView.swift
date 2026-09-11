@@ -20,18 +20,39 @@ struct NotebookView: View {
         // animation always converges to the panel's center even if the panel
         // frame and the layout size ever disagree
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // The drop action and the reveal signal both live here — this is the
+        // only path AppKit actually delivers file drags to (its drag
+        // destination resolution does not honour a hitTest override on the
+        // hosting view, so an NSView-level claim never fires).
+        //
+        // Targeting is deliberately *reveal-only*: `false` does not retract
+        // the shelf. SwiftUI reports `false` for every moment the drag is
+        // over the editor, whose NSTextView accepts file drops itself, and
+        // retracting on it made the shelf bounce up and down. The retract
+        // happens in the controller once the drag session has really ended.
         .dropDestination(for: URL.self) { urls, _ in
+            FileDragDiagnostics.log(
+                """
+                dropDestination action urls=\(urls.count) \
+                shelfEnabled=\(settingsStore.isFileShelfEnabled) \
+                draggingShelfItem=\(workspaceState.isDraggingShelfItem)
+                """
+            )
             guard settingsStore.isFileShelfEnabled, !workspaceState.isDraggingShelfItem else {
                 workspaceState.isShelfDropTargeted = false
                 return false
             }
             return receiveDroppedFiles(urls)
         } isTargeted: { isTargeted in
-            withAnimation(shelfAnimation) {
-                workspaceState.isShelfDropTargeted = settingsStore.isFileShelfEnabled
-                    && isTargeted
-                    && !workspaceState.isDraggingShelfItem
-            }
+            // Diagnostics only. The shelf's visibility has exactly one
+            // authority — the controller's polling rule, which measures the
+            // cursor against a strip anchored to the panel's bottom edge.
+            // Letting this callback drive it too would reintroduce the second
+            // source that made the shelf flicker.
+            let mouse = NSEvent.mouseLocation
+            FileDragDiagnostics.log(
+                "swiftUI isTargeted=\(isTargeted) mouse=\(Int(mouse.x)),\(Int(mouse.y))"
+            )
         }
     }
 
@@ -194,7 +215,7 @@ struct NotebookView: View {
     }
 
     private var fileShelfHeight: CGFloat {
-        72
+        ShelfMetrics.shelfHeight(forDrawerHeight: layout.expandedSize.height)
     }
 
     private var shelfSpacing: CGFloat {
@@ -212,6 +233,9 @@ struct NotebookView: View {
 
     private func receiveDroppedFiles(_ urls: [URL]) -> Bool {
         let didAcceptDrop = fileShelfStore.acceptDrop(urls)
+        FileDragDiagnostics.log(
+            "notebook receiveDroppedFiles accepted=\(didAcceptDrop) items=\(fileShelfStore.items.count)"
+        )
         workspaceState.isShelfDropTargeted = false
         return didAcceptDrop
     }
