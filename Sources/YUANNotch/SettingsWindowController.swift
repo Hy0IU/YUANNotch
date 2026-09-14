@@ -277,8 +277,54 @@ private struct TriggerSettingsView: View {
             } footer: {
                 Text("Hover: moving the cursor to the top edge opens the panel. Click: click the notch area to open it.")
             }
+
+            Section {
+                HStack(spacing: 10) {
+                    Text("Hover delay:")
+                        .fixedSize()
+
+                    Spacer(minLength: 16)
+
+                    Slider(
+                        value: hoverDelayBinding,
+                        in: AppSettingsStore.hoverActivationDelayRange,
+                        step: 0.2
+                    )
+                    .frame(width: 110)
+
+                    TextField(
+                        "",
+                        value: hoverDelayBinding,
+                        format: .number.precision(.fractionLength(0...2))
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .monospacedDigit()
+                    .frame(width: 58)
+                    .accessibilityLabel("Hover delay in seconds")
+
+                    Text("s")
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+                .disabled(settingsStore.triggerMode != .hover)
+            } footer: {
+                Text("How long the pointer must remain over the notch before the panel opens. Set to 0 for an immediate response.")
+            }
         }
         .formStyle(.grouped)
+    }
+
+    private var hoverDelayBinding: Binding<Double> {
+        Binding(
+            get: { settingsStore.hoverActivationDelay },
+            set: { value in
+                settingsStore.hoverActivationDelay = min(
+                    max(value, AppSettingsStore.hoverActivationDelayRange.lowerBound),
+                    AppSettingsStore.hoverActivationDelayRange.upperBound
+                )
+            }
+        )
     }
 }
 

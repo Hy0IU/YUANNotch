@@ -34,6 +34,12 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    @Published var hoverActivationDelay: Double {
+        didSet {
+            UserDefaults.standard.set(hoverActivationDelay, forKey: Self.hoverActivationDelayKey)
+        }
+    }
+
     @Published var customExpandedSize: CGSize? {
         didSet {
             if let size = customExpandedSize {
@@ -68,8 +74,11 @@ final class AppSettingsStore: ObservableObject {
 
     static let defaultExpandedTopCornerRadius: Double = 10
     static let defaultExpandedBottomCornerRadius: Double = 20
+    static let defaultHoverActivationDelay: Double = 0.30
+    static let hoverActivationDelayRange: ClosedRange<Double> = 0...2
 
     private static let triggerModeKey = "yuanNotch.triggerMode"
+    private static let hoverActivationDelayKey = "yuanNotch.hoverActivationDelay"
     private static let expandedWidthKey = "yuanNotch.expandedWidth"
     private static let expandedHeightKey = "yuanNotch.expandedHeight"
     private static let fileShelfEnabledKey = "yuanNotch.fileShelfEnabled"
@@ -79,6 +88,14 @@ final class AppSettingsStore: ObservableObject {
     init() {
         let rawMode = UserDefaults.standard.string(forKey: Self.triggerModeKey)
         triggerMode = rawMode.flatMap(TriggerMode.init(rawValue:)) ?? .hover
+
+        let storedHoverDelay = UserDefaults.standard.object(forKey: Self.hoverActivationDelayKey) == nil
+            ? Self.defaultHoverActivationDelay
+            : UserDefaults.standard.double(forKey: Self.hoverActivationDelayKey)
+        hoverActivationDelay = min(
+            max(storedHoverDelay, Self.hoverActivationDelayRange.lowerBound),
+            Self.hoverActivationDelayRange.upperBound
+        )
 
         let w = UserDefaults.standard.double(forKey: Self.expandedWidthKey)
         let h = UserDefaults.standard.double(forKey: Self.expandedHeightKey)

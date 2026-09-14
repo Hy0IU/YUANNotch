@@ -70,14 +70,23 @@ struct NotebookView: View {
         .frame(width: layout.expandedSize.width, height: layout.expandedSize.height, alignment: .top)
         .background(Color(red: 0.02, green: 0.02, blue: 0.025).opacity(0.98))
         .mask(alignment: .top) {
-            NotchShape(topCornerRadius: topCornerRadius, bottomCornerRadius: bottomCornerRadius)
+            panelShape
                 .frame(width: revealWidth, height: revealHeight)
         }
         .overlay(alignment: .top) {
-            NotchShape(topCornerRadius: topCornerRadius, bottomCornerRadius: bottomCornerRadius)
-                .stroke(.white.opacity(0.09), lineWidth: 1)
+            panelShape
+                .stroke(panelBorderColor, lineWidth: drawerState.isDockingTargeted ? 1.5 : 1)
                 .frame(width: revealWidth, height: revealHeight)
         }
+        .overlay(alignment: .bottom) {
+            if drawerState.isExpanded {
+                PanelDragHandle(isDetached: drawerState.isDetached)
+                    .padding(.bottom, 1)
+            }
+        }
+        .scaleEffect(drawerState.isBeingDragged ? 0.985 : 1)
+        .animation(.spring(response: 0.24, dampingFraction: 0.82), value: drawerState.isBeingDragged)
+        .animation(.easeOut(duration: 0.14), value: drawerState.isDockingTargeted)
         .contentShape(Rectangle())
         .allowsHitTesting(drawerState.isExpanded)
         .overlay(alignment: .bottomTrailing) {
@@ -86,7 +95,7 @@ struct NotebookView: View {
             // Trailing padding tracks the visible (inset) right edge of the shape.
             if drawerState.isExpanded {
                 ResizeGrip()
-                    .padding(.trailing, topCornerRadius + 8)
+                    .padding(.trailing, panelSideInset + 8)
                     .padding(.bottom, 9)
             }
         }
@@ -205,6 +214,24 @@ struct NotebookView: View {
         interpolate(from: 12, to: CGFloat(settingsStore.expandedBottomCornerRadius))
     }
 
+    private var panelShape: DetachablePanelShape {
+        DetachablePanelShape(
+            attachedTopCornerRadius: topCornerRadius,
+            attachedBottomCornerRadius: bottomCornerRadius,
+            detachmentProgress: drawerState.detachmentProgress
+        )
+    }
+
+    private var panelBorderColor: Color {
+        drawerState.isDockingTargeted
+            ? Color.accentColor.opacity(0.78)
+            : Color.white.opacity(0.09)
+    }
+
+    private var panelSideInset: CGFloat {
+        topCornerRadius * (1 - drawerState.detachmentProgress)
+    }
+
     private var expandedContentOpacity: CGFloat {
         let progress = drawerState.revealProgress
         return min(max((progress - 0.42) / 0.34, 0), 1)
@@ -262,13 +289,18 @@ struct NotebookView: View {
     }
 
     private var toolbarTopPadding: CGFloat {
-        layout.compactSize.height + 6
+        let attachedPadding = layout.compactSize.height + 6
+        return interpolate(
+            from: attachedPadding,
+            to: 34,
+            progress: drawerState.detachmentProgress
+        )
     }
 
     private var contentHorizontalPadding: CGFloat {
         // The NotchShape insets both side edges by the expanded top corner
         // radius (10), so add it back to keep a comfortable visible margin
-        26
+        interpolate(from: 26, to: 18, progress: drawerState.detachmentProgress)
     }
 
     private var contentBottomPadding: CGFloat {
@@ -284,6 +316,27 @@ struct NotebookView: View {
     }
 
     private func interpolate(from start: CGFloat, to end: CGFloat) -> CGFloat {
-        start + (end - start) * drawerState.revealProgress
+        interpolate(from: start, to: end, progress: drawerState.revealProgress)
+    }
+
+    private func interpolate(from start: CGFloat, to end: CGFloat, progress: CGFloat) -> CGFloat {
+        start + (end - start) * min(max(progress, 0), 1)
+    }
+}
+
+private struct PanelDragHandle: View {
+    let isDetached: Bool
+    @State private var isHovering = false
+
+    var body: some View {
+        Capsule(style: .continuous)
+            .fill(.white.opacity(isHovering ? 0.72 : 0.46))
+            .frame(width: 36, height: 4)
+            .frame(width: 72, height: 18)
+            .contentShape(Rectangle())
+            .pointingHandCursor()
+            .help(isDetached ? "Drag to move; double-click to return to notch" : "Drag down to float")
+            .onHover { isHovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: isHovering)
     }
 }

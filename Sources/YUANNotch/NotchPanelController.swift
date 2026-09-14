@@ -60,6 +60,26 @@ final class NotchPanelController: NSObject {
     private var isCompactDragTargeted = false
     private var disarmTickCount = 0
     private static let disarmTicksInterval = 30
+    private var hoverActivationCandidate: (screenID: String, startedAt: TimeInterval)?
+    private var floatingPanel: NotchPanel?
+    private var floatingHostingView: FirstMouseHostingView<NotebookView>?
+    private var floatingDrawerState: DrawerState?
+    private var panelDragSession: PanelDragSession?
+    private var isDockingPanel = false
+    private var backgroundDragLastFrame: NSRect?
+    private var isDraggingFloatingPanelBackground = false
+
+    private struct PanelDragSession {
+        let panel: NotchPanel
+        let drawerState: DrawerState
+        let startMouseLocation: NSPoint
+        let startPanelFrame: NSRect
+        let sourceScreenID: String?
+        var isDetached: Bool
+        var dockingScreenID: String?
+    }
+
+    private static let detachmentThreshold: CGFloat = 52
 
     override init() {
         super.init()
@@ -98,6 +118,7 @@ final class NotchPanelController: NSObject {
         configurePanel(panel)
         panel.onMouseEvent = { [weak self, weak panel] event in
             guard let self, let panel else { return }
+            if self.handlePanelDragEvent(event, panel: panel) { return }
             if self.handleResizeMouseEvent(event) { return }
             self.editorInteractionState.handleMouseEvent(event, searchingIn: panel.contentView)
         }
@@ -137,6 +158,11 @@ final class NotchPanelController: NSObject {
     /// cause erratic window placement. The drawer becomes key naturally when
     /// the user clicks into it (first-mouse is accepted).
     func expand(animated: Bool) {
+        if let floatingPanel {
+            floatingPanel.orderFrontRegardless()
+            return
+        }
+        resetHoverActivationCandidate()
         if isExpanded {
             // Already open on this display: nothing to do.
             guard drawerScreen?.uniqueID != currentScreen?.uniqueID else { return }
@@ -224,7 +250,12 @@ final class NotchPanelController: NSObject {
     }
 
     func collapse(animated: Bool) {
+        if let floatingPanel {
+            floatingPanel.orderOut(nil)
+            return
+        }
         guard isExpanded else { return }
+        resetHoverActivationCandidate()
         if let range = editorInteractionState.currentSelectionRange() {
             store.updateSelection(for: store.activeTabID, range: range)
         }
@@ -274,6 +305,7 @@ final class NotchPanelController: NSObject {
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.isMovable = false
+        panel.isMovableByWindowBackground = false
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
         panel.acceptsMouseMovedEvents = true
@@ -551,6 +583,7 @@ final class NotchPanelController: NSObject {
 
     @objc private func screenParametersChanged(_ notification: Notification) {
         cancelCollapse()
+        resetHoverActivationCandidate()
         // If the drawer was open on a display that disappeared, fall back
         if let drawerScreen, !NSScreen.screens.contains(where: { $0.uniqueID == drawerScreen.uniqueID }) {
             self.drawerScreen = nil
@@ -590,6 +623,7 @@ final class NotchPanelController: NSObject {
         if !Self.isLeftMouseButtonDown {
             fileDragTrackingState.markPasteboardSettled(pasteboard)
         }
+        updateFloatingBackgroundDrag()
         updateShelfReveal()
         if !isFileDragInProgress() {
             isCompactDragTargeted = false
@@ -690,28 +724,39 @@ final class NotchPanelController: NSObject {
     }
 
     private func handleMouseLocation(_ point: NSPoint) {
+        if floatingPanel != nil || panelDragSession != nil || isDockingPanel {
+            resetHoverActivationCandidate()
+            cancelCollapse()
+            return
+        }
+
         if isExpanded {
             if activeMenuTrackingCount > 0 {
+                resetHoverActivationCandidate()
                 cancelCollapse()
                 return
             }
 
             if editorInteractionState.isDraggingSelection {
+                resetHoverActivationCandidate()
                 cancelCollapse()
                 return
             }
 
             if isResizingDrawer {
+                resetHoverActivationCandidate()
                 cancelCollapse()
                 return
             }
 
             if workspaceState.isDraggingShelfItem {
+                resetHoverActivationCandidate()
                 cancelCollapse()
                 return
             }
 
             if workspaceState.isPreviewingShelfItem {
+                resetHoverActivationCandidate()
                 cancelCollapse()
                 return
             }
@@ -721,6 +766,7 @@ final class NotchPanelController: NSObject {
             // shelf, and re-triggering expand/collapse on each crossing
             // reads as flicker. (Shelf-item drags already returned above.)
             if isFileDragInProgress() {
+                resetHoverActivationCandidate()
                 // Dragging toward another display's notch hands the drawer
                 // over; the plain quick-handoff below requires an
                 // unpressed button, which a drag never satisfies.
@@ -737,17 +783,20 @@ final class NotchPanelController: NSObject {
                 return
             }
 
-            // Quick handoff: hovering another display's notch while this
-            // drawer is open switches over immediately, without waiting for
-            // the collapse to play out first.
-            if settingsStore.triggerMode == .hover, NSEvent.pressedMouseButtons & 1 == 0 {
-                for (screenID, panel) in displayPanelRegistry.hotPanelEntries where screenID != drawerScreen?.uniqueID {
-                    if panel.frame.insetBy(dx: 0, dy: -6).contains(point) {
-                        currentScreen = NSScreen.screens.first { $0.uniqueID == screenID }
-                        expand(animated: true)
-                        return
-                    }
+            // Keep the current drawer open while the pointer satisfies the
+            // configured hover delay over another display's notch, then hand
+            // off without an intermediate collapse.
+            let hoverTarget = updateHoverActivationCandidate(
+                at: point,
+                excluding: drawerScreen?.uniqueID
+            )
+            if hoverTarget.isHovering {
+                cancelCollapse()
+                if let screen = hoverTarget.screen {
+                    currentScreen = screen
+                    expand(animated: true)
                 }
+                return
             }
 
             if isPointInExpandedStayRegion(point) {
@@ -763,6 +812,7 @@ final class NotchPanelController: NSObject {
         // is also how a path is carried around, and the drawer is where it can
         // be worked with. The shelf itself only appears when it is enabled.
         if isFileDragInProgress() {
+            resetHoverActivationCandidate()
             for screenID in displayPanelRegistry.hotDisplayIDs {
                 guard let screen = NSScreen.screens.first(where: { $0.uniqueID == screenID }) else { continue }
                 let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
@@ -775,22 +825,57 @@ final class NotchPanelController: NSObject {
             return
         }
 
-        // Don't expand on hover while the mouse button is held (e.g. dragging)
-        if settingsStore.triggerMode == .hover, NSEvent.pressedMouseButtons & 1 == 0 {
-            for (screenID, panel) in displayPanelRegistry.hotPanelEntries {
-                let activationZone = panel.frame.insetBy(dx: 0, dy: -6)
-                if activationZone.contains(point) {
-                    currentScreen = NSScreen.screens.first { $0.uniqueID == screenID }
-                    expand(animated: true)
-                    break
-                }
-            }
+        if let screen = updateHoverActivationCandidate(at: point).screen {
+            currentScreen = screen
+            expand(animated: true)
         }
+    }
+
+    /// Tracks uninterrupted time over one compact notch. Moving away, moving
+    /// to another display, changing trigger mode, or pressing the mouse resets
+    /// the delay so separate brief passes never accumulate into an activation.
+    private func updateHoverActivationCandidate(
+        at point: NSPoint,
+        excluding excludedScreenID: String? = nil
+    ) -> (screen: NSScreen?, isHovering: Bool) {
+        guard settingsStore.triggerMode == .hover, !Self.isLeftMouseButtonDown else {
+            resetHoverActivationCandidate()
+            return (nil, false)
+        }
+
+        guard let entry = displayPanelRegistry.hotPanelEntries.first(where: { screenID, panel in
+            screenID != excludedScreenID
+                && panel.frame.insetBy(dx: 0, dy: -6).contains(point)
+        }),
+        let screen = NSScreen.screens.first(where: { $0.uniqueID == entry.0 }) else {
+            resetHoverActivationCandidate()
+            return (nil, false)
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        if hoverActivationCandidate?.screenID != entry.0 {
+            hoverActivationCandidate = (screenID: entry.0, startedAt: now)
+        }
+
+        guard let candidate = hoverActivationCandidate else {
+            return (nil, true)
+        }
+        guard now - candidate.startedAt >= settingsStore.hoverActivationDelay else {
+            return (nil, true)
+        }
+
+        resetHoverActivationCandidate()
+        return (screen, true)
+    }
+
+    private func resetHoverActivationCandidate() {
+        hoverActivationCandidate = nil
     }
 
     private func scheduleCollapse() {
         guard collapseTask == nil else { return }
         guard activeMenuTrackingCount == 0 else { return }
+        guard panelDragSession == nil, floatingPanel == nil, !isDockingPanel else { return }
 
         let task = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -828,6 +913,323 @@ final class NotchPanelController: NSObject {
     private var isResizingDrawer = false
     private var resizeGrabOffset: CGSize = .zero
 
+    /// The grip sits at the bottom center, safely away from the physical
+    /// MacBook notch and the resize corner. Pulling an attached drawer first
+    /// morphs its silhouette; only after the threshold does the window follow
+    /// the pointer. A floating drawer follows immediately.
+    private func handlePanelDragEvent(_ event: NSEvent, panel: NotchPanel) -> Bool {
+        switch event.type {
+        case .leftMouseDown:
+            guard panel === activeDrawerPanel,
+                  (isExpanded || floatingPanel === panel),
+                  let drawerState = activeDrawerState,
+                  panelDragHandleRect(for: panel).contains(NSEvent.mouseLocation),
+                  !isResizingDrawer,
+                  !isDockingPanel else {
+                return false
+            }
+
+            if floatingPanel === panel, event.clickCount >= 2 {
+                panelDragSession = nil
+                drawerState.isBeingDragged = false
+                let screen = screen(containing: NSEvent.mouseLocation) ?? panel.screen ?? currentScreen
+                if let screen {
+                    dockFloatingPanel(to: screen)
+                }
+                return true
+            }
+
+            // Once detached, AppKit's native background dragging owns the
+            // movement from the handle as well as other non-control regions.
+            // Polling observes the resulting frame and drives edge-based
+            // docking feedback without fighting the system drag session.
+            if floatingPanel === panel {
+                return false
+            }
+
+            cancelCollapse()
+            drawerState.isBeingDragged = true
+            panelDragSession = PanelDragSession(
+                panel: panel,
+                drawerState: drawerState,
+                startMouseLocation: NSEvent.mouseLocation,
+                startPanelFrame: panel.frame,
+                sourceScreenID: drawerScreen?.uniqueID,
+                isDetached: floatingPanel === panel,
+                dockingScreenID: nil
+            )
+            return true
+
+        case .leftMouseDragged:
+            guard var session = panelDragSession, session.panel === panel else { return false }
+            let mouseLocation = NSEvent.mouseLocation
+            let delta = CGSize(
+                width: mouseLocation.x - session.startMouseLocation.x,
+                height: mouseLocation.y - session.startMouseLocation.y
+            )
+
+            if !session.isDetached {
+                let pullDistance = max(0, -delta.height)
+                session.drawerState.detachmentProgress = min(
+                    pullDistance / Self.detachmentThreshold,
+                    1
+                )
+                if pullDistance < Self.detachmentThreshold {
+                    panelDragSession = session
+                    return true
+                }
+                beginFloatingPanel(using: &session)
+                guard session.isDetached else {
+                    panelDragSession = session
+                    return true
+                }
+            }
+
+            moveFloatingPanel(using: &session, delta: delta)
+            panelDragSession = session
+            return true
+
+        case .leftMouseUp:
+            guard let session = panelDragSession, session.panel === panel else { return false }
+            panelDragSession = nil
+            session.drawerState.isBeingDragged = false
+
+            if session.isDetached,
+               let screenID = session.dockingScreenID,
+               let screen = NSScreen.screens.first(where: { $0.uniqueID == screenID }) {
+                dockFloatingPanel(to: screen)
+            } else {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                    session.drawerState.detachmentProgress = session.isDetached ? 1 : 0
+                    session.drawerState.isDockingTargeted = false
+                }
+            }
+            return true
+
+        default:
+            return false
+        }
+    }
+
+    private var activeDrawerState: DrawerState? {
+        if let floatingDrawerState { return floatingDrawerState }
+        guard let key = drawerScreen?.uniqueID else { return nil }
+        return drawerStates[key]
+    }
+
+    private func panelDragHandleRect(for panel: NotchPanel) -> NSRect {
+        return NSRect(
+            x: panel.frame.midX - 36,
+            y: panel.frame.minY + 1,
+            width: 72,
+            height: 18
+        )
+    }
+
+    private func beginFloatingPanel(using session: inout PanelDragSession) {
+        guard !session.isDetached,
+              let sourceScreenID = session.sourceScreenID,
+              let host = activeHostingView else {
+            return
+        }
+
+        displayPanelRegistry.removeDrawerPanel(for: sourceScreenID)
+        displayPanelRegistry.removeDrawerHostingView(for: sourceScreenID)
+        drawerStates.removeValue(forKey: sourceScreenID)
+
+        isExpanded = false
+        isRevealedForFileDrag = false
+        drawerScreen = nil
+        floatingPanel = session.panel
+        floatingHostingView = host
+        floatingDrawerState = session.drawerState
+        session.isDetached = true
+
+        session.panel.hasShadow = true
+        session.panel.level = .statusBar
+        session.panel.isMovable = true
+        session.panel.isMovableByWindowBackground = true
+        showAllHotPanels()
+        session.panel.orderFrontRegardless()
+
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.80)) {
+            session.drawerState.isDetached = true
+            session.drawerState.detachmentProgress = 1
+        }
+    }
+
+    private func moveFloatingPanel(
+        using session: inout PanelDragSession,
+        delta: CGSize
+    ) {
+        var frame = session.startPanelFrame.offsetBy(dx: delta.width, dy: delta.height)
+        let dockingScreen = dockingTargetScreen(for: frame)
+        session.dockingScreenID = dockingScreen?.uniqueID
+
+        let isTargeted = dockingScreen != nil
+        if session.drawerState.isDockingTargeted != isTargeted {
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.78)) {
+                session.drawerState.isDockingTargeted = isTargeted
+            }
+        }
+
+        if let dockingScreen {
+            let layout = NotchGeometry.layout(
+                for: dockingScreen,
+                customSize: settingsStore.customExpandedSize
+            )
+            let target = drawerFrame(for: layout, screen: dockingScreen)
+            let magnetism: CGFloat = 0.22
+            frame.origin.x += (target.origin.x - frame.origin.x) * magnetism
+            frame.origin.y += (target.origin.y - frame.origin.y) * magnetism
+        }
+
+        session.panel.setFrame(frame, display: true)
+        session.panel.orderFrontRegardless()
+    }
+
+    /// A panel docks when any part of its top border enters the target band
+    /// around a display's notch. This intentionally uses the window boundary,
+    /// not the cursor or drag-handle position, so every drag surface behaves
+    /// consistently.
+    private func dockingTargetScreen(for panelFrame: NSRect) -> NSScreen? {
+        let panelTopBoundary = NSRect(
+            x: panelFrame.minX,
+            y: panelFrame.maxY - 2,
+            width: panelFrame.width,
+            height: 4
+        )
+
+        return NSScreen.screens.first { screen in
+            let layout = NotchGeometry.layout(
+                for: screen,
+                customSize: settingsStore.customExpandedSize
+            )
+            let targetWidth = max(layout.compactSize.width + 72, 240)
+            let targetRect = NSRect(
+                x: screen.frame.midX - targetWidth / 2,
+                y: screen.frame.maxY - 34,
+                width: targetWidth,
+                height: 42
+            )
+            return targetRect.intersects(panelTopBoundary)
+        }
+    }
+
+    /// Observes AppKit's native `isMovableByWindowBackground` movement. The
+    /// frame only changes when a non-control background region actually began
+    /// a window drag, so editor selection and button clicks are left alone.
+    private func updateFloatingBackgroundDrag() {
+        guard let panel = floatingPanel,
+              let drawerState = floatingDrawerState,
+              panelDragSession == nil,
+              !isResizingDrawer,
+              !isDockingPanel else {
+            backgroundDragLastFrame = floatingPanel?.frame
+            return
+        }
+
+        let frame = panel.frame
+        if Self.isLeftMouseButtonDown {
+            if let lastFrame = backgroundDragLastFrame, lastFrame != frame {
+                if !isDraggingFloatingPanelBackground {
+                    isDraggingFloatingPanelBackground = true
+                    drawerState.isBeingDragged = true
+                }
+
+                let dockingScreen = dockingTargetScreen(for: frame)
+                let isTargeted = dockingScreen != nil
+                if drawerState.isDockingTargeted != isTargeted {
+                    withAnimation(.spring(response: 0.22, dampingFraction: 0.78)) {
+                        drawerState.isDockingTargeted = isTargeted
+                    }
+                }
+            }
+            backgroundDragLastFrame = frame
+            return
+        }
+
+        backgroundDragLastFrame = nil
+        guard isDraggingFloatingPanelBackground else { return }
+        isDraggingFloatingPanelBackground = false
+        drawerState.isBeingDragged = false
+
+        if let screen = dockingTargetScreen(for: panel.frame) {
+            dockFloatingPanel(to: screen)
+        } else {
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.82)) {
+                drawerState.isDockingTargeted = false
+            }
+            currentScreen = panel.screen ?? currentScreen
+        }
+    }
+
+    private func screen(containing point: NSPoint) -> NSScreen? {
+        NSScreen.screens.first { $0.frame.contains(point) }
+    }
+
+    private func dockFloatingPanel(to screen: NSScreen) {
+        guard let panel = floatingPanel,
+              let host = floatingHostingView,
+              let drawerState = floatingDrawerState else {
+            return
+        }
+
+        let key = screen.uniqueID
+        if let replacedPanel = displayPanelRegistry.drawerPanel(for: key), replacedPanel !== panel {
+            replacedPanel.orderOut(nil)
+            displayPanelRegistry.removeDrawerPanel(for: key)
+            displayPanelRegistry.removeDrawerHostingView(for: key)
+            drawerStates.removeValue(forKey: key)
+        }
+
+        let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
+        host.rootView = makeNotebookView(layout: layout, drawerState: drawerState)
+        displayPanelRegistry.setDrawerPanel(panel, for: key)
+        displayPanelRegistry.setDrawerHostingView(host, for: key)
+        drawerStates[key] = drawerState
+
+        floatingPanel = nil
+        floatingHostingView = nil
+        floatingDrawerState = nil
+        backgroundDragLastFrame = nil
+        isDraggingFloatingPanelBackground = false
+        isExpanded = true
+        isDockingPanel = true
+        drawerScreen = screen
+        currentScreen = screen
+        activeDrawerPanel = panel
+        activeHostingView = host
+        panel.isMovable = false
+        panel.isMovableByWindowBackground = false
+        drawerState.isExpanded = true
+        drawerState.revealProgress = 1
+        drawerState.isBeingDragged = false
+
+        showAllHotPanels()
+        hotPanelForScreen(screen)?.orderOut(nil)
+        panel.orderFrontRegardless()
+
+        withAnimation(.spring(response: 0.30, dampingFraction: 0.84)) {
+            drawerState.isDockingTargeted = false
+            drawerState.isDetached = false
+            drawerState.detachmentProgress = 0
+        }
+
+        let targetFrame = drawerFrame(for: layout, screen: screen)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.30
+            panel.animator().setFrame(targetFrame, display: true)
+        } completionHandler: { [weak self, weak panel] in
+            Task { @MainActor in
+                guard let self, let panel else { return }
+                panel.hasShadow = false
+                self.isDockingPanel = false
+                self.editorInteractionState.requestLayoutRefresh(searchingIn: self.activeHostingView)
+            }
+        }
+    }
+
     /// Bottom-right hot zone of the drawer panel, in screen coordinates.
     /// Aligned to the visible corner: the NotchShape insets the right edge
     /// by the expanded top corner radius (10).
@@ -842,7 +1244,7 @@ final class NotchPanelController: NSObject {
     /// because rebuildContent recreates the SwiftUI view tree on every size change,
     /// which corrupts DragGesture translation state mid-drag.
     private func handleResizeMouseEvent(_ event: NSEvent) -> Bool {
-        guard isExpanded else {
+        guard (isExpanded || floatingPanel != nil), !isDockingPanel else {
             isResizingDrawer = false
             return false
         }
@@ -872,14 +1274,17 @@ final class NotchPanelController: NSObject {
     private func resizeDrawer(to mouse: NSPoint) {
         guard let panel = activeDrawerPanel, let screen = panel.screen else { return }
         let frame = panel.frame
-        let centerX = screen.frame.midX
 
         // Keep the grabbed point under the mouse. The panel stays horizontally
-        // centered, so the width must grow twice as fast as the right edge moves.
+        // centered while attached; a floating panel keeps its left and top
+        // edges fixed like a conventional bottom-right window resize.
         let targetRightEdge = mouse.x + resizeGrabOffset.width
         let targetBottomEdge = mouse.y - resizeGrabOffset.height
+        let proposedWidth = floatingPanel == nil
+            ? (targetRightEdge - screen.frame.midX) * 2
+            : targetRightEdge - frame.minX
         let proposed = CGSize(
-            width: (targetRightEdge - centerX) * 2,
+            width: proposedWidth,
             height: frame.maxY - targetBottomEdge
         )
 
@@ -889,11 +1294,18 @@ final class NotchPanelController: NSObject {
         let size = layout.expandedSize
         guard size != frame.size else { return }
 
-        let newX = centerX - size.width / 2
+        let newX = floatingPanel == nil ? screen.frame.midX - size.width / 2 : frame.minX
         let newY = frame.maxY - size.height
         panel.setFrame(NSRect(x: newX, y: newY, width: size.width, height: size.height), display: true)
         settingsStore.customExpandedSize = size
-        rebuildContent(layout: layout)
+        if let floatingHostingView, let floatingDrawerState {
+            floatingHostingView.rootView = makeNotebookView(
+                layout: layout,
+                drawerState: floatingDrawerState
+            )
+        } else {
+            rebuildContent(layout: layout)
+        }
     }
 
     func openSettings() {

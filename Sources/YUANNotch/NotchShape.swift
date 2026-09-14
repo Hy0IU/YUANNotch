@@ -47,3 +47,65 @@ struct NotchShape: Shape {
     }
 }
 
+/// Morphs the attached notch silhouette into a conventional rounded window.
+/// Keeping one path topology makes the pull-away transition continuous rather
+/// than swapping masks at the moment the panel detaches.
+struct DetachablePanelShape: Shape {
+    var attachedTopCornerRadius: CGFloat
+    var attachedBottomCornerRadius: CGFloat
+    var detachmentProgress: CGFloat
+
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGFloat> {
+        get {
+            .init(
+                .init(attachedTopCornerRadius, attachedBottomCornerRadius),
+                detachmentProgress
+            )
+        }
+        set {
+            attachedTopCornerRadius = newValue.first.first
+            attachedBottomCornerRadius = newValue.first.second
+            detachmentProgress = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let progress = min(max(detachmentProgress, 0), 1)
+        let floatingRadius = min(14, rect.width / 2, rect.height / 2)
+        let attachedTopRadius = min(attachedTopCornerRadius, rect.width / 2, rect.height / 2)
+        let topRadius = attachedTopRadius + (floatingRadius - attachedTopRadius) * progress
+        let attachedBottomRadius = min(
+            attachedBottomCornerRadius,
+            rect.width / 2 - attachedTopRadius,
+            rect.height / 2
+        )
+        let bottomRadius = attachedBottomRadius
+            + (floatingRadius - attachedBottomRadius) * progress
+        let sideInset = attachedTopRadius * (1 - progress)
+        let topEdgeInset = topRadius * progress
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + topEdgeInset, y: rect.minY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX + sideInset, y: rect.minY + topRadius),
+            control: CGPoint(x: rect.minX + sideInset, y: rect.minY)
+        )
+        path.addLine(to: CGPoint(x: rect.minX + sideInset, y: rect.maxY - bottomRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX + sideInset + bottomRadius, y: rect.maxY),
+            control: CGPoint(x: rect.minX + sideInset, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - sideInset - bottomRadius, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX - sideInset, y: rect.maxY - bottomRadius),
+            control: CGPoint(x: rect.maxX - sideInset, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX - sideInset, y: rect.minY + topRadius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX - topEdgeInset, y: rect.minY),
+            control: CGPoint(x: rect.maxX - sideInset, y: rect.minY)
+        )
+        path.closeSubpath()
+        return path
+    }
+}
