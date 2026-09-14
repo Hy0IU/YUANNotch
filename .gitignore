@@ -4,5 +4,6 @@ DerivedData/
 NotchNotes.app/
 .runtime/
 .swiftpm/
+.workbuddy/
 *.xcuserdatad
 YUANNotch.app/
