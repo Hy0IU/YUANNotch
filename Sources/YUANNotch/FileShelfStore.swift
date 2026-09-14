@@ -6,6 +6,7 @@ final class NotebookWorkspaceState: ObservableObject {
     @Published var isShelfDropTargeted = false
     @Published var isDraggingShelfItem = false
     @Published var isPreviewingShelfItem = false
+    @Published var isFileShelfCollapsed = false
     /// IDs of the shelf items being dragged right now (for dimming the
     /// dragged chips and excluding them from reorder hit-testing).
     @Published var draggedShelfItemIDs: Set<UUID> = []

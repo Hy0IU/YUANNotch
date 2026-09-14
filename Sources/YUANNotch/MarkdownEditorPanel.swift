@@ -4,6 +4,9 @@ struct MarkdownEditorPanel: View {
     @ObservedObject var store: NoteStore
     let imageStore: LocalImageStore
     let editorInteractionState: EditorInteractionState
+    let isFileShelfToggleVisible: Bool
+    let isFileShelfCollapsed: Bool
+    let onToggleFileShelf: () -> Void
     let size: CGSize
 
     private let toolbarHeight: CGFloat = 34
@@ -22,7 +25,12 @@ struct MarkdownEditorPanel: View {
                 .fill(.white.opacity(0.045))
                 .frame(width: size.width, height: separatorHeight)
 
-            MarkdownShortcutToolbar(editorInteractionState: editorInteractionState)
+            MarkdownShortcutToolbar(
+                editorInteractionState: editorInteractionState,
+                isFileShelfToggleVisible: isFileShelfToggleVisible,
+                isFileShelfCollapsed: isFileShelfCollapsed,
+                onToggleFileShelf: onToggleFileShelf
+            )
                 .frame(width: size.width, height: toolbarHeight)
                 .background(Color(red: 0.055, green: 0.055, blue: 0.065))
         }
@@ -35,6 +43,9 @@ struct MarkdownEditorPanel: View {
 
 struct MarkdownShortcutToolbar: View {
     let editorInteractionState: EditorInteractionState
+    let isFileShelfToggleVisible: Bool
+    let isFileShelfCollapsed: Bool
+    let onToggleFileShelf: () -> Void
 
     var body: some View {
         HStack(spacing: 4) {
@@ -51,6 +62,20 @@ struct MarkdownShortcutToolbar: View {
             }
 
             Spacer(minLength: 0)
+
+            if isFileShelfToggleVisible {
+                Button(action: onToggleFileShelf) {
+                    Image(
+                        systemName: isFileShelfCollapsed
+                            ? "tray.full"
+                            : "tray.full.fill"
+                    )
+                    .frame(width: 26, height: 24)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(MarkdownToolbarButtonStyle())
+                .help(isFileShelfCollapsed ? "Show File Shelf" : "Hide File Shelf")
+            }
         }
         .padding(.horizontal, 10)
     }
@@ -83,4 +108,3 @@ struct MarkdownCommandLabel: View {
         }
     }
 }
-

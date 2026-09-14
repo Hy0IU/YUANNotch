@@ -121,6 +121,14 @@ struct NotebookView: View {
                         store: store,
                         imageStore: imageStore,
                         editorInteractionState: editorInteractionState,
+                        isFileShelfToggleVisible: settingsStore.isFileShelfEnabled
+                            && !fileShelfStore.items.isEmpty,
+                        isFileShelfCollapsed: workspaceState.isFileShelfCollapsed,
+                        onToggleFileShelf: {
+                            withAnimation(shelfAnimation) {
+                                workspaceState.isFileShelfCollapsed.toggle()
+                            }
+                        },
                         size: editorSize
                     )
                     .frame(width: editorSize.width, height: editorSize.height)
@@ -156,6 +164,16 @@ struct NotebookView: View {
         .onChange(of: store.activeTabID) { _, newTabID in
             editorInteractionState.restoreSelection(store.selectionRange(for: newTabID))
             editorInteractionState.requestLayoutRefresh(resetScroll: false)
+        }
+        .onChange(of: settingsStore.isFileShelfEnabled) { _, isEnabled in
+            if !isEnabled {
+                workspaceState.isFileShelfCollapsed = false
+            }
+        }
+        .onChange(of: fileShelfStore.items.isEmpty) { _, isEmpty in
+            if isEmpty {
+                workspaceState.isFileShelfCollapsed = false
+            }
         }
         .onDisappear {
             workspaceState.isShelfDropTargeted = false
@@ -224,7 +242,10 @@ struct NotebookView: View {
 
     private var isFileShelfVisible: Bool {
         settingsStore.isFileShelfEnabled
-            && (workspaceState.isShelfDropTargeted || !fileShelfStore.items.isEmpty)
+            && (
+                workspaceState.isShelfDropTargeted
+                    || (!workspaceState.isFileShelfCollapsed && !fileShelfStore.items.isEmpty)
+            )
     }
 
     private var shelfAnimation: Animation {
