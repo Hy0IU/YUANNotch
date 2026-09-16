@@ -315,8 +315,7 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         guard let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return }
         let selectionRanges: [NSRange] = {
             guard let tv = textLayoutManager?.textContainer?.textView else { return [] }
-            let values = tv.selectedRanges as? [NSValue] ?? []
-            return values.map { $0.rangeValue }.filter { $0.length > 0 }
+            return tv.selectedRanges.map { $0.rangeValue }.filter { $0.length > 0 }
         }()
 
         NSGraphicsContext.saveGraphicsState()

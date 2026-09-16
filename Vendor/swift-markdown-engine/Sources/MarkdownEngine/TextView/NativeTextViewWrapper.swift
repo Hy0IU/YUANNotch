@@ -204,7 +204,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             scrollView.clampToInsets()
         }
         NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: nil) { _ in
-            (textView as? NativeTextView)?.ensureVisibleLayout()
+            textView.ensureVisibleLayout()
             if context.coordinator.isWritingToolsActive {
                 context.coordinator.fixWritingToolsChildWindowIfNeeded(textView: textView)
             }
