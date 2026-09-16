@@ -80,6 +80,16 @@ extension NSScreen {
 
 @MainActor
 enum NotchGeometry {
+    /// Height of the compact block on a screen that has no real notch — an
+    /// external display, or a Mac whose built-in screen has none.
+    ///
+    /// The two cases are not the same problem. A real notch is measured from the
+    /// system and the panel has to hug it, so its height is whatever the screen
+    /// reports and the `32...38` clamp only guards against a wild value. A
+    /// stand-in has nothing to hug: it only has to hold the icon and read as a
+    /// notch, so it is deliberately shorter than one.
+    private static let simulatedCompactHeight: CGFloat = 28
+
     static func targetScreen() -> NSScreen? {
         NSScreen.screens.first(where: \.isBuiltInDisplay)
             ?? NSScreen.screens.first { $0.measuredNotchSize != .zero }
@@ -92,10 +102,13 @@ enum NotchGeometry {
         let screenFrame = screen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let measured = screen?.measuredNotchSize ?? .zero
         let fallbackNotch = NSSize(width: 210, height: 32)
-        let notch = measured == .zero ? fallbackNotch : measured
+        let hasRealNotch = measured != .zero
+        let notch = hasRealNotch ? measured : fallbackNotch
 
         let compactWidth = min(max(notch.width - 6, 182), 238)
-        let compactHeight = min(max(notch.height + 2, 32), 38)
+        let compactHeight = hasRealNotch
+            ? min(max(notch.height + 2, 32), 38)
+            : Self.simulatedCompactHeight
 
         let defaultExpandedWidth = min(max(notch.width + 220, 480), 540, screenFrame.width - 36)
         let defaultExpandedHeight = min(max(notch.height + 374, 408), screenFrame.height - 84)
