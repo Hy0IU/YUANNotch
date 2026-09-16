@@ -78,9 +78,14 @@ final class NoteStore: ObservableObject {
     }
 
     func clear() {
+        // Clearing an already-empty tab is not an event: there is nothing to
+        // write, nothing to confirm, and the button is reachable in that state.
+        guard !tabs[activeIndex].text.isEmpty else { return }
+
         updateText("")
         updateSelection(for: activeTabID, range: NSRange(location: 0, length: 0))
         saveImmediately()
+        InterfaceSound.cleared()
     }
 
     func addTab() {

@@ -124,7 +124,7 @@ final class FileShelfStore: ObservableObject {
         // One sound per accepted drop, never one per file: a five-file drop is
         // a single gesture. And nothing at all when every file was already
         // staged — nothing happened, so there is nothing to confirm.
-        FileShelfSound.playDrop()
+        InterfaceSound.fileStaged()
         return addedItems.count
     }
 
@@ -142,9 +142,15 @@ final class FileShelfStore: ObservableObject {
     }
 
     func removeAll() {
+        // The menu item that calls this is already disabled on an empty shelf,
+        // but the store should not depend on that: emptying nothing is not an
+        // event, and it must not announce itself as one.
+        guard !items.isEmpty else { return }
+
         items.removeAll()
         availabilityByID.removeAll()
         save()
+        InterfaceSound.cleared()
     }
 
     /// Reorders the shelf by inserting the dragged block at `index`, counted
