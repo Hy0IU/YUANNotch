@@ -7,6 +7,26 @@ final class NotebookWorkspaceState: ObservableObject {
     @Published var isDraggingShelfItem = false
     @Published var isPreviewingShelfItem = false
     @Published var isFileShelfCollapsed = false
+    /// Set while an external file drag is in progress.
+    ///
+    /// The drawer has to show the notes surface then — the file shelf lives
+    /// there — but `AppSettingsStore.drawerMode` writes through to
+    /// `UserDefaults` on every assignment, so switching modes for the duration
+    /// of a drag must not go through it. This is the session-scoped override:
+    /// the user's chosen mode comes back the moment the drag ends, including
+    /// when the drag is cancelled.
+    @Published var fileDragForcesNotesMode = false
+
+    /// Whether the drawer is showing the reminders surface.
+    ///
+    /// The session override wins: the file shelf lives on the notes surface, so
+    /// an in-flight file drag must show it whatever the user persisted. This is
+    /// the single place that precedence is expressed — the notebook view and the
+    /// panel controller both ask this, instead of each spelling out the
+    /// conjunction (which is how they silently drift apart).
+    func showsReminders(persistedMode: DrawerMode) -> Bool {
+        persistedMode == .reminders && !fileDragForcesNotesMode
+    }
     /// IDs of the shelf items being dragged right now (for dimming the
     /// dragged chips and excluding them from reorder hit-testing).
     @Published var draggedShelfItemIDs: Set<UUID> = []

@@ -26,8 +26,41 @@ enum TriggerMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which surface the drawer shows.
+enum DrawerMode: String, CaseIterable, Identifiable {
+    case notes
+    case reminders
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .notes: return "Notes"
+        case .reminders: return "Reminders"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .notes: return "square.and.pencil"
+        case .reminders: return "checklist"
+        }
+    }
+}
+
 @MainActor
 final class AppSettingsStore: ObservableObject {
+    /// Persisted, so the drawer reopens on the mode it was left in.
+    ///
+    /// Because this writes through on every assignment, a *temporary* mode
+    /// change must never go through here — see
+    /// `NotebookWorkspaceState.fileDragForcesNotesMode`.
+    @Published var drawerMode: DrawerMode {
+        didSet {
+            UserDefaults.standard.set(drawerMode.rawValue, forKey: Self.drawerModeKey)
+        }
+    }
+
     @Published var triggerMode: TriggerMode {
         didSet {
             UserDefaults.standard.set(triggerMode.rawValue, forKey: Self.triggerModeKey)
@@ -72,20 +105,48 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    /// Master switch for the Apple Reminders integration. The integration is
+    /// the only source of reminders for this app, so with it off the reminders
+    /// panel has nothing to read or write.
+    @Published var isAppleRemindersSyncEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isAppleRemindersSyncEnabled, forKey: Self.appleRemindersEnabledKey)
+        }
+    }
+
+    /// The list reminders are read from and written to. Single source of truth
+    /// for the selected list — the settings page and the reminders panel both
+    /// read and write this one value, never a copy.
+    @Published var remindersCalendarIdentifier: String? {
+        didSet {
+            if let identifier = remindersCalendarIdentifier {
+                UserDefaults.standard.set(identifier, forKey: Self.appleRemindersListIDKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Self.appleRemindersListIDKey)
+            }
+        }
+    }
+
     static let defaultExpandedTopCornerRadius: Double = 10
     static let defaultExpandedBottomCornerRadius: Double = 20
     static let defaultHoverActivationDelay: Double = 0.30
     static let hoverActivationDelayRange: ClosedRange<Double> = 0...2
 
     private static let triggerModeKey = "yuanNotch.triggerMode"
+    private static let drawerModeKey = "yuanNotch.drawerMode"
     private static let hoverActivationDelayKey = "yuanNotch.hoverActivationDelay"
     private static let expandedWidthKey = "yuanNotch.expandedWidth"
     private static let expandedHeightKey = "yuanNotch.expandedHeight"
     private static let fileShelfEnabledKey = "yuanNotch.fileShelfEnabled"
     private static let expandedTopCornerRadiusKey = "yuanNotch.expandedTopCornerRadius"
     private static let expandedBottomCornerRadiusKey = "yuanNotch.expandedBottomCornerRadius"
+    private static let appleRemindersEnabledKey = "yuanNotch.appleReminders.enabled"
+    private static let appleRemindersListIDKey = "yuanNotch.appleReminders.listID"
 
     init() {
+        drawerMode = UserDefaults.standard.string(forKey: Self.drawerModeKey)
+            .flatMap(DrawerMode.init(rawValue:)) ?? .notes
+
         let rawMode = UserDefaults.standard.string(forKey: Self.triggerModeKey)
         triggerMode = rawMode.flatMap(TriggerMode.init(rawValue:)) ?? .hover
 
@@ -111,6 +172,11 @@ final class AppSettingsStore: ObservableObject {
             forKey: Self.expandedBottomCornerRadiusKey,
             fallback: Self.defaultExpandedBottomCornerRadius
         )
+
+        isAppleRemindersSyncEnabled = UserDefaults.standard
+            .object(forKey: Self.appleRemindersEnabledKey) as? Bool ?? false
+        remindersCalendarIdentifier = UserDefaults.standard
+            .string(forKey: Self.appleRemindersListIDKey)
     }
 
     private static func loadRadius(forKey key: String, fallback: Double) -> Double {

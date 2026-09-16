@@ -23,7 +23,11 @@ final class NotchPanelController: NSObject {
     }
 
     private let editorInteractionState = EditorInteractionState()
-    private lazy var settingsWindowController = SettingsWindowController(settingsStore: settingsStore)
+    private lazy var reminderStore = ReminderStore(settingsStore: settingsStore)
+    private lazy var settingsWindowController = SettingsWindowController(
+        settingsStore: settingsStore,
+        reminderStore: reminderStore
+    )
     private let displayPanelRegistry = DisplayPanelRegistry()
     private var fileDragTrackingState = FileDragTrackingState()
     /// One drawer panel per display, keyed by screen uniqueID. A window that
@@ -192,9 +196,15 @@ final class NotchPanelController: NSObject {
         // has moved on or ended.
         if isFileDragInProgress() {
             isRevealedForFileDrag = true
+            // G3: the file shelf lives on the notes surface. A file drag that
+            // opens the drawer therefore forces the notes surface for this
+            // session only — the persisted mode is untouched, so a user who
+            // left the drawer on reminders gets it back when the drag ends.
+            workspaceState.fileDragForcesNotesMode = true
             hotPanelForScreen(currentScreen)?.orderFrontRegardless()
         } else {
             isRevealedForFileDrag = false
+            workspaceState.fileDragForcesNotesMode = false
             hotPanelForScreen(currentScreen)?.orderOut(nil)
         }
         setDrawerExpanded(true, animated: animated, for: currentScreen?.uniqueID ?? "unknown-screen")
@@ -317,6 +327,7 @@ final class NotchPanelController: NSObject {
             settingsStore: settingsStore,
             imageStore: imageStore,
             fileShelfStore: fileShelfStore,
+            reminderStore: reminderStore,
             workspaceState: workspaceState,
             drawerState: drawerState,
             editorInteractionState: editorInteractionState,
@@ -468,6 +479,12 @@ final class NotchPanelController: NSObject {
             // Reveal-only, for the same reason as the SwiftUI callback: the
             // show/hide decision must not flap with the cursor position.
             FileDragDiagnostics.log("drawer drag entered -> reveal shelf")
+            // G3: an external file drag also arrives this way (the compact
+            // panel's drag callbacks), so the session override is applied here
+            // too rather than only in expand(animated:).
+            if self.isFileDragInProgress() {
+                self.workspaceState.fileDragForcesNotesMode = true
+            }
             withAnimation(.spring(response: 0.30, dampingFraction: 0.84)) {
                 self.workspaceState.isShelfDropTargeted = true
             }
@@ -478,6 +495,15 @@ final class NotchPanelController: NSObject {
     }
 
     private func receiveDroppedFiles(_ urls: [URL]) -> Bool {
+        // G5: the drawer's own file-drop target only exists on the notes
+        // surface. During an external drag the session override has already
+        // forced that surface, so this only rejects drops made while the user
+        // is deliberately looking at reminders.
+        guard !workspaceState.showsReminders(persistedMode: settingsStore.drawerMode) else {
+            FileDragDiagnostics.log("panel receiveDroppedFiles rejected: reminders surface")
+            return false
+        }
+
         let accepted = fileShelfStore.acceptDrop(urls)
         FileDragDiagnostics.log(
             "panel receiveDroppedFiles accepted=\(accepted) items=\(fileShelfStore.items.count)"
@@ -654,6 +680,13 @@ final class NotchPanelController: NSObject {
         guard !workspaceState.isPreviewingShelfItem else { return }
 
         let isFileDrag = settingsStore.isFileShelfEnabled && isFileDragInProgress()
+        if isFileDrag, workspaceState.showsReminders(persistedMode: settingsStore.drawerMode) {
+            // G4: revealing the shelf over a reminders surface would put it
+            // above a panel that refuses drops. Force the notes surface for
+            // this session instead of suppressing the reveal, so the drop the
+            // user is already performing still lands.
+            workspaceState.fileDragForcesNotesMode = true
+        }
         let mouseLocation = NSEvent.mouseLocation
         let isOverShelfStrip = activeDrawerPanel.map {
             shelfRevealStrip(for: $0.frame).contains(mouseLocation)
@@ -718,6 +751,10 @@ final class NotchPanelController: NSObject {
     private func finishFileDragRevealIfNeeded() {
         guard isRevealedForFileDrag else { return }
         isRevealedForFileDrag = false
+        // G3: the drag is over, so the session override goes away and the
+        // drawer returns to the user's persisted mode — including when the
+        // drag was cancelled rather than dropped.
+        workspaceState.fileDragForcesNotesMode = false
         guard isExpanded else { return }
         FileDragDiagnostics.log("file-drag reveal finished: compact panel stands down")
         hotPanelForScreen(drawerScreen)?.orderOut(nil)

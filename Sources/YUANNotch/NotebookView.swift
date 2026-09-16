@@ -6,11 +6,18 @@ struct NotebookView: View {
     @ObservedObject var settingsStore: AppSettingsStore
     let imageStore: LocalImageStore
     @ObservedObject var fileShelfStore: FileShelfStore
+    @ObservedObject var reminderStore: ReminderStore
     @ObservedObject var workspaceState: NotebookWorkspaceState
     @ObservedObject var drawerState: DrawerState
     @ObservedObject var editorInteractionState: EditorInteractionState
     let layout: NotchLayout
     let onOpenSettings: () -> Void
+
+    /// The drawer's effective mode. Precedence lives in
+    /// `NotebookWorkspaceState.showsReminders(persistedMode:)`.
+    private var isRemindersMode: Bool {
+        workspaceState.showsReminders(persistedMode: settingsStore.drawerMode)
+    }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -39,6 +46,12 @@ struct NotebookView: View {
                 """
             )
             guard settingsStore.isFileShelfEnabled, !workspaceState.isDraggingShelfItem else {
+                workspaceState.isShelfDropTargeted = false
+                return false
+            }
+            // G1: the shelf only exists on the notes surface, so a drop while
+            // the drawer shows reminders is refused rather than swallowed.
+            guard !isRemindersMode else {
                 workspaceState.isShelfDropTargeted = false
                 return false
             }
@@ -105,16 +118,34 @@ struct NotebookView: View {
         ZStack(alignment: .topTrailing) {
             VStack(spacing: 12) {
                 HStack(alignment: .center, spacing: 10) {
-                    TabPagerControl(store: store, editorInteractionState: editorInteractionState)
-
-                    Spacer()
-
-                    Button(action: store.clear) {
-                        Image(systemName: "trash")
-                            .frame(width: 28, height: 28)
+                    // G7: the tab pager belongs to the notes surface. Hiding it
+                    // in reminders mode is what keeps the toolbar from
+                    // overflowing on a narrow drawer once the mode toggle is
+                    // added.
+                    if !isRemindersMode {
+                        TabPagerControl(store: store, editorInteractionState: editorInteractionState)
                     }
-                    .buttonStyle(DarkIconButtonStyle())
-                    .help("Clear")
+
+                    Spacer(minLength: 0)
+
+                    DrawerModeToggle(
+                        mode: isRemindersMode ? .reminders : .notes,
+                        showsLabels: layout.expandedSize.width >= 430
+                    ) { mode in
+                        workspaceState.fileDragForcesNotesMode = false
+                        settingsStore.drawerMode = mode
+                    }
+
+                    // G6: "Clear" means clear the note, so it has no meaning
+                    // while reminders are showing.
+                    if !isRemindersMode {
+                        Button(action: store.clear) {
+                            Image(systemName: "trash")
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(DarkIconButtonStyle())
+                        .help("Clear")
+                    }
 
                     Button(action: onOpenSettings) {
                         Image(systemName: "gearshape")
@@ -126,20 +157,30 @@ struct NotebookView: View {
                 .frame(height: toolbarHeight, alignment: .center)
 
                 VStack(spacing: shelfSpacing) {
-                    MarkdownEditorPanel(
-                        store: store,
-                        imageStore: imageStore,
-                        editorInteractionState: editorInteractionState,
-                        isFileShelfToggleVisible: settingsStore.isFileShelfEnabled
-                            && !fileShelfStore.items.isEmpty,
-                        isFileShelfCollapsed: workspaceState.isFileShelfCollapsed,
-                        onToggleFileShelf: {
-                            withAnimation(shelfAnimation) {
-                                workspaceState.isFileShelfCollapsed.toggle()
-                            }
-                        },
-                        size: editorSize
-                    )
+                    Group {
+                        if isRemindersMode {
+                            RemindersPanelView(
+                                store: reminderStore,
+                                size: editorSize,
+                                onOpenSettings: onOpenSettings
+                            )
+                        } else {
+                            MarkdownEditorPanel(
+                                store: store,
+                                imageStore: imageStore,
+                                editorInteractionState: editorInteractionState,
+                                isFileShelfToggleVisible: settingsStore.isFileShelfEnabled
+                                    && !fileShelfStore.items.isEmpty,
+                                isFileShelfCollapsed: workspaceState.isFileShelfCollapsed,
+                                onToggleFileShelf: {
+                                    withAnimation(shelfAnimation) {
+                                        workspaceState.isFileShelfCollapsed.toggle()
+                                    }
+                                },
+                                size: editorSize
+                            )
+                        }
+                    }
                     .frame(width: editorSize.width, height: editorSize.height)
                     .background(Color(red: 0.06, green: 0.06, blue: 0.07))
 
@@ -268,7 +309,9 @@ struct NotebookView: View {
     }
 
     private var isFileShelfVisible: Bool {
-        settingsStore.isFileShelfEnabled
+        // G2: the shelf belongs to the notes surface.
+        !isRemindersMode
+            && settingsStore.isFileShelfEnabled
             && (
                 workspaceState.isShelfDropTargeted
                     || (!workspaceState.isFileShelfCollapsed && !fileShelfStore.items.isEmpty)
@@ -321,6 +364,51 @@ struct NotebookView: View {
 
     private func interpolate(from start: CGFloat, to end: CGFloat, progress: CGFloat) -> CGFloat {
         start + (end - start) * min(max(progress, 0), 1)
+    }
+}
+
+/// Two-segment switch between the notes surface and the reminders surface.
+///
+/// Labels collapse to icons on a narrow drawer: at the 360pt minimum width the
+/// toolbar also carries the tab pager, the settings button, and (in notes mode)
+/// "Clear", so spelled-out segments would not fit.
+private struct DrawerModeToggle: View {
+    let mode: DrawerMode
+    let showsLabels: Bool
+    let onSelect: (DrawerMode) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(DrawerMode.allCases) { candidate in
+                Button {
+                    onSelect(candidate)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: candidate.systemImage)
+                            .font(.system(size: 10, weight: .semibold))
+                        if showsLabels {
+                            Text(candidate.title)
+                                .font(.system(size: 11, weight: candidate == mode ? .semibold : .regular))
+                        }
+                    }
+                    .foregroundStyle(.white.opacity(candidate == mode ? 0.88 : 0.48))
+                    .padding(.horizontal, showsLabels ? 7 : 6)
+                    .frame(height: 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(.white.opacity(candidate == mode ? 0.1 : 0))
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(candidate == .notes ? "Show notes" : "Show Apple Reminders")
+            }
+        }
+        .padding(2)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.white.opacity(0.045))
+        )
     }
 }
 
