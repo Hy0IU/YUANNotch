@@ -196,10 +196,12 @@ final class NotchPanelController: NSObject {
         // has moved on or ended.
         if isFileDragInProgress() {
             isRevealedForFileDrag = true
-            // G3: the file shelf lives on the notes surface. A file drag that
-            // opens the drawer therefore forces the notes surface for this
-            // session only — the persisted mode is untouched, so a user who
-            // left the drawer on reminders gets it back when the drag ends.
+            // G3: the file shelf lives on the notes surface, so a file drag
+            // that opens the drawer forces it. The override is what makes the
+            // drag land at all — a drop is rejected on the reminders surface —
+            // and it lasts only as long as the drag. If the drop succeeds the
+            // mode is then changed for real in `receiveDroppedFiles`; if the
+            // drag is cancelled, the user's own mode comes back untouched.
             workspaceState.fileDragForcesNotesMode = true
             hotPanelForScreen(currentScreen)?.orderFrontRegardless()
         } else {
@@ -509,6 +511,14 @@ final class NotchPanelController: NSObject {
             "panel receiveDroppedFiles accepted=\(accepted) items=\(fileShelfStore.items.count)"
         )
         guard settingsStore.isFileShelfEnabled, accepted else { return false }
+
+        // A drop that landed is the user saying which surface they are working
+        // on: they have just put a file into a shelf that only exists on the
+        // notes side. Without this the drag override would hand them back to
+        // reminders the instant the drag ended, which reads as the drawer
+        // forgetting what they just did.
+        workspaceState.commitLandedFileDrop(to: &settingsStore.drawerMode)
+
         // Reveal the shelf as drop feedback. Defer so AppKit can finish the
         // drop callback before the window order changes — replacing the
         // window that owns an active dragging destination is not allowed.
@@ -752,8 +762,9 @@ final class NotchPanelController: NSObject {
         guard isRevealedForFileDrag else { return }
         isRevealedForFileDrag = false
         // G3: the drag is over, so the session override goes away and the
-        // drawer returns to the user's persisted mode — including when the
-        // drag was cancelled rather than dropped.
+        // drawer shows the persisted mode. After a drop that landed that mode
+        // is already notes — `receiveDroppedFiles` changed it; after a
+        // cancelled drag it is whatever the user had chosen.
         workspaceState.fileDragForcesNotesMode = false
         guard isExpanded else { return }
         FileDragDiagnostics.log("file-drag reveal finished: compact panel stands down")

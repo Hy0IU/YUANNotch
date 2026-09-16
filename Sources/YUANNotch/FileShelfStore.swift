@@ -10,11 +10,15 @@ final class NotebookWorkspaceState: ObservableObject {
     /// Set while an external file drag is in progress.
     ///
     /// The drawer has to show the notes surface then — the file shelf lives
-    /// there — but `AppSettingsStore.drawerMode` writes through to
-    /// `UserDefaults` on every assignment, so switching modes for the duration
-    /// of a drag must not go through it. This is the session-scoped override:
-    /// the user's chosen mode comes back the moment the drag ends, including
-    /// when the drag is cancelled.
+    /// there, and a drop is rejected on the reminders surface — but
+    /// `AppSettingsStore.drawerMode` writes through to `UserDefaults` on every
+    /// assignment, so borrowing the surface for the duration of a drag must not
+    /// go through it. This is that session-scoped borrow: a drag that is
+    /// cancelled leaves the user's chosen mode exactly as it was.
+    ///
+    /// A drag that *lands* is different, and is handled where the drop is
+    /// accepted rather than here: the user has just used the notes side, so the
+    /// mode is changed for real at that point.
     @Published var fileDragForcesNotesMode = false
 
     /// Whether the drawer is showing the reminders surface.
@@ -26,6 +30,22 @@ final class NotebookWorkspaceState: ObservableObject {
     /// conjunction (which is how they silently drift apart).
     func showsReminders(persistedMode: DrawerMode) -> Bool {
         persistedMode == .reminders && !fileDragForcesNotesMode
+    }
+
+    /// Called when a file actually lands in the shelf.
+    ///
+    /// A landed drop tells us which side the user is working on — the shelf only
+    /// exists on the notes surface — so the borrowed surface becomes the chosen
+    /// one. That is why this clears the drag override *and* moves the persisted
+    /// mode: leaving the override set while nothing borrows it would just be a
+    /// persisted mode with worse bookkeeping.
+    ///
+    /// Defined once because both drop paths have to express it — the panel's
+    /// host view and the notebook's SwiftUI target — and a rule written twice is
+    /// a rule that drifts.
+    func commitLandedFileDrop(to drawerMode: inout DrawerMode) {
+        fileDragForcesNotesMode = false
+        drawerMode = .notes
     }
     /// IDs of the shelf items being dragged right now (for dimming the
     /// dragged chips and excluding them from reorder hit-testing).

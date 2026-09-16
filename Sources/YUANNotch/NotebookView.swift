@@ -327,6 +327,9 @@ struct NotebookView: View {
         FileDragDiagnostics.log(
             "notebook receiveDroppedFiles accepted=\(didAcceptDrop) items=\(fileShelfStore.items.count)"
         )
+        if didAcceptDrop {
+            workspaceState.commitLandedFileDrop(to: &settingsStore.drawerMode)
+        }
         workspaceState.isShelfDropTargeted = false
         return didAcceptDrop
     }
