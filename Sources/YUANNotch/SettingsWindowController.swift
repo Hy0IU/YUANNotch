@@ -209,18 +209,20 @@ struct SettingsView: View {
 private struct AppearanceSettingsView: View {
     @ObservedObject var settingsStore: AppSettingsStore
 
+    /// Both radii share a range so the two sliders can be read against each
+    /// other, and so the fields beside them can be held to the same limits.
+    static let cornerRadiusRange: ClosedRange<Double> = 0...50
+
     var body: some View {
         Form {
             Section {
                 CornerRadiusSlider(
                     title: "Top corners:",
-                    value: $settingsStore.expandedTopCornerRadius,
-                    range: 0...24
+                    value: $settingsStore.expandedTopCornerRadius
                 )
                 CornerRadiusSlider(
                     title: "Bottom corners:",
-                    value: $settingsStore.expandedBottomCornerRadius,
-                    range: 0...32
+                    value: $settingsStore.expandedBottomCornerRadius
                 )
             } header: {
                 Text("Corner Radius")
@@ -235,19 +237,82 @@ private struct AppearanceSettingsView: View {
 private struct CornerRadiusSlider: View {
     let title: String
     @Binding var value: Double
-    let range: ClosedRange<Double>
+
+    /// One tick every this many points.
+    ///
+    /// The range is 50 wide, so `step: 1` would put 51 ticks on a 220pt track
+    /// and read as a ruler rather than a slider. Five is the coarsest spacing
+    /// that still leaves the track aimable; any value the ticks skip is still a
+    /// perfectly good radius and can be typed into the field instead.
+    private static let tickSpacing: Double = 5
 
     var body: some View {
         LabeledContent(title) {
             HStack(spacing: 10) {
-                Slider(value: $value, in: range, step: 1)
-                    .frame(maxWidth: 220)
-                Text("\(Int(value)) pt")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, alignment: .trailing)
+                Slider(
+                    value: $value,
+                    in: AppearanceSettingsView.cornerRadiusRange,
+                    step: Self.tickSpacing
+                )
+                .frame(maxWidth: 220)
+                CornerRadiusField(value: $value)
             }
         }
+    }
+}
+
+/// The editable value beside a radius slider.
+///
+/// It exists because the ticks are a visual rhythm, not the set of legal values:
+/// typing the number beats dragging until it happens to land on it.
+private struct CornerRadiusField: View {
+    @Binding var value: Double
+
+    @State private var text = ""
+    @FocusState private var isEditing: Bool
+
+    var body: some View {
+        HStack(spacing: 3) {
+            TextField("", text: $text)
+                .multilineTextAlignment(.trailing)
+                .monospacedDigit()
+                .frame(width: 48)
+                .focused($isEditing)
+                .onSubmit(commit)
+                .onChange(of: isEditing) { _, editing in
+                    if editing {
+                        // Start from the committed value rather than from
+                        // whatever the field happened to be showing.
+                        text = Self.format(value)
+                    } else {
+                        commit()
+                    }
+                }
+                .onChange(of: value) { _, newValue in
+                    // Dragging has to keep the field in step — but not while
+                    // the user is midway through typing into it.
+                    guard !isEditing else { return }
+                    text = Self.format(newValue)
+                }
+                .onAppear { text = Self.format(value) }
+
+            Text("pt")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func commit() {
+        let range = AppearanceSettingsView.cornerRadiusRange
+        guard let entered = Double(text.trimmingCharacters(in: .whitespaces)) else {
+            text = Self.format(value)
+            return
+        }
+        value = min(max(entered.rounded(), range.lowerBound), range.upperBound)
+        text = Self.format(value)
+    }
+
+    private static func format(_ value: Double) -> String {
+        String(Int(value.rounded()))
     }
 }
 
