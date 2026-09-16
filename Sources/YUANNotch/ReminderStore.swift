@@ -254,14 +254,17 @@ final class ReminderStore: ObservableObject {
     private func performRefresh(reloadLists: Bool) async {
         authorization = service.authorizationStatus()
 
+        // The same condition that decides whether there is anything to read also
+        // decides whether the background tasks should exist. Driving both from
+        // one place is what keeps "off" from leaving work behind.
+        updateBackgroundWork()
+
         guard isEnabled, authorization.canRead else {
             lists = []
             snapshot = []
             rebuildItems()
             return
         }
-
-        startObservingChangesIfNeeded()
 
         if reloadLists || lists.isEmpty {
             lists = await service.availableLists()
@@ -278,40 +281,58 @@ final class ReminderStore: ObservableObject {
     /// Reports the panel's visible lifetime.
     ///
     /// The view says whether it is on screen; the store owns the schedule, the
-    /// interval and the trigger set. Nothing about refresh policy lives in the
-    /// view layer.
+    /// interval, the trigger set **and the lifetime of the tasks behind them**.
+    /// Nothing about refresh policy lives in the view layer.
     func setPanelVisible(_ isVisible: Bool) {
         guard isVisible != isPanelVisible else { return }
         isPanelVisible = isVisible
 
-        panelVisibilityTask?.cancel()
-        panelVisibilityTask = nil
+        if isVisible {
+            requestRefresh(reloadLists: lists.isEmpty)
+        }
+        updateBackgroundWork()
+    }
 
-        guard isVisible else { return }
+    // MARK: - Background work
 
-        requestRefresh(reloadLists: lists.isEmpty)
+    /// The only place that starts or stops the integration's background work.
+    ///
+    /// Two long-lived tasks exist — the store-change subscription and the
+    /// visible-lifetime tick — and each must exist exactly while it has a
+    /// reason to: the subscription while the integration is live, the tick
+    /// while it is live *and* the panel is on screen.
+    ///
+    /// Previously these were started from two different places and neither was
+    /// stopped on disable, so turning the integration off left the subscription
+    /// registered and kept the tick running for as long as the panel stayed
+    /// open. Owning both here makes "off" symmetric with "on".
+    private func updateBackgroundWork() {
+        guard isEnabled, authorization.canRead else {
+            changeObservationTask?.cancel()
+            changeObservationTask = nil
+            stopVisibleTick()
+            return
+        }
 
-        panelVisibilityTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: Self.visiblePollInterval)
-                } catch {
-                    return
-                }
-                guard !Task.isCancelled else { return }
-                self?.requestRefresh()
-            }
+        startObservingChangesIfNeeded()
+
+        if isPanelVisible {
+            startVisibleTickIfNeeded()
+        } else {
+            stopVisibleTick()
         }
     }
 
-    // MARK: - Change observation
-
-    /// Subscribes to the store's change stream, once per store lifetime.
+    /// Subscribes to the store's change stream while the integration is live.
     ///
     /// The service is what debounces — it emits at most once per 500 ms window —
     /// so a burst (iCloud landing a batch, or our own write echoing back)
-    /// collapses before it even reaches this side, and the pipeline collapses
-    /// again on top of that.
+    /// collapses before it reaches this side, and the pipeline collapses again
+    /// on top of that.
+    ///
+    /// Cancelling the consuming task ends the stream's iteration, which fires
+    /// the service's `onTermination` and drops its continuation; a later enable
+    /// therefore subscribes with a fresh stream rather than piling one up.
     private func startObservingChangesIfNeeded() {
         guard changeObservationTask == nil else { return }
 
@@ -328,6 +349,33 @@ final class ReminderStore: ObservableObject {
         }
     }
 
+    /// Re-reads the list on a timer while the panel is on screen.
+    ///
+    /// `.EKEventStoreChanged` is not a dependable clock: measured 5.29 s for a
+    /// same-process write, and a burst of four writes produced no notification
+    /// at all within 10 s. The notification is the fast path when it fires; this
+    /// tick is what actually bounds staleness.
+    private func startVisibleTickIfNeeded() {
+        guard panelVisibilityTask == nil else { return }
+
+        panelVisibilityTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: Self.visiblePollInterval)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self?.requestRefresh()
+            }
+        }
+    }
+
+    private func stopVisibleTick() {
+        panelVisibilityTask?.cancel()
+        panelVisibilityTask = nil
+    }
+
     func setEnabled(_ enabled: Bool) async {
         settingsStore.isAppleRemindersSyncEnabled = enabled
 
@@ -337,6 +385,9 @@ final class ReminderStore: ObservableObject {
             placeholders = []
             rebuildItems()
             lastError = nil
+            // Disabling does not go through the refresh pipeline, so the
+            // background work is stopped explicitly here.
+            updateBackgroundWork()
             return
         }
 
