@@ -97,8 +97,18 @@ final class ReminderStore: ObservableObject {
     @Published private(set) var authorization: RemindersAuthorization = .notDetermined
     @Published private(set) var lists: [ReminderList] = []
     @Published private(set) var items: [ReminderPanelItem] = []
+    /// True while the integration is doing work the panel should show.
+    ///
+    /// Held for a minimum period once raised (see `minimumBusyDuration`), which
+    /// is why this is stored state rather than something the view computes from
+    /// its sources.
     @Published private(set) var isBusy = false
-    @Published private(set) var isLoadingSnapshot = false
+    /// Operations that did not land and are still waiting in the retry queue.
+    ///
+    /// This is the failure count, and it is the opposite of `inFlightCount`.
+    /// They used to share one number, so a create reported itself as "not
+    /// written" for the milliseconds before it landed.
+    @Published private(set) var failedWriteCount = 0
     @Published private(set) var lastError: String?
     /// Non-nil while a deletion is inside its undo window.
     @Published private(set) var pendingDeletionTitle: String?
@@ -115,8 +125,72 @@ final class ReminderStore: ObservableObject {
     private var suppressedIDs: Set<String> = []
     private var queuedOperations: [PendingOperation] = []
 
+    /// A source of `isBusy` with neither a row nor a snapshot behind it, so it
+    /// is tracked on its own rather than inferred.
+    private var isRequestingAccess = false
+    /// Raised by a refresh the user just caused, and cleared when the pass it
+    /// asked for ends. Reading the list is not itself a reason to show
+    /// progress — the five-second tick reads it too.
+    private var userRefreshPending = false
+    /// When `isBusy` was last raised, for `minimumBusyDuration`.
+    private var busyBeganAt: Date?
+    private var busyReleaseTask: Task<Void, Never>?
+
     private var deletionTask: Task<Void, Never>?
     private var deferredDeletion: (remoteID: String, externalID: String?, listID: String)?
+
+    // MARK: - Activity indication
+
+    /// How long `isBusy` stays raised once it has been.
+    ///
+    /// A create lands in tens of milliseconds, so without a floor the spinner
+    /// would blink — which reads as a glitch, not as progress. The floor is
+    /// also what makes a single turn of the glyph enough: it guarantees the
+    /// turn can be seen.
+    private static let minimumBusyDuration: TimeInterval = 0.4
+
+    /// Decides whether the integration is busy, from all of its sources.
+    ///
+    /// One place decides, so the panel never has to combine an in-flight write,
+    /// a user-caused refresh and an access request on its own — and so the
+    /// minimum duration applies to the union rather than to each source
+    /// separately.
+    private func updateBusyState() {
+        let wantsBusy = userRefreshPending
+            || inFlightCount > 0
+            || isRequestingAccess
+
+        if wantsBusy {
+            busyReleaseTask?.cancel()
+            busyReleaseTask = nil
+            if !isBusy {
+                isBusy = true
+                busyBeganAt = Date()
+            }
+            return
+        }
+
+        guard isBusy else { return }
+
+        busyReleaseTask?.cancel()
+        busyReleaseTask = nil
+
+        let held = Date().timeIntervalSince(busyBeganAt ?? .distantPast)
+        let remaining = Self.minimumBusyDuration - held
+
+        guard remaining > 0 else {
+            isBusy = false
+            busyBeganAt = nil
+            return
+        }
+
+        busyReleaseTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(remaining))
+            guard !Task.isCancelled else { return }
+            self?.isBusy = false
+            self?.busyBeganAt = nil
+        }
+    }
 
     // MARK: - Refresh pipeline
 
@@ -159,6 +233,7 @@ final class ReminderStore: ObservableObject {
         self.queueStore = queueStore
         authorization = service.authorizationStatus()
         queuedOperations = queueStore.load()
+        failedWriteCount = queuedOperations.count
     }
 
     // MARK: - Derived state
@@ -172,10 +247,9 @@ final class ReminderStore: ObservableObject {
 
     var selectedListIsLocalOnly: Bool { selectedList?.isLocalOnly ?? false }
 
-    var pendingWriteCount: Int {
-        let unlanded = queuedOperations.count
-        let placeholders = items.filter { $0.syncState != .idle }.count
-        return max(unlanded, placeholders)
+    /// Rows whose write has not landed yet — work in progress, not failure.
+    var inFlightCount: Int {
+        items.filter { $0.syncState == .writing }.count
     }
 
     /// Items grouped for display; empty groups are dropped.
@@ -230,7 +304,19 @@ final class ReminderStore: ObservableObject {
     /// Requests that arrive while a pass is in flight collapse into a single
     /// follow-up pass, which is what keeps a burst of notifications from
     /// flickering the list. Callers never sequence the refresh themselves.
-    func requestRefresh(reloadLists: Bool = false) {
+    ///
+    /// `showingProgress` is opt-in and belongs only to triggers the user just
+    /// caused — opening the panel, pressing reload, switching list. The
+    /// background ones (the visible tick, a store-change notification) must not
+    /// claim the glyph: they fire on their own schedule, so it would turn every
+    /// five seconds regardless of anything the user did, which is exactly the
+    /// loss of meaning that made the text it replaced useless.
+    func requestRefresh(reloadLists: Bool = false, showingProgress: Bool = false) {
+        if showingProgress {
+            userRefreshPending = true
+            updateBusyState()
+        }
+
         needsRefresh = true
         needsListReload = needsListReload || reloadLists
 
@@ -253,6 +339,15 @@ final class ReminderStore: ObservableObject {
 
     private func performRefresh(reloadLists: Bool) async {
         authorization = service.authorizationStatus()
+
+        // Whatever the user asked for is answered by this pass, so the
+        // user-caused part of the busy state ends with it — including on the
+        // early return below, or the glyph would keep turning with nothing
+        // behind it.
+        defer {
+            userRefreshPending = false
+            updateBusyState()
+        }
 
         // The same condition that decides whether there is anything to read also
         // decides whether the background tasks should exist. Driving both from
@@ -288,7 +383,9 @@ final class ReminderStore: ObservableObject {
         isPanelVisible = isVisible
 
         if isVisible {
-            requestRefresh(reloadLists: lists.isEmpty)
+            // Opening the panel is a user action, so the read it triggers is
+            // acknowledged. The tick that follows is not.
+            requestRefresh(reloadLists: lists.isEmpty, showingProgress: true)
         }
         updateBackgroundWork()
     }
@@ -394,7 +491,8 @@ final class ReminderStore: ObservableObject {
         if authorization == .notDetermined {
             await requestAccess()
         } else {
-            requestRefresh(reloadLists: true)
+            // Enabling is a user action; its first read is acknowledged.
+            requestRefresh(reloadLists: true, showingProgress: true)
         }
     }
 
@@ -405,7 +503,8 @@ final class ReminderStore: ObservableObject {
         // filtered per list rather than cleared here.
         snapshot = []
         rebuildItems()
-        requestRefresh()
+        // Switching list is a user action, so the read is acknowledged.
+        requestRefresh(showingProgress: true)
     }
 
     // MARK: - Writes
@@ -479,11 +578,10 @@ final class ReminderStore: ObservableObject {
             // A placeholder has no store-side existence: drop it and its queued
             // create outright.
             placeholders.removeAll { $0.item.localID == localID }
-            queuedOperations.removeAll { operation in
-                if case .create(let id, _, _, _) = operation { return id == localID }
-                return false
-            }
-            queueStore.save(queuedOperations)
+            setQueue(queuedOperations.filter { operation in
+                guard case .create(let id, _, _, _) = operation else { return true }
+                return id != localID
+            })
             rebuildItems()
             return
         }
@@ -553,8 +651,12 @@ final class ReminderStore: ObservableObject {
     /// `.notDetermined`. Both the settings window and the panel go through
     /// here rather than calling the service directly.
     func requestAccess() async {
-        isBusy = true
-        defer { isBusy = false }
+        isRequestingAccess = true
+        updateBusyState()
+        defer {
+            isRequestingAccess = false
+            updateBusyState()
+        }
 
         let didForeground = foregroundIfNeeded()
         defer { restoreAccessoryIfNeeded(didForeground) }
@@ -567,7 +669,9 @@ final class ReminderStore: ObservableObject {
         }
 
         guard authorization.canRead else { return }
-        requestRefresh(reloadLists: true)
+        // The access request has ended by now, so the first read after it is
+        // what keeps the glyph turning across the handover.
+        requestRefresh(reloadLists: true, showingProgress: true)
     }
 
     func openPrivacySettings() {
@@ -596,9 +700,6 @@ final class ReminderStore: ObservableObject {
             rebuildItems()
             return
         }
-
-        isLoadingSnapshot = true
-        defer { isLoadingSnapshot = false }
 
         do {
             let fetched = try await service.snapshot(in: list.id)
@@ -634,6 +735,9 @@ final class ReminderStore: ObservableObject {
             .map(\.item)
 
         items = remote + visiblePlaceholders
+        // `inFlightCount` reads `items`, so this is where a write starting or
+        // landing changes the answer.
+        updateBusyState()
     }
 
     private func updatePlaceholder(_ localID: UUID, syncState: ReminderSyncState) {
@@ -650,9 +754,18 @@ final class ReminderStore: ObservableObject {
 
     // MARK: - Queue
 
+    /// The queue's only mutation point.
+    ///
+    /// The array, its persisted form and the failure count the panel shows must
+    /// not be able to disagree, so nothing assigns `queuedOperations` directly.
+    private func setQueue(_ operations: [PendingOperation]) {
+        queuedOperations = operations
+        queueStore.save(operations)
+        failedWriteCount = operations.count
+    }
+
     private func enqueue(_ operation: PendingOperation) {
-        queuedOperations.append(operation)
-        queueStore.save(queuedOperations)
+        setQueue(queuedOperations + [operation])
     }
 
     /// Serial, in insertion order. Every mutation resolves the reminder first:
@@ -672,8 +785,7 @@ final class ReminderStore: ObservableObject {
         }
 
         if remaining.count != queuedOperations.count {
-            queuedOperations = remaining
-            queueStore.save(remaining)
+            setQueue(remaining)
         }
     }
 

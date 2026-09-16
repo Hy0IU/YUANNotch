@@ -57,22 +57,16 @@ struct RemindersPanelView: View {
 
             Spacer(minLength: 8)
 
-            if store.isLoadingSnapshot {
-                Text("Loading…")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.42))
-            } else if store.pendingWriteCount > 0 {
-                Text("\(store.pendingWriteCount) not written")
+            if store.failedWriteCount > 0 {
+                Text("\(store.failedWriteCount) not written")
                     .font(.system(size: 11))
                     .foregroundStyle(.orange.opacity(0.85))
             }
 
             Button {
-                store.requestRefresh(reloadLists: true)
+                store.requestRefresh(reloadLists: true, showingProgress: true)
             } label: {
-                Image(systemName: "arrow.clockwise")
-                    .frame(width: 26, height: 24)
-                    .contentShape(Rectangle())
+                RefreshGlyph(isSpinning: store.isBusy)
             }
             .buttonStyle(MarkdownToolbarButtonStyle())
             .help("Reload from Reminders")
@@ -313,10 +307,6 @@ struct RemindersPanelView: View {
                 Text("not written")
                     .font(.system(size: 10))
                     .foregroundStyle(.orange.opacity(0.85))
-            } else if item.syncState == .writing {
-                Text("writing")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.4))
             }
 
             Button {
@@ -486,7 +476,7 @@ struct RemindersPanelView: View {
             ]
         case .fullAccess:
             return [
-                ("Reload", { store.requestRefresh(reloadLists: true) }),
+                ("Reload", { store.requestRefresh(reloadLists: true, showingProgress: true) }),
                 ("Open Reminders", { store.openRemindersApp() }),
             ]
         }
@@ -512,5 +502,38 @@ struct RemindersPanelView: View {
         Rectangle()
             .fill(.white.opacity(0.055))
             .frame(height: 0.5)
+    }
+}
+
+/// The reload button's glyph, which doubles as the panel's activity indicator.
+///
+/// `.symbolEffect(.rotate)` would be the tidy way to do this, but it needs
+/// macOS 15 and this package targets 14. A repeating SwiftUI animation is the
+/// replacement, and it has to be re-armed by hand on every flip, so this turns
+/// exactly once per raise instead: `ReminderStore.minimumBusyDuration` holds
+/// `isSpinning` long enough for one full turn to be legible, and a slower
+/// operation simply finishes its turn early.
+///
+/// Progress is deliberately not proportional to how long the work takes. Being
+/// proportional is what made the text it replaced flicker.
+private struct RefreshGlyph: View {
+    let isSpinning: Bool
+
+    private static let turnDuration: TimeInterval = 0.45
+
+    /// Counts revolutions rather than tracking an angle, so that every raise is
+    /// a full turn and an interrupted one carries on from where it stopped
+    /// instead of snapping back to the top.
+    @State private var turns = 0
+
+    var body: some View {
+        Image(systemName: "arrow.clockwise")
+            .rotationEffect(.degrees(Double(turns) * 360))
+            .animation(.linear(duration: Self.turnDuration), value: turns)
+            .frame(width: 26, height: 24)
+            .contentShape(Rectangle())
+            .onChange(of: isSpinning) { _, spinning in
+                if spinning { turns += 1 }
+            }
     }
 }
