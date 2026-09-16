@@ -288,7 +288,7 @@ struct NotebookView: View {
                     - toolbarHeight
                     - editorSpacing
                     - (isFileShelfVisible ? fileShelfHeight + shelfSpacing : 0),
-                160
+                DrawerMetrics.minimumEditorHeight
             )
         )
     }
@@ -304,9 +304,7 @@ struct NotebookView: View {
         ShelfMetrics.shelfHeight(forDrawerHeight: layout.expandedSize.height)
     }
 
-    private var shelfSpacing: CGFloat {
-        8
-    }
+    private var shelfSpacing: CGFloat { DrawerMetrics.shelfSpacing }
 
     private var isFileShelfVisible: Bool {
         // G2: the shelf belongs to the notes surface.
@@ -335,10 +333,9 @@ struct NotebookView: View {
     }
 
     private var toolbarTopPadding: CGFloat {
-        let attachedPadding = layout.compactSize.height + 6
-        return interpolate(
-            from: attachedPadding,
-            to: 34,
+        interpolate(
+            from: layout.compactSize.height + DrawerMetrics.attachedTopPaddingInset,
+            to: DrawerMetrics.detachedTopPadding,
             progress: drawerState.detachmentProgress
         )
     }
@@ -349,17 +346,11 @@ struct NotebookView: View {
         interpolate(from: 26, to: 18, progress: drawerState.detachmentProgress)
     }
 
-    private var contentBottomPadding: CGFloat {
-        18
-    }
+    private var contentBottomPadding: CGFloat { DrawerMetrics.contentBottomPadding }
 
-    private var toolbarHeight: CGFloat {
-        28
-    }
+    private var toolbarHeight: CGFloat { DrawerMetrics.toolbarHeight }
 
-    private var editorSpacing: CGFloat {
-        12
-    }
+    private var editorSpacing: CGFloat { DrawerMetrics.editorSpacing }
 
     private func interpolate(from start: CGFloat, to end: CGFloat) -> CGFloat {
         interpolate(from: start, to: end, progress: drawerState.revealProgress)

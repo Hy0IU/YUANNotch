@@ -227,26 +227,6 @@ private struct AppearanceSettingsView: View {
             } footer: {
                 Text("Corner radius of the expanded panel. Applies immediately.")
             }
-
-            Section {
-                LabeledContent("Size:") {
-                    HStack(spacing: 10) {
-                        if let size = settingsStore.customExpandedSize {
-                            Text("\(Int(size.width)) × \(Int(size.height))")
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
-                        Button("Reset to Default") {
-                            settingsStore.customExpandedSize = nil
-                        }
-                        .disabled(settingsStore.customExpandedSize == nil)
-                    }
-                }
-            } header: {
-                Text("Panel")
-            } footer: {
-                Text("Drag the bottom-right corner of the panel to resize it. The new size applies the next time the panel opens.")
-            }
         }
         .formStyle(.grouped)
     }

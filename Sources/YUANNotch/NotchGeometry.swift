@@ -30,12 +30,54 @@ enum ShelfMetrics {
     /// the shelf appearing underneath cannot move the region out from under
     /// the cursor.
     static let revealBandSlack: CGFloat = 44
-    /// Smallest drawer height that fits the toolbar, the editor's minimum
-    /// height and the shelf without overflowing the visible area.
-    static let minimumDrawerHeight: CGFloat = 340
 
     static func shelfHeight(forDrawerHeight height: CGFloat) -> CGFloat {
         min(max(height * heightRatio, minShelfHeight), maxShelfHeight)
+    }
+}
+
+/// The drawer's layout metrics, and the shortest drawer they add up to.
+///
+/// They live here rather than in the view because `minimumHeight` has to be
+/// *derived* from them. A minimum written down somewhere else drifts away from
+/// the parts it is supposed to fit the first time one of the parts changes —
+/// which is exactly how the old flat `340` ended up ~50pt taller than it needed
+/// to be.
+enum DrawerMetrics {
+    /// Inset the attached drawer leaves below the compact block.
+    static let attachedTopPaddingInset: CGFloat = 6
+    /// The compact block's height on a screen with a real notch. Used only to
+    /// bound `minimumHeight`: `NotchGeometry` clamps the block to 32...38, and
+    /// this takes the common value rather than the tall end — the four points
+    /// that buys are not worth raising the floor on every screen for.
+    static let referenceCompactHeight: CGFloat = 34
+    /// Top padding once the drawer has detached and may start at the very top.
+    static let detachedTopPadding: CGFloat = 34
+
+    /// Top padding while the drawer is still attached, on the reference screen.
+    static var attachedTopPadding: CGFloat {
+        referenceCompactHeight + attachedTopPaddingInset
+    }
+    static let toolbarHeight: CGFloat = 28
+    static let editorSpacing: CGFloat = 12
+    static let shelfSpacing: CGFloat = 8
+    static let contentBottomPadding: CGFloat = 18
+    /// Below this the editor is not worth opening.
+    static let minimumEditorHeight: CGFloat = 120
+
+    /// The shortest drawer that still fits the toolbar, a usable editor and the
+    /// shelf without clipping.
+    ///
+    /// Built from the attached top padding: the drawer can be resized while it
+    /// is still attached, so the clamp has to hold in that state.
+    static var minimumHeight: CGFloat {
+        attachedTopPadding
+            + toolbarHeight
+            + editorSpacing
+            + minimumEditorHeight
+            + shelfSpacing
+            + ShelfMetrics.minShelfHeight
+            + contentBottomPadding
     }
 }
 
@@ -120,7 +162,7 @@ enum NotchGeometry {
             // The lower bound keeps the toolbar, the editor's minimum height
             // and the shelf inside the visible drawer: below it the shelf
             // would render clipped under the bottom edge.
-            expandedHeight = min(max(custom.height, ShelfMetrics.minimumDrawerHeight), screenFrame.height - 84)
+            expandedHeight = min(max(custom.height, DrawerMetrics.minimumHeight), screenFrame.height - 84)
         } else {
             expandedWidth = defaultExpandedWidth
             expandedHeight = defaultExpandedHeight
