@@ -121,6 +121,10 @@ final class FileShelfStore: ObservableObject {
         guard !addedItems.isEmpty else { return 0 }
         items.append(contentsOf: addedItems)
         save()
+        // One sound per accepted drop, never one per file: a five-file drop is
+        // a single gesture. And nothing at all when every file was already
+        // staged — nothing happened, so there is nothing to confirm.
+        FileShelfSound.playDrop()
         return addedItems.count
     }
 
