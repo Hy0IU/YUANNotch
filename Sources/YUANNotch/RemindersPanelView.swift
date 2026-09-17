@@ -168,7 +168,12 @@ struct RemindersPanelView: View {
             case .none: chosenDay = nil
             case .today: chosenDay = today
             case .tomorrow: chosenDay = calendar.date(byAdding: .day, value: 1, to: today)
-            case .thisWeekend: chosenDay = Self.nextWeekday(Self.saturday, after: today, calendar: calendar)
+            case .thisWeekend:
+                // The weekend already under way counts: on a Saturday or
+                // Sunday "this weekend" is today, not the next one.
+                chosenDay = calendar.isDateInWeekend(today)
+                    ? today
+                    : Self.nextWeekday(Self.saturday, after: today, calendar: calendar)
             case .nextWeek: chosenDay = Self.nextWeekday(Self.monday, after: today, calendar: calendar)
             case .custom: chosenDay = calendar.startOfDay(for: customDate)
             }
@@ -199,9 +204,9 @@ struct RemindersPanelView: View {
         private static let monday = 2
         private static let saturday = 7
 
-        /// The next such weekday strictly after `day`: "this weekend" is the
-        /// coming Saturday, "next week" the coming Monday, and neither is ever
-        /// today.
+        /// The next such weekday strictly after `day`: "next week" is the
+        /// coming Monday and is never today. ("This weekend" no longer goes
+        /// through here — an under-way weekend is today, see `resolution`.)
         private static func nextWeekday(_ weekday: Int, after day: Date, calendar: Calendar) -> Date? {
             calendar.nextDate(
                 after: day,
@@ -504,10 +509,12 @@ struct RemindersPanelView: View {
     /// time, and either half can still be adjusted.
     private func applyRelative(minutes: Int) {
         let shortcut = DueSelection.relative(minutes: minutes, now: Date())
-        dueDateOption = shortcut.date
-        isTimeWheelShown = false
         setCustomTime(shortcut.customTime)
-        withAnimation(.easeOut(duration: 0.15)) { dueTimeOption = shortcut.time }
+        withAnimation(.easeOut(duration: 0.15)) {
+            dueDateOption = shortcut.date
+            dueTimeOption = shortcut.time
+            isTimeWheelShown = false
+        }
     }
 
     // MARK: - Custom date and time
