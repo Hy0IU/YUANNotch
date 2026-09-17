@@ -1,54 +1,159 @@
 # YUANNotch
 
-A native macOS note app that lives at the top edge of your screen. Move the cursor to the notch/menu-bar area and it unfolds into a dark Markdown notebook.
+YUANNotch 是一款原生 macOS 笔记应用，住在屏幕最顶端。鼠标移到刘海／菜单栏区域，或点击刘海区，它便展开成一个深色 Markdown 笔记本。
 
-Supports multiple displays — each screen gets its own trigger zone at the top-center.
+支持多显示器：每块屏幕都有自己的触发热区，互不干扰。
 
-## Quick Start
+<!-- 发布首个 Release 后，把下面这段移出注释即可启用下载入口。
+## 下载与安装
 
-Requires macOS 14+ and Xcode Command Line Tools.
+- [下载最新版](https://github.com/Hy0IU/YUANNotch/releases/latest)
+- 下载包要求 macOS 14 或更高版本
+
+1. 解压 `YUANNotch.zip`，把 `YUANNotch.app` 拖进「应用程序」。
+2. 首次启动时右键点击应用，选择「打开」。
+3. 若 macOS 仍然拦截，前往「系统设置 → 隐私与安全性」，点击「仍要打开」。
+-->
+
+## 功能亮点
+
+- **两个工作面。** 抽屉只有一层，可以在笔记与提醒事项之间切换；切换结果会被记住，下次打开还是那一面。
+- **笔记支持多标签页。** 每一页各自记住自己的光标位置，来回切换不会丢失输入点。
+- **Markdown 工具栏。** 粗体、斜体、删除线、行内代码、链接、引用、无序列表、有序列表、待办列表，九个命令一键插入。
+- **图片直接留在本机。** 粘贴或拖入图片即写入本地图片目录，并在正文里以引用形式内联，不依赖任何网络图床。
+- **文件架。** 把文件拖到刘海或展开的面板上暂存（最多 100 项），再拖到 Finder、其它应用或网页上传区。文件架只保存引用，不会移动或删除原文件，清空文件架也不动磁盘上的文件。
+- **Apple 提醒事项。** 提醒直接读写在 macOS 自己的提醒事项数据库里，按逾期／今天／明天／稍后／无到期日分组；勾选完成有动画，并且有 5 秒撤销窗口。
+- **触发方式可选。** Hover（鼠标停留在顶部边缘即展开，延迟可调）或 Click（点击刘海区展开）。
+- **外观可调。** 展开后上下圆角分别可调；面板右下角可拖拽改尺寸，尺寸会被记住；也可以把面板拖离刘海，当作浮动窗口使用。
+
+## 系统要求
+
+- macOS 14 或更高版本。
+- 从源码构建需要 **Swift 6.0 或更新版本的编译器**（Xcode 16 及更新的版本，或对应的 Command Line Tools）。`Package.swift` 声明的是 `swift-tools-version: 6.0`，更旧的工具链无法构建。
+- Apple 提醒事项集成需要该项权限，首次启用时由 macOS 询问。
+
+## 安装
+
+目前只提供从源码构建的方式（仓库里预留了一段下载说明，以注释形式写在文件顶部，发布首个 Release 后启用即可）。
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Hy0IU/YUANNotch.git
 cd YUANNotch
 bash ./Scripts/package-app.sh
 ```
 
-The script will build the release binary, bundle it into `YUANNotch.app`, and copy it to `/Applications`. Launch from Launchpad or Spotlight.
+脚本会做三件事：构建 release 二进制、打包成 `YUANNotch.app`（含图标与 `Info.plist`）、把它复制到 `/Applications`。之后从启动台或聚焦搜索打开即可。
 
-On first launch, right-click the app in Finder and choose **Open** to bypass Gatekeeper.
+应用是配件型程序（`LSUIElement`），只驻留在菜单栏，不显示 Dock 图标。
 
-## Exit
+本地构建出来的应用没有被下载隔离属性，不会被 Gatekeeper 拦截，构建完直接打开即可。将来分发的下载包是另一回事：临时签名、未经公证，首次启动需要右键「打开」，或在「系统设置 → 隐私与安全性」里点「仍要打开」。
 
-Quit from Activity Monitor, or run in Terminal:
+## 使用
+
+启动后，把鼠标移到屏幕顶部中央（或点击刘海区，取决于触发方式设置）。面板展开后：
+
+- 顶部左端是**标签页分页器**（仅笔记面）：`−` 删除当前页、圆点切换页面、`+` 新建一页。
+- 顶部右端是**笔记 / 提醒事项**切换、Clear（垃圾桶，仅笔记面，清空当前笔记）与设置齿轮。
+- 编辑区下方是 **Markdown 工具栏**；工具栏最右端的托盘按钮用于展开／收起文件架，文件架从面板底部滑入。该按钮只在文件架已启用且有内容时出现。
+- 提醒事项面：顶部是**列表选择菜单**，切换后读取该列表中未完成的提醒；下方输入行用于新建提醒，日期与时间各有一个菜单（含 `In 15 Minutes`、`In 1 Hour` 这样的快捷档）。点击行首圆圈即完成，行滑出后底部出现撤销条（5 秒内可反悔）；切换提醒列表时旧列表内容会压暗后替换，不会先闪出一片空白。
+- 把文件拖到面板上即放入文件架；把文件架里的条目拖出去即可交给其它应用。
+- 面板右下角拖动可改尺寸（会被记住）；面板底部中央往下拖可把它从刘海上摘下来，双击即可回到刘海。
+- 收起面板：把鼠标移开（Hover 模式），或用 ⌘W。
+
+菜单栏里那个笔记形状的图标提供以下命令：
+
+| 菜单项 | 快捷键 |
+| --- | --- |
+| 显示面板 | ⌘N |
+| 收起面板 | ⌘W |
+| 设置… | ⌘, |
+| 退出 YUANNotch | ⌘Q |
+
+这些是标准的应用菜单快捷键，**不是系统级全局热键**：应用是配件型程序，没有注册全局快捷键，因此这些组合键在面板获得键盘焦点时生效。
+
+需要退出（例如准备重新打包安装）时，用菜单栏图标的「退出」，或在终端执行 `killall YUANNotch`。
+
+## 设置
+
+设置窗口有五个页签：
+
+- **Appearance** — 展开面板的顶部圆角与底部圆角，范围 0–50 pt，滑块带刻度，也可以直接输入数字，立即生效。
+- **Trigger** — 打开方式（Hover / Click）与 Hover 延迟（0–2 秒，0 表示立即展开）。延迟只在 Hover 模式下可用。
+- **File Shelf** — 文件架总开关。
+- **Integrations** — Apple 提醒事项集成：总开关、访问权限状态、当前使用的提醒列表、以及最近一次错误。列表在这里只读展示；切换列表的唯一入口是抽屉的提醒面板，这样就不会有两个控件互相矛盾。
+- **About** — 版本号与仓库链接。
+
+## Apple 提醒事项
+
+YUANNotch 可以把你创建的提醒写入 macOS 自己的**提醒事项**数据库（透过 EventKit）。如果选中的是 iCloud 列表，Apple 会把它同步到 iPhone、iPad 和 Apple Watch——应用自身不做任何同步，也不连接任何服务器。
+
+在**设置 → Integrations** 中启用。macOS 只会询问一次权限；该对话框要求应用处于前台才会出现。
+
+有两点值得先说清楚：
+
+- **应用无法报告 iCloud 同步状态。** 写入提醒事项数据库在离线状态下也会成功，而提醒是否已经到达你的其它设备由 iCloud 决定，且无法读取。因此界面从不声称任何东西已「同步」。
+- **只存在于本机的列表不会到达其它设备。** 这类列表在列表选择器里标记为 `this Mac only`。想要跨设备的提醒，请选一个 iCloud 列表。
+
+## 本地运行与构建
+
+直接跑调试版：
 
 ```bash
-killall YUANNotch
+swift run YUANNotch
 ```
 
-## Apple Reminders integration
-
-YUANNotch can write the reminders you create onto your Mac's **Reminders** database through EventKit. When the selected list is an iCloud list, Apple syncs it to your iPhone, iPad and Apple Watch — the app runs no sync of its own and never talks to a server.
-
-Enable it under **Settings → Integrations**. macOS asks for Reminders access once; the app must be in the foreground for that dialog to appear.
-
-Two things worth knowing:
-
-- **The app cannot report iCloud sync status.** Writing to the Reminders database succeeds even offline; whether a reminder has reached your other devices is decided by iCloud and is not readable. The UI therefore never claims anything is "synced".
-- **A list stored only on this Mac will not reach your other devices.** This is flagged in the list picker as `this Mac only`. Pick an iCloud list if you want cross-device reminders.
-
-### Development notes
-
-The integration can only be tested from the packaged app — a bare `swift run` executable has no `Info.plist`, and macOS terminates the process outright when `NSRemindersFullAccessUsageDescription` is missing. Always verify through:
+提醒事项集成**只能**在打包后的应用里测试：`swift run` 产生的可执行文件没有 `Info.plist`，而缺少 `NSRemindersFullAccessUsageDescription` 时 macOS 会直接终止进程。验证请始终通过：
 
 ```bash
 bash Scripts/package-app.sh
 ```
 
-Because the app is ad-hoc signed, every rebuild changes its code signature and macOS treats it as a new app, prompting for Reminders access again. Use a stable identity to avoid that:
+因为应用是临时签名的，每次重新构建都会改变代码签名，macOS 会把它当成一个新应用，于是再次询问提醒事项权限。用一个稳定的签名身份可以避免反复询问：
 
 ```bash
-SIGN_IDENTITY="<your signing identity>" bash Scripts/package-app.sh
+SIGN_IDENTITY="<你的签名身份>" bash Scripts/package-app.sh
 ```
 
-`Scripts/reminders-v1-probe.sh` builds a small signed probe app that exercises the shipping service code against your real reminders database (authorization, list enumeration, create/read/delete round-trip, and a check for whether reminders without a due date are returned by the incomplete query). It creates exactly one reminder and deletes it again. It is a development tool and is not part of the app.
+`Scripts/reminders-v1-probe.sh` 会构建一个小型已签名探针应用，用真正参与发布的服务层代码去操作你真实的提醒事项数据库（授权、列表枚举、创建/读取/删除往返，以及检查「无到期日的提醒是否会被未完成查询返回」）。它只创建一条提醒并随即删除。这是开发工具，不属于应用本体。
+
+## 常见问题
+
+**面板不展开。** 检查「设置 → Trigger」里的打开方式：Hover 模式下需要把鼠标停在顶部边缘；若延迟被调大，需要多停一会儿。多显示器时，热区在每块屏幕各自的顶部中央。
+
+**提醒事项的权限对话框没出现。** macOS 只在应用位于前台时显示该对话框。先激活应用再点「Request Access」。若之前拒绝过，前往「系统设置 → 隐私与安全性 → 提醒事项」重新打开。
+
+**每次重新构建后都要重新授权。** 这是临时签名的必然结果，见上一节；指定 `SIGN_IDENTITY` 即可避免。
+
+**提醒列表显示 `this Mac only`，手机上收不到。** 该列表只存在于本机。换成 iCloud 列表即可。
+
+**界面不显示「已同步」。** 有意如此。写入成功不等于已同步，而同步状态无法读取，所以不做任何声称。
+
+**笔记会不会因为覆盖安装而丢失？** 不会。笔记、图片与文件架都存在本机的固定位置（见下），与 `.app` 包无关。
+
+## 技术栈
+
+- **Swift 6 + AppKit** — 浮层窗口、窗口层级、多显示器定位、顶部触发行为，以及文件拖放的接管。
+- **SwiftUI** — 抽屉界面、设置窗口、笔记与提醒列表。
+- **EventKit** — Apple 提醒事项的读写，是唯一接触系统提醒数据库的地方。
+- **UserDefaults + Application Support** — 本机持久化，无数据库、无服务端。
+
+## 数据存放
+
+全部数据都在本机：
+
+| 内容 | 位置 |
+| --- | --- |
+| 笔记（各标签页与光标位置） | `~/Library/Application Support/YUANNotch/workspace.json` |
+| 笔记的备份与损坏隔离文件 | 同目录下的 `workspace.json.backup`、`workspace.corrupt-<时间>.json` |
+| 笔记内嵌图片 | `~/Library/Application Support/YUANNotch/Images/` |
+| 尚未写入系统提醒库的待写队列 | `~/Library/Application Support/YUANNotch/reminder-queue.json` |
+| 文件架内容（仅引用） | UserDefaults `yuanNotch.fileShelf.v1` |
+| 各项设置 | UserDefaults `yuanNotch.*` |
+
+唯一的例外是 Apple 提醒事项：它们写在 macOS 的提醒事项数据库里，iCloud 列表由 Apple 负责同步。
+
+## 致谢
+
+- [swift-markdown-engine](https://github.com/nodes-app/swift-markdown-engine) — 编辑器内核（实时 Markdown 样式、代码块、任务复选框），以源码形式内置于 `Vendor/`，MIT 许可。
+- [Atoll](https://github.com/Ebullioscopic/Atoll) — 窗口层级、多显示器处理与设置窗口「先激活再置前」的做法参考了它。
+- [NotchNotes](https://github.com/oil-oil/NotchNotes) — 本项目的前身，改名后继续发展。
