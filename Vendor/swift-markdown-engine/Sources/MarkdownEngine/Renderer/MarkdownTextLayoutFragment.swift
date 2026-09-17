@@ -342,15 +342,10 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             let ascent = max(0, font.ascender)
             let descent = max(0, -font.descender)
             let configuration = (textLayoutManager?.textContainer?.textView as? NativeTextView)?.configuration ?? .default
-            let fontHeight = max(1, ceil(ascent + descent))
-            let markerWidth = ("[ ]" as NSString).size(withAttributes: [.font: font]).width
-            let size = max(
-                1.0,
-                min(
-                    floor(fontHeight * configuration.checkbox.sizeFromFontHeightFactor),
-                    floor(markerWidth * configuration.checkbox.sizeFromMarkerWidthFactor)
-                )
-            )
+            // The square's size and the item text's column are one piece of
+            // geometry: `HeadingHelpers` owns both, so the drawn box and the
+            // hanging indent cannot drift apart.
+            let size = HeadingHelpers.checkboxSize(font: font, configuration: configuration.checkbox)
             let centerY = pos.baselineY + (descent - ascent) / 2
             let boxY = centerY - size / 2
 

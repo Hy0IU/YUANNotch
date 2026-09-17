@@ -9,8 +9,10 @@
 //  A task item renders as a drawn square that *replaces* its whole syntax: the
 //  marker and the whitespace behind it are collapsed to zero advance, so the
 //  square lands on the column every other list marker shares and the item text
-//  follows right behind it. The syntax is never revealed — clicking the square
-//  is how an item is toggled (`NativeTextView.toggleTaskCheckboxIfHit`).
+//  follows right behind it. Neither the square's size nor the text's column is
+//  read off the source's own brackets — see `HeadingHelpers.checkboxSlot`. The
+//  syntax is never revealed — clicking the square is how an item is toggled
+//  (`NativeTextView.toggleTaskCheckboxIfHit`).
 //
 
 import AppKit
@@ -66,7 +68,7 @@ extension MarkdownStyler {
                 // square would sit a whole marker width to the right of the
                 // column every other list marker shares.
                 // `MarkdownLists.paragraphAttributes` measures the hanging
-                // indent from the `[` onward for the same reason.
+                // indent from the same slot for the same reason.
                 for hiddenRange in [markerRange, spacerRange] where hiddenRange.location != NSNotFound {
                     let hiddenText = ctx.nsText.substring(with: hiddenRange)
                     attrs.append((hiddenRange, [
@@ -75,16 +77,22 @@ extension MarkdownStyler {
                     ]))
                 }
 
-                // A little air between the square and the item text.
+                // The item text lands on the same column whether the box is
+                // ticked or not: that column is the `[ ]` slot's, so the space
+                // behind the brackets absorbs whatever the source's own brackets
+                // add or save. A fixed amount of air here instead would leave a
+                // ticked item's text a fraction of a point off an unticked one's.
                 let afterCheckboxIndex = checkboxRange.location + checkboxRange.length
-                if !isChecked, afterCheckboxIndex < ctx.nsText.length {
+                if afterCheckboxIndex < ctx.nsText.length {
                     let spaceRange = NSRange(location: afterCheckboxIndex, length: 1)
                     if ctx.nsText.substring(with: spaceRange) == " " {
-                        let extraSpacing = HeadingHelpers.checkboxExtraSpacing(
+                        let textColumn = HeadingHelpers.checkboxMarkerWidth(
                             font: ctx.baseFont,
                             configuration: ctx.configuration.checkbox
                         )
-                        attrs.append((spaceRange, [.kern: extraSpacing]))
+                        let bracketsWidth = HeadingHelpers.textWidth(checkboxText, font: ctx.baseFont)
+                        let spaceWidth = HeadingHelpers.textWidth(" ", font: ctx.baseFont)
+                        attrs.append((spaceRange, [.kern: textColumn - bracketsWidth - spaceWidth]))
                     }
                 }
             }

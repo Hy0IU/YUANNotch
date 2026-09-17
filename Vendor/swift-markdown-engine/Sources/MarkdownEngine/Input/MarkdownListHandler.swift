@@ -113,26 +113,22 @@ struct MarkdownLists {
                 let depthIndent = CGFloat(tabCount) * indentPerLevel + CGFloat(spaceCount) * spaceWidth
 
                 let markerString = nsText.substring(with: markerRange) as NSString
-                let bracketIndex = markerString.range(of: "[").location
-                let hasCheckbox = bracketIndex != NSNotFound
-                let isChecked = markerString.range(of: "[x]", options: [.caseInsensitive]).location != NSNotFound
-                // A task item's square replaces the `- [ ]` syntax: the marker
-                // and the gap behind it are collapsed to zero advance by the
-                // styler, so only the `[ ]` run and the space behind it still
-                // widen the marker zone. Measuring the raw marker text here
-                // would put the hanging indent one whole marker past the text
-                // it exists to align with.
+                let hasCheckbox = markerString.range(of: "[").location != NSNotFound
+                // A task item's square replaces the whole `- [ ]` syntax: the
+                // marker and the gap behind it are collapsed to zero advance by
+                // the styler, so what occupies the marker zone is the square —
+                // not the text the source happens to spell. Measuring the raw
+                // marker here would put the hanging indent one whole marker past
+                // the text it exists to align with, and measuring the brackets
+                // would move it again on every tick.
                 let markerWidth = hasCheckbox
-                    ? markerString.substring(from: bracketIndex).size(withAttributes: [.font: baseFont]).width
+                    ? HeadingHelpers.checkboxMarkerWidth(font: baseFont, configuration: configuration.checkbox)
                     : markerString.size(withAttributes: [.font: baseFont]).width
-                let extraSpacing = (hasCheckbox && !isChecked)
-                    ? HeadingHelpers.checkboxExtraSpacing(font: baseFont, configuration: configuration.checkbox)
-                    : 0
 
                 ps.tabStops = []
                 ps.defaultTabInterval = indentPerLevel
                 ps.firstLineHeadIndent = 0
-                ps.headIndent = depthIndent + markerWidth + extraSpacing
+                ps.headIndent = depthIndent + markerWidth
 
                 attributesList.append((match.range(at: 0), [.paragraphStyle: ps]))
             }
