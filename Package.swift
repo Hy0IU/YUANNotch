@@ -19,7 +19,12 @@ let package = Package(
             dependencies: [
                 .product(name: "MarkdownEngine", package: "swift-markdown-engine")
             ],
-            path: "Sources/YUANNotch"
+            path: "Sources/YUANNotch",
+            resources: [
+                // The app mark, exported at 18 pt / 36 px. `.copy` keeps the
+                // files byte-for-byte; see AppGlyph for how they are loaded.
+                .copy("Glyph")
+            ]
         )
     ]
 )

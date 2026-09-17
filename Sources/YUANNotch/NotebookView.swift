@@ -232,9 +232,7 @@ struct NotebookView: View {
     }
 
     private var compactIcon: some View {
-        Image(systemName: "note.text")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.82))
+        AppGlyphMark()
             .frame(width: layout.compactSize.width, height: layout.compactSize.height)
             .opacity(1 - drawerState.revealProgress)
     }

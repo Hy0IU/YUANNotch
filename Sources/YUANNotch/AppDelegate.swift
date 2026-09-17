@@ -59,8 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "YUANNotch")
+        item.button?.image = AppGlyph.templateImage
         item.button?.imagePosition = .imageOnly
+        // The artwork carries no description of its own, so the status item's
+        // accessibility label is stated here instead of coming from a symbol.
+        item.button?.setAccessibilityLabel("YUANNotch")
         item.menu = makeAppMenu()
         statusItem = item
     }

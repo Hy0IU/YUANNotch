@@ -5,9 +5,7 @@ struct CompactNotchView: View {
     var onTap: (() -> Void)? = nil
 
     var body: some View {
-        Image(systemName: "note.text")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.82))
+        AppGlyphMark()
             .frame(width: layout.compactSize.width, height: layout.compactSize.height)
             .background(Color(red: 0.02, green: 0.02, blue: 0.025).opacity(0.98))
             .clipShape(NotchShape(topCornerRadius: 0, bottomCornerRadius: 12))

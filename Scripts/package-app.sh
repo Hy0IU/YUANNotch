@@ -9,6 +9,8 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 SOURCE_ICON="$ROOT_DIR/Resources/AppIcon.png"
+RESOURCE_BUNDLE_NAME="YUANNotch_YUANNotch.bundle"
+RESOURCE_BUNDLE="$ROOT_DIR/.build/release/$RESOURCE_BUNDLE_NAME"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 
 cd "$ROOT_DIR"
@@ -17,6 +19,16 @@ swift build -c release
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp ".build/release/YUANNotch" "$MACOS_DIR/YUANNotch"
+
+# The app reads its mark from a resource bundle that sits beside the executable
+# (see AppGlyph.resourceBundle). Without this copy the packaged app still runs on
+# a machine that happens to keep its build tree — SwiftPM's lookup falls back to
+# the build-time path — and crashes anywhere else, so fail here instead.
+if [[ ! -d "$RESOURCE_BUNDLE" ]]; then
+  echo "error: swift build did not produce $RESOURCE_BUNDLE_NAME" >&2
+  exit 1
+fi
+cp -R "$RESOURCE_BUNDLE" "$MACOS_DIR/"
 
 if [[ -f "$SOURCE_ICON" ]]; then
   TMP_DIR="$(mktemp -d)"
