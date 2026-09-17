@@ -22,7 +22,10 @@ final class NoteStore: ObservableObject {
     @Published private(set) var tabs: [NoteTab]
     @Published private(set) var activeTabID: UUID
 
-    private static let legacyTextKey = "yuanNotch.text"
+    /// The single note this app stored before it had tabs, in *this* app's
+    /// domain — not to be confused with the `notchNotes.*` keys read below,
+    /// which belong to the previous app identity.
+    private static let preTabsTextKey = "yuanNotch.text"
     private static let tabsKey = "yuanNotch.tabs.v1"
     private static let activeTabIDKey = "yuanNotch.activeTabID"
 
@@ -225,7 +228,8 @@ final class NoteStore: ObservableObject {
             }
         }
 
-        return workspaceFromText(defaults.string(forKey: legacyTextKey) ?? "")
+        // Last resort: this app's own pre-tabs note, before tabs existed.
+        return workspaceFromText(defaults.string(forKey: preTabsTextKey) ?? "")
     }
 
     private static func workspace(

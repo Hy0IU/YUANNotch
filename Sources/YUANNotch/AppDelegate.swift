@@ -15,6 +15,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// One-time migration of notes and settings stored under the previous
     /// app identity (NotchNotes / io.github.oiloil.NotchNotes).
+    ///
+    /// Kept well after the rename on purpose. The old keys are frozen names —
+    /// there is nothing here to maintain and nothing that grows with the app —
+    /// while the cost of not having it is one-way: a first launch without this
+    /// code writes a workspace of its own, and every later chance to recover the
+    /// old notes and settings is gone.
+    ///
+    /// It can be deleted once a public release has been superseded — from then
+    /// on, nobody can still be arriving from the previous app identity.
     private func migrateLegacyData() {
         let defaults = UserDefaults.standard
         let migratedFlag = "yuanNotch.didMigrateLegacyData"
