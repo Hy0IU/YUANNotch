@@ -31,6 +31,9 @@ struct ReminderPanelItem: Identifiable, Equatable {
     let origin: Origin
     let title: String
     let dueDate: Date?
+    /// True for a day-level due date (see `ReminderDue`): grouping must not
+    /// read a time of day out of `dueDate`.
+    let isDueDateAllDay: Bool
     let syncState: ReminderSyncState
 
     /// A placeholder has no system-side existence, so completing it is
@@ -84,8 +87,8 @@ enum ReminderGroup: String, CaseIterable, Identifiable {
 /// identifier is server-provided, can be absent for a list that lives only on
 /// this Mac, differs between devices for Exchange reminders, and is not unique.
 enum PendingOperation: Codable, Equatable {
-    case create(localID: UUID, title: String, dueDate: Date, listID: String)
-    case update(reminderID: String, externalID: String?, listID: String, title: String?, dueDate: Date?)
+    case create(localID: UUID, title: String, due: ReminderDue?, listID: String)
+    case update(reminderID: String, externalID: String?, listID: String, title: String?, due: ReminderDue?)
     case setCompleted(reminderID: String, externalID: String?, listID: String, isCompleted: Bool)
     case delete(reminderID: String, externalID: String?, listID: String)
 }
@@ -258,7 +261,12 @@ final class ReminderStore: ObservableObject {
         calendar: Calendar = .current
     ) -> [(group: ReminderGroup, items: [ReminderPanelItem])] {
         let bucketed = Dictionary(grouping: items) { item in
-            Self.group(for: item.dueDate, now: now, calendar: calendar)
+            Self.group(
+                for: item.dueDate,
+                isAllDay: item.isDueDateAllDay,
+                now: now,
+                calendar: calendar
+            )
         }
 
         return ReminderGroup.allCases.compactMap { group in
@@ -267,8 +275,22 @@ final class ReminderStore: ObservableObject {
         }
     }
 
-    static func group(for dueDate: Date?, now: Date, calendar: Calendar) -> ReminderGroup {
+    static func group(
+        for dueDate: Date?,
+        isAllDay: Bool = false,
+        now: Date,
+        calendar: Calendar
+    ) -> ReminderGroup {
         guard let dueDate else { return .undated }
+        if isAllDay {
+            // A day-level due date is overdue only once its day has passed:
+            // "today, no time" stays in Today until midnight, the way
+            // Reminders.app reads it.
+            if dueDate < calendar.startOfDay(for: now) { return .overdue }
+            if calendar.isDateInToday(dueDate) { return .today }
+            if calendar.isDateInTomorrow(dueDate) { return .tomorrow }
+            return .later
+        }
         // Overdue is `dueDate < now`, not `< start of today`: a 15-minute
         // reminder created this morning is overdue by the afternoon, and
         // leaving it under "Today" contradicts how Reminders.app reads it.
@@ -509,11 +531,10 @@ final class ReminderStore: ObservableObject {
 
     // MARK: - Writes
 
-    func create(title: String, minutesFromNow: Int) async {
+    func create(title: String, due: ReminderDue?) async {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let list = selectedList else { return }
 
-        let dueDate = Date().addingTimeInterval(TimeInterval(minutesFromNow) * 60)
         let localID = UUID()
         placeholders.append(
             PendingPlaceholder(
@@ -521,7 +542,8 @@ final class ReminderStore: ObservableObject {
                     id: localID.uuidString,
                     origin: .pendingLocal(id: localID),
                     title: trimmed,
-                    dueDate: dueDate,
+                    dueDate: due?.date,
+                    isDueDateAllDay: due?.isAllDay ?? false,
                     syncState: .writing
                 ),
                 listID: list.id
@@ -532,7 +554,7 @@ final class ReminderStore: ObservableObject {
         do {
             _ = try await service.create(
                 title: trimmed,
-                dueDate: dueDate,
+                due: due,
                 in: list.id,
                 marker: localID
             )
@@ -542,7 +564,7 @@ final class ReminderStore: ObservableObject {
             // Keep the row visible and honest: it is not in the store, so it
             // must not look like it is.
             updatePlaceholder(localID, syncState: .failed(error.localizedDescription))
-            enqueue(.create(localID: localID, title: trimmed, dueDate: dueDate, listID: list.id))
+            enqueue(.create(localID: localID, title: trimmed, due: due, listID: list.id))
         }
     }
 
@@ -726,6 +748,7 @@ final class ReminderStore: ObservableObject {
                     origin: .remote(id: entry.id),
                     title: entry.title,
                     dueDate: entry.dueDate,
+                    isDueDateAllDay: entry.isDueDateAllDay,
                     syncState: .idle
                 )
             }
@@ -747,6 +770,7 @@ final class ReminderStore: ObservableObject {
             origin: placeholders[index].item.origin,
             title: placeholders[index].item.title,
             dueDate: placeholders[index].item.dueDate,
+            isDueDateAllDay: placeholders[index].item.isDueDateAllDay,
             syncState: syncState
         )
         rebuildItems()
@@ -791,14 +815,14 @@ final class ReminderStore: ObservableObject {
 
     private func perform(_ operation: PendingOperation) async throws {
         switch operation {
-        case .create(let localID, let title, let dueDate, let listID):
-            _ = try await service.create(title: title, dueDate: dueDate, in: listID, marker: localID)
+        case .create(let localID, let title, let due, let listID):
+            _ = try await service.create(title: title, due: due, in: listID, marker: localID)
             placeholders.removeAll { $0.item.localID == localID }
             rebuildItems()
 
-        case .update(let reminderID, let externalID, let listID, let title, let dueDate):
+        case .update(let reminderID, let externalID, let listID, let title, let due):
             guard await isResolvable(reminderID, externalID: externalID, listID: listID) else { return }
-            try await service.update(id: reminderID, title: title, dueDate: dueDate)
+            try await service.update(id: reminderID, title: title, due: due)
 
         case .setCompleted(let reminderID, let externalID, let listID, let isCompleted):
             guard await isResolvable(reminderID, externalID: externalID, listID: listID) else { return }
@@ -856,7 +880,11 @@ final class ReminderStore: ObservableObject {
 /// not reached the local store yet, so losing it costs a retry the user can
 /// repeat — unlike the notes workspace, where a lost backup is lost writing.
 struct ReminderQueueStore {
-    private static let currentVersion = 1
+    /// 2: `PendingOperation.create` now carries a `ReminderDue?` instead of a
+    /// non-optional `Date`, which changes the persisted JSON shape. A v1 file
+    /// holds only writes that already failed to land, so dropping it costs a
+    /// retry the user can repeat — the same trade the corruption path makes.
+    private static let currentVersion = 2
 
     private struct QueueFile: Codable {
         let schemaVersion: Int

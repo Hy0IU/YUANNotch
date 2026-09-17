@@ -30,6 +30,18 @@ struct ReminderList: Identifiable, Equatable, Sendable {
     let sourceTitle: String
 }
 
+/// When a reminder is due, as the compose UI, the retry queue and EventKit
+/// agree on it.
+///
+/// `isAllDay` is the day-level due date ("today", "tomorrow"): the reminder
+/// appears under that day in Reminders.app but carries no alarm and no
+/// specific hour — the same shape Reminders.app writes when a date is picked
+/// without a time.
+struct ReminderDue: Equatable, Codable, Sendable {
+    let date: Date
+    let isAllDay: Bool
+}
+
 /// A reminder projected to value types.
 ///
 /// `EKReminder` is not `Sendable`, so it must never escape a fetch callback.
@@ -43,6 +55,9 @@ struct ReminderSnapshot: Identifiable, Equatable, Sendable {
     let externalID: String?
     let title: String
     let dueDate: Date?
+    /// True when the due date is day-level (no hour), so grouping and display
+    /// must not read the time of day out of `dueDate`.
+    let isDueDateAllDay: Bool
     let isCompleted: Bool
     let hasAlarm: Bool
     let listID: String
@@ -83,8 +98,8 @@ protocol RemindersServing: Sendable {
     func availableLists() async -> [ReminderList]
     func defaultList() async -> ReminderList?
     func snapshot(in listID: String) async throws -> [ReminderSnapshot]
-    func create(title: String, dueDate: Date, in listID: String, marker: UUID) async throws -> ReminderSnapshot
-    func update(id: String, title: String?, dueDate: Date?) async throws
+    func create(title: String, due: ReminderDue?, in listID: String, marker: UUID) async throws -> ReminderSnapshot
+    func update(id: String, title: String?, due: ReminderDue?) async throws
     func setCompleted(id: String, isCompleted: Bool) async throws
     func resolve(id: String, externalID: String?, in listID: String) async -> ReminderSnapshot?
     func delete(id: String) async throws
@@ -220,7 +235,7 @@ actor AppleRemindersService: RemindersServing {
 
     func create(
         title: String,
-        dueDate: Date,
+        due: ReminderDue?,
         in listID: String,
         marker: UUID
     ) async throws -> ReminderSnapshot {
@@ -232,7 +247,7 @@ actor AppleRemindersService: RemindersServing {
         let reminder = EKReminder(eventStore: store)
         reminder.calendar = calendar
         reminder.title = title
-        applyDueDate(dueDate, to: reminder)
+        applyDue(due, to: reminder)
         reminder.url = Self.markerURL(for: marker)
 
         try save(reminder)
@@ -243,9 +258,10 @@ actor AppleRemindersService: RemindersServing {
                 id: reminder.calendarItemIdentifier,
                 externalID: reminder.calendarItemExternalIdentifier,
                 title: title,
-                dueDate: dueDate,
+                dueDate: due?.date,
+                isDueDateAllDay: due?.isAllDay ?? false,
                 isCompleted: false,
-                hasAlarm: true,
+                hasAlarm: due.map { !$0.isAllDay } ?? false,
                 listID: listID,
                 lastModified: Date()
             )
@@ -257,14 +273,14 @@ actor AppleRemindersService: RemindersServing {
     /// Resolving a stale identifier is the caller's job (`resolve(id:externalID:in:)`),
     /// which is what keeps these paths from degenerating into a full-database
     /// scan whenever an identifier has gone stale.
-    func update(id: String, title: String?, dueDate: Date?) async throws {
+    func update(id: String, title: String?, due: ReminderDue?) async throws {
         try requireReadAccess()
         guard let reminder = reminder(withIdentifier: id) else {
             throw RemindersServiceError.reminderNotFound
         }
 
         if let title { reminder.title = title }
-        if let dueDate { applyDueDate(dueDate, to: reminder) }
+        if let due { applyDue(due, to: reminder) }
 
         try save(reminder)
     }
@@ -392,14 +408,34 @@ actor AppleRemindersService: RemindersServing {
         }
     }
 
-    /// C4 + C5: the due date must carry an explicit time zone, and an absolute
-    /// alarm must be written on every path — relying on the list's default
-    /// alarm means a rescheduled reminder silently stops firing.
-    private func applyDueDate(_ dueDate: Date, to reminder: EKReminder) {
-        var components = Calendar.current.dateComponents(in: .current, from: dueDate)
+    /// C4 + C5: a due date must carry an explicit time zone, and a timed due
+    /// date must carry an explicit absolute alarm — relying on the list's
+    /// default alarm means a rescheduled reminder silently stops firing.
+    ///
+    /// `nil` clears the due date outright, and an all-day due date writes no
+    /// alarm: it is the day-level shape Reminders.app produces when the user
+    /// picks a date without a time.
+    private func applyDue(_ due: ReminderDue?, to reminder: EKReminder) {
+        guard let due else {
+            reminder.dueDateComponents = nil
+            reminder.alarms = nil
+            return
+        }
+
+        var components = Calendar.current.dateComponents(in: .current, from: due.date)
         components.timeZone = .current
+        if due.isAllDay {
+            components.hour = nil
+            components.minute = nil
+            components.second = nil
+            components.nanosecond = nil
+            reminder.dueDateComponents = components
+            reminder.alarms = nil
+            return
+        }
+
         reminder.dueDateComponents = components
-        reminder.alarms = [EKAlarm(absoluteDate: dueDate)]
+        reminder.alarms = [EKAlarm(absoluteDate: due.date)]
     }
 }
 
@@ -412,11 +448,19 @@ extension ReminderSnapshot {
             externalID: reminder.calendarItemExternalIdentifier,
             title: reminder.title ?? "",
             dueDate: Self.date(from: reminder.dueDateComponents),
+            isDueDateAllDay: Self.isAllDay(reminder.dueDateComponents),
             isCompleted: reminder.isCompleted,
             hasAlarm: !(reminder.alarms ?? []).isEmpty,
             listID: listID,
             lastModified: reminder.lastModifiedDate
         )
+    }
+
+    /// Day-level due dates carry a date but no time — the shape Reminders.app
+    /// writes when the user picks a date without a time.
+    static func isAllDay(_ components: DateComponents?) -> Bool {
+        guard let components else { return false }
+        return components.hour == nil && components.minute == nil
     }
 
     /// `EKReminder` carries `dueDateComponents`, not a `Date`. Components
