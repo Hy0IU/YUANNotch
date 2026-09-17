@@ -113,8 +113,8 @@ final class ReminderStore: ObservableObject {
     /// written" for the milliseconds before it landed.
     @Published private(set) var failedWriteCount = 0
     @Published private(set) var lastError: String?
-    /// Non-nil while a deletion is inside its undo window.
-    @Published private(set) var pendingDeletionTitle: String?
+    /// What the undo bar describes: the most recent deferred write.
+    @Published private(set) var pendingUndo: PendingUndo?
 
     private let settingsStore: AppSettingsStore
     private let service: RemindersServing
@@ -122,9 +122,13 @@ final class ReminderStore: ObservableObject {
 
     private var snapshot: [ReminderSnapshot] = []
     private var placeholders: [PendingPlaceholder] = []
-    /// Rows removed from the panel but not yet removed from the store. This is
-    /// the `− {待删除}` term of the panel's union: a refresh arriving inside the
-    /// undo window must not resurrect the row.
+    /// Rows hidden from the panel while their write waits out the undo window
+    /// — a delete or a completion. This is the `− {待删除}` term of the panel's
+    /// union: a refresh arriving inside the window must not resurrect the row.
+    ///
+    /// Display only. A hidden row stays in `snapshot` on purpose, so undo can
+    /// put it back without a round trip; the filter lives in `rebuildItems`
+    /// alone and is lifted together with the local copy (`releaseSuppression`).
     private var suppressedIDs: Set<String> = []
     private var queuedOperations: [PendingOperation] = []
 
@@ -139,8 +143,33 @@ final class ReminderStore: ObservableObject {
     private var busyBeganAt: Date?
     private var busyReleaseTask: Task<Void, Never>?
 
-    private var deletionTask: Task<Void, Never>?
-    private var deferredDeletion: (remoteID: String, externalID: String?, listID: String)?
+    /// One row that has left the panel while its write waits out the undo window.
+    private struct DeferredWrite {
+        enum Operation {
+            case delete
+            case complete
+        }
+        let remoteID: String
+        let externalID: String?
+        let listID: String
+        let title: String
+        let operation: Operation
+    }
+
+    /// What the undo bar describes: the most recent deferred write.
+    struct PendingUndo: Equatable {
+        enum Verb: Equatable {
+            case deleted
+            case completed
+        }
+        let title: String
+        let verb: Verb
+    }
+
+    private var deferredWrites: [DeferredWrite] = []
+    /// Keyed by `remoteID`: each row's window runs on its own task, so taking
+    /// back one write never touches another's clock.
+    private var deferredWriteTasks: [String: Task<Void, Never>] = [:]
 
     // MARK: - Activity indication
 
@@ -220,10 +249,12 @@ final class ReminderStore: ObservableObject {
     /// it fires; this tick is what actually bounds staleness.
     private static let visiblePollInterval = Duration.seconds(5)
 
-    /// How long a delete can be taken back. Deferred commit rather than
-    /// delete-then-recreate: recreating would hand out a new
+    /// How long a delete or a completion can be taken back. Deferred commit
+    /// rather than delete-then-recreate: recreating would hand out a new
     /// `calendarItemIdentifier`, flash the row on the user's phone, and discard
-    /// any concurrent edit made on another device.
+    /// any concurrent edit made on another device. A process that exits inside
+    /// the window drops the write entirely, so the row comes back — the safer
+    /// failure direction for both operations.
     private static let undoWindow = Duration.seconds(5)
 
     init(
@@ -568,29 +599,23 @@ final class ReminderStore: ObservableObject {
         }
     }
 
-    func setCompleted(_ item: ReminderPanelItem, isCompleted: Bool) async {
-        guard let remoteID = item.remoteID else { return }
-        let listID = selectedList?.id ?? ""
-        let externalID = snapshot.first { $0.id == remoteID }?.externalID
-
-        // Optimistic: the row leaves the panel immediately (completed rows
-        // never render) and is restored by the reload if the write fails.
-        snapshot.removeAll { $0.id == remoteID }
-        rebuildItems()
-
-        do {
-            try await service.setCompleted(id: remoteID, isCompleted: isCompleted)
-            requestRefresh()
-        } catch {
-            lastError = error.localizedDescription
-            enqueue(.setCompleted(
-                reminderID: remoteID,
-                externalID: externalID,
-                listID: listID,
-                isCompleted: isCompleted
-            ))
-            requestRefresh()
-        }
+    /// Marks a reminder complete. The write is deferred past the undo window
+    /// through the same mechanism a delete goes through: the row leaves the
+    /// panel at once, stays take-back-able for `undoWindow`, and only then
+    /// reaches the store.
+    func complete(_ item: ReminderPanelItem) {
+        // The suppression guard covers the race where the row is deleted while
+        // its completion animation is still playing.
+        guard let remoteID = item.remoteID, !suppressedIDs.contains(remoteID) else { return }
+        suppressAndDefer(
+            DeferredWrite(
+                remoteID: remoteID,
+                externalID: snapshot.first { $0.id == remoteID }?.externalID,
+                listID: selectedList?.id ?? "",
+                title: item.title,
+                operation: .complete
+            )
+        )
     }
 
     /// Starts the undo window. Nothing reaches the store until it expires, so
@@ -609,55 +634,130 @@ final class ReminderStore: ObservableObject {
         }
 
         guard let remoteID = item.remoteID else { return }
-        deferredDeletion = (remoteID, snapshot.first { $0.id == remoteID }?.externalID, selectedList?.id ?? "")
-        suppressedIDs.insert(remoteID)
-        pendingDeletionTitle = item.title
-        rebuildItems()
+        suppressAndDefer(
+            DeferredWrite(
+                remoteID: remoteID,
+                externalID: snapshot.first { $0.id == remoteID }?.externalID,
+                listID: selectedList?.id ?? "",
+                title: item.title,
+                operation: .delete
+            )
+        )
+    }
 
-        deletionTask?.cancel()
-        deletionTask = Task { [weak self] in
+    /// The one sequence behind both a delete and a completion: the row leaves
+    /// the panel immediately, the store write waits out the undo window, and
+    /// undo brings the row back with nothing having happened.
+    ///
+    /// The row deliberately stays in `snapshot` — suppression is a display
+    /// concern and hides it in `rebuildItems` alone. Dropping the local copy
+    /// here would leave undo with nothing to restore, so the row could only
+    /// come back on the next round trip to the store (measured: the visible
+    /// tick, up to five seconds).
+    private func suppressAndDefer(_ write: DeferredWrite) {
+        suppressedIDs.insert(write.remoteID)
+
+        // Defensive: an older entry for the same row must not survive being
+        // superseded by a newer write — its window task would commit stale work.
+        if deferredWrites.contains(where: { $0.remoteID == write.remoteID }) {
+            deferredWriteTasks[write.remoteID]?.cancel()
+            deferredWriteTasks[write.remoteID] = nil
+            deferredWrites.removeAll { $0.remoteID == write.remoteID }
+        }
+
+        deferredWrites.append(write)
+        updatePendingUndo()
+        rebuildItems()
+        startUndoWindow(for: write)
+    }
+
+    private func updatePendingUndo() {
+        guard let write = deferredWrites.last else {
+            pendingUndo = nil
+            return
+        }
+        pendingUndo = PendingUndo(
+            title: write.title,
+            verb: write.operation == .delete ? .deleted : .completed
+        )
+    }
+
+    private func startUndoWindow(for write: DeferredWrite) {
+        deferredWriteTasks[write.remoteID]?.cancel()
+        deferredWriteTasks[write.remoteID] = Task { [weak self] in
             do {
                 try await Task.sleep(for: Self.undoWindow)
             } catch {
                 return
             }
-            await self?.commitDeferredDeletion()
+            await self?.commitDeferredWrite(for: write.remoteID)
         }
     }
 
-    func undoDelete() {
-        deletionTask?.cancel()
-        deletionTask = nil
-        guard let deferred = deferredDeletion else { return }
-        suppressedIDs.remove(deferred.remoteID)
-        deferredDeletion = nil
-        pendingDeletionTitle = nil
+    /// Takes back the most recent deferred write. Suppression is lifted but the
+    /// local copy is deliberately kept — that copy is what lets the row return
+    /// at once, with no round trip to the store.
+    func undoLatestPendingWrite() {
+        guard let write = deferredWrites.last else { return }
+        deferredWriteTasks[write.remoteID]?.cancel()
+        deferredWriteTasks[write.remoteID] = nil
+        deferredWrites.removeLast()
+        updatePendingUndo()
+        suppressedIDs.remove(write.remoteID)
         rebuildItems()
     }
 
-    /// Runs when the undo window expires. A process that exits inside the
-    /// window cancels the delete instead — the reminder survives, which is the
-    /// safer failure direction.
-    private func commitDeferredDeletion() async {
-        guard let deferred = deferredDeletion else { return }
-        deletionTask = nil
-        deferredDeletion = nil
-        pendingDeletionTitle = nil
+    /// The counterpart of `suppressAndDefer` for a write that has landed (or
+    /// whose reminder is gone): the row stops being hidden *and* leaves the
+    /// local snapshot.
+    ///
+    /// Both halves go together. A snapshot that keeps a suppressed row is what
+    /// makes undo instant, so once the row is no longer suppressed any stale
+    /// copy has to go — otherwise a `rebuildItems` in the same queue drain
+    /// would flash a deleted row back on screen before the refresh catches up.
+    private func releaseSuppression(_ remoteID: String) {
+        suppressedIDs.remove(remoteID)
+        snapshot.removeAll { $0.id == remoteID }
+    }
+
+    /// Runs when a row's undo window expires. A process that exits inside the
+    /// window cancels the write instead — the reminder survives unchanged,
+    /// which is the safer failure direction.
+    private func commitDeferredWrite(for remoteID: String) async {
+        // The write may have been undone in the meantime.
+        guard let write = deferredWrites.first(where: { $0.remoteID == remoteID }) else { return }
+        deferredWrites.removeAll { $0.remoteID == remoteID }
+        deferredWriteTasks[remoteID] = nil
+        updatePendingUndo()
 
         do {
-            try await service.delete(id: deferred.remoteID)
-            suppressedIDs.remove(deferred.remoteID)
-            snapshot.removeAll { $0.id == deferred.remoteID }
+            switch write.operation {
+            case .delete:
+                try await service.delete(id: write.remoteID)
+            case .complete:
+                try await service.setCompleted(id: write.remoteID, isCompleted: true)
+            }
+            releaseSuppression(write.remoteID)
             requestRefresh()
         } catch {
             lastError = error.localizedDescription
-            enqueue(.delete(
-                reminderID: deferred.remoteID,
-                externalID: deferred.externalID,
-                listID: deferred.listID
-            ))
-            // Stay suppressed: the user asked for it gone and the queue still
-            // owes the store a delete. The failed operation shows up as an
+            switch write.operation {
+            case .delete:
+                enqueue(.delete(
+                    reminderID: write.remoteID,
+                    externalID: write.externalID,
+                    listID: write.listID
+                ))
+            case .complete:
+                enqueue(.setCompleted(
+                    reminderID: write.remoteID,
+                    externalID: write.externalID,
+                    listID: write.listID,
+                    isCompleted: true
+                ))
+            }
+            // Stay suppressed: the user asked for it and the queue still owes
+            // the store the write. The failed operation shows up as an
             // unwritten count, so a refresh is requested rather than assumed.
             requestRefresh()
         }
@@ -725,7 +825,11 @@ final class ReminderStore: ObservableObject {
 
         do {
             let fetched = try await service.snapshot(in: list.id)
-            snapshot = fetched.filter { !suppressedIDs.contains($0.id) }
+            // The store's truth, unfiltered. Suppression is display-only and is
+            // applied once, in `rebuildItems`: filtering here would throw away
+            // the copy a pending undo needs, so a refresh landing inside the
+            // window would make undo wait for the next round trip.
+            snapshot = fetched
         } catch {
             lastError = error.localizedDescription
         }
@@ -736,8 +840,8 @@ final class ReminderStore: ObservableObject {
     private func rebuildItems() {
         let currentListID = selectedList?.id
 
-        // The suppression filter has to be applied here, not only when the
-        // snapshot was fetched: a row enters the undo window long after the
+        // The single place suppression is applied. It has to be here rather
+        // than at fetch time: a row enters the undo window long after the
         // fetch, and a stale snapshot entry would otherwise put it straight
         // back on screen.
         let remote = snapshot
@@ -825,17 +929,24 @@ final class ReminderStore: ObservableObject {
             try await service.update(id: reminderID, title: title, due: due)
 
         case .setCompleted(let reminderID, let externalID, let listID, let isCompleted):
-            guard await isResolvable(reminderID, externalID: externalID, listID: listID) else { return }
+            // Both exits release the suppression a failed completion left
+            // behind: the row is out of the panel for good either way, so
+            // nothing may keep hiding a reminder the store still has.
+            guard await isResolvable(reminderID, externalID: externalID, listID: listID) else {
+                releaseSuppression(reminderID)
+                return
+            }
             try await service.setCompleted(id: reminderID, isCompleted: isCompleted)
+            releaseSuppression(reminderID)
 
         case .delete(let reminderID, let externalID, let listID):
             // Already gone is the outcome we wanted.
             guard await isResolvable(reminderID, externalID: externalID, listID: listID) else {
-                suppressedIDs.remove(reminderID)
+                releaseSuppression(reminderID)
                 return
             }
             try await service.delete(id: reminderID)
-            suppressedIDs.remove(reminderID)
+            releaseSuppression(reminderID)
         }
     }
 

@@ -36,6 +36,13 @@ struct RemindersPanelView: View {
     @State private var isTimeWheelShown = false
 
     @State private var hoveredItemID: String?
+
+    /// Rows currently playing the completion animation, keyed by item id.
+    /// Pure presentation state: it drives the tick and the strikethrough until
+    /// the row is handed to the store, which removes it from the list.
+    @State private var completingItemIDs: Set<String> = []
+    private static let completionAnimationDuration: TimeInterval = 0.45
+
     @FocusState private var isDraftFocused: Bool
 
     // MARK: - Due date model
@@ -803,6 +810,7 @@ struct RemindersPanelView: View {
                             groupHeader(section.group.title)
                             ForEach(section.items) { item in
                                 row(for: item)
+                                    .transition(.opacity.combined(with: .move(edge: .trailing)))
                             }
                         }
                     }
@@ -810,8 +818,9 @@ struct RemindersPanelView: View {
                 }
             }
 
-            if let title = store.pendingDeletionTitle {
-                undoBar(title: title)
+            if let undo = store.pendingUndo {
+                undoBar(undo)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             if let error = store.lastError {
@@ -836,15 +845,23 @@ struct RemindersPanelView: View {
     }
 
     private func row(for item: ReminderPanelItem) -> some View {
-        HStack(spacing: 9) {
+        let isCompleting = completingItemIDs.contains(item.id)
+        return HStack(spacing: 9) {
             Button {
-                guard item.isCompletable else { return }
-                Task { await store.setCompleted(item, isCompleted: true) }
+                beginCompletion(of: item)
             } label: {
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(.white.opacity(item.isCompletable ? 0.5 : 0.18), lineWidth: 1)
-                    .frame(width: 14, height: 14)
-                    .contentShape(Rectangle())
+                ZStack {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(.white.opacity(item.isCompletable ? 0.5 : 0.18), lineWidth: 1)
+                    if isCompleting {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .frame(width: 14, height: 14)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(!item.isCompletable)
@@ -852,7 +869,8 @@ struct RemindersPanelView: View {
 
             Text(item.title)
                 .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(item.syncState == .idle ? 0.88 : 0.55))
+                .foregroundStyle(.white.opacity(isCompleting ? 0.45 : (item.syncState == .idle ? 0.88 : 0.55)))
+                .strikethrough(isCompleting, pattern: .solid, color: .white.opacity(0.5))
                 .lineLimit(1)
 
             Spacer(minLength: 8)
@@ -871,7 +889,7 @@ struct RemindersPanelView: View {
             }
 
             Button {
-                store.delete(item)
+                withAnimation { store.delete(item) }
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
@@ -895,16 +913,29 @@ struct RemindersPanelView: View {
         }
     }
 
-    private func undoBar(title: String) -> some View {
+    /// Plays the completion animation, then hands the row to the store. The
+    /// tick and the strikethrough come first; the row's exit is driven by the
+    /// store's rebuild, animated by the `withAnimation` around `complete`.
+    private func beginCompletion(of item: ReminderPanelItem) {
+        guard item.isCompletable, !completingItemIDs.contains(item.id) else { return }
+        withAnimation(.easeOut(duration: 0.2)) { _ = completingItemIDs.insert(item.id) }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(Self.completionAnimationDuration))
+            completingItemIDs.remove(item.id)
+            withAnimation(.easeInOut(duration: 0.25)) { store.complete(item) }
+        }
+    }
+
+    private func undoBar(_ undo: ReminderStore.PendingUndo) -> some View {
         HStack(spacing: 8) {
-            Text("\"\(title)\" deleted")
+            Text("\"\(undo.title)\" \(undo.verb == .completed ? "completed" : "deleted")")
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.75))
                 .lineLimit(1)
 
             Spacer(minLength: 8)
 
-            Button("Undo") { store.undoDelete() }
+            Button("Undo") { withAnimation { store.undoLatestPendingWrite() } }
                 .font(.system(size: 12, weight: .medium))
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(0.9))
