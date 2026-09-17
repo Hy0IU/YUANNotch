@@ -78,6 +78,70 @@ struct MarkdownLists {
         return true
     }
 
+    // MARK: - List Lines
+
+    /// A list line as both the paragraph-styling pass and the marker-styling
+    /// pass see it.
+    ///
+    /// Recognising a list line happens here and only here, so the hanging
+    /// indent and the marker's own styling can never disagree about what
+    /// counts as a list item — or about where its marker ends.
+    struct ListLine {
+        /// The line: marker zone and the item's text.
+        let range: NSRange
+        /// Leading whitespace; one nesting level per tab.
+        let leadingWhitespace: NSRange
+        /// Marker zone: the glyph, the whitespace behind it and, on a task
+        /// item, the `[ ]` the square stands in for.
+        let markerZone: NSRange
+        /// The marker glyph alone: `-`, `•`, or `1.`. The marker pass colors
+        /// it and, for a bullet, draws it larger.
+        let markerGlyph: NSRange
+        /// The item's text, empty on a marker-only line.
+        let text: NSRange
+        /// Whether a `[ ]` / `[x]` follows the glyph. A task item's square
+        /// replaces the whole marker zone, so its glyph is never drawn.
+        let isTaskItem: Bool
+    }
+
+    // The trailing whitespace after the marker may also be end-of-line:
+    // without that, deleting the space after a marker briefly drops the list
+    // paragraph style and the leading tab falls back to AppKit's default
+    // (wider) tab interval, making the marker visibly jump right before the
+    // restyle recovers. A line can only be one of the two kinds, so the order
+    // they are scanned in has no effect on the result.
+    static let orderedListLineRegex = try! NSRegularExpression(
+        pattern: #"^([ \t]*)(\d+\.(?:[ \t]+\[[ xX]\])?(?:[ \t]+|$))(.*)$"#,
+        options: [.anchorsMatchLines]
+    )
+    static let bulletListLineRegex = try! NSRegularExpression(
+        pattern: #"^([ \t]*)([-•](?:[ \t]+\[[ xX]\])?(?:[ \t]+|$))(.*)$"#,
+        options: [.anchorsMatchLines]
+    )
+
+    static func listLines(in text: String, range: NSRange) -> [ListLine] {
+        let nsText = text as NSString
+        var lines: [ListLine] = []
+        for regex in [bulletListLineRegex, orderedListLineRegex] {
+            for match in regex.matches(in: text, options: [], range: range) {
+                let markerZone = match.range(at: 2)
+                let markerText = nsText.substring(with: markerZone)
+                // The glyph runs up to the whitespace that separates it from
+                // the item's text, or from the `[ ]` of a task item.
+                let glyphLength = markerText.prefix { $0 != " " && $0 != "\t" }.utf16.count
+                lines.append(ListLine(
+                    range: match.range(at: 0),
+                    leadingWhitespace: match.range(at: 1),
+                    markerZone: markerZone,
+                    markerGlyph: NSRange(location: markerZone.location, length: glyphLength),
+                    text: match.range(at: 3),
+                    isTaskItem: markerText.contains("[")
+                ))
+            }
+        }
+        return lines
+    }
+
     // MARK: - Paragraph Attributes for List Styling
 
     static func paragraphAttributes(
@@ -97,57 +161,35 @@ struct MarkdownLists {
         let extraLineHeight = configuration.lists.extraLineHeight
         let spaceWidth = (" " as NSString).size(withAttributes: [.font: baseFont]).width
 
-        func applyListMatches(_ matches: [NSTextCheckingResult]) {
-            for match in matches {
-                let ps = NSMutableParagraphStyle()
-                ps.minimumLineHeight = defaultLineHeight + extraLineHeight
-                ps.maximumLineHeight = defaultLineHeight + extraLineHeight
-                ps.lineSpacing = 0
-                ps.paragraphSpacing = defaultParagraphSpacing
-                ps.paragraphSpacingBefore = 0
-                let wsRange = match.range(at: 1)
-                let markerRange = match.range(at: 2)
-                let ws = nsText.substring(with: wsRange)
-                let tabCount = ws.filter { $0 == "\t" }.count
-                let spaceCount = ws.filter { $0 == " " }.count
-                let depthIndent = CGFloat(tabCount) * indentPerLevel + CGFloat(spaceCount) * spaceWidth
+        for line in listLines(in: text, range: fullRange) {
+            let ps = NSMutableParagraphStyle()
+            ps.minimumLineHeight = defaultLineHeight + extraLineHeight
+            ps.maximumLineHeight = defaultLineHeight + extraLineHeight
+            ps.lineSpacing = 0
+            ps.paragraphSpacing = defaultParagraphSpacing
+            ps.paragraphSpacingBefore = 0
+            let ws = nsText.substring(with: line.leadingWhitespace)
+            let tabCount = ws.filter { $0 == "\t" }.count
+            let spaceCount = ws.filter { $0 == " " }.count
+            let depthIndent = CGFloat(tabCount) * indentPerLevel + CGFloat(spaceCount) * spaceWidth
 
-                let markerString = nsText.substring(with: markerRange) as NSString
-                let hasCheckbox = markerString.range(of: "[").location != NSNotFound
-                // A task item's square replaces the whole `- [ ]` syntax: the
-                // marker and the gap behind it are collapsed to zero advance by
-                // the styler, so what occupies the marker zone is the square —
-                // not the text the source happens to spell. Measuring the raw
-                // marker here would put the hanging indent one whole marker past
-                // the text it exists to align with, and measuring the brackets
-                // would move it again on every tick.
-                let markerWidth = hasCheckbox
-                    ? HeadingHelpers.checkboxMarkerWidth(font: baseFont, configuration: configuration.checkbox)
-                    : markerString.size(withAttributes: [.font: baseFont]).width
+            // A task item's square replaces the whole `- [ ]` syntax: the
+            // marker and the gap behind it are collapsed to zero advance by
+            // the styler, so what occupies the marker zone is the square —
+            // not the text the source happens to spell. Measuring the raw
+            // marker here would put the hanging indent one whole marker past
+            // the text it exists to align with, and measuring the brackets
+            // would move it again on every tick.
+            let markerWidth = line.isTaskItem
+                ? HeadingHelpers.checkboxMarkerWidth(font: baseFont, configuration: configuration.checkbox)
+                : nsText.substring(with: line.markerZone).size(withAttributes: [.font: baseFont]).width
 
-                ps.tabStops = []
-                ps.defaultTabInterval = indentPerLevel
-                ps.firstLineHeadIndent = 0
-                ps.headIndent = depthIndent + markerWidth
+            ps.tabStops = []
+            ps.defaultTabInterval = indentPerLevel
+            ps.firstLineHeadIndent = 0
+            ps.headIndent = depthIndent + markerWidth
 
-                attributesList.append((match.range(at: 0), [.paragraphStyle: ps]))
-            }
-        }
-
-        // Ordered lists. The trailing whitespace after the marker may also
-        // be end-of-line: without that, deleting the space after a marker
-        // briefly drops the list paragraph style and the leading tab falls
-        // back to AppKit's default (wider) tab interval, making the marker
-        // visibly jump right before the restyle recovers.
-        let orderedListPattern = #"^([ \t]*)(\d+\.(?:[ \t]+\[[ xX]\])?(?:[ \t]+|$))(.*)$"#
-        if let orderedListRegex = try? NSRegularExpression(pattern: orderedListPattern, options: [.anchorsMatchLines]) {
-            applyListMatches(orderedListRegex.matches(in: text, options: [], range: fullRange))
-        }
-
-        // Bullet lists (same end-of-line tolerance as ordered lists).
-        let bulletListPattern = #"^([ \t]*)([-•](?:[ \t]+\[[ xX]\])?(?:[ \t]+|$))(.*)$"#
-        if let bulletListRegex = try? NSRegularExpression(pattern: bulletListPattern, options: [.anchorsMatchLines]) {
-            applyListMatches(bulletListRegex.matches(in: text, options: [], range: fullRange))
+            attributesList.append((line.range, [.paragraphStyle: ps]))
         }
         return attributesList
     }

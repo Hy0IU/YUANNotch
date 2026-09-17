@@ -7,6 +7,7 @@
 
 // Small helper values for heading size/spacing, plus shared text measurements.
 import AppKit
+import CoreText
 
 enum HeadingHelpers {
 
@@ -40,6 +41,37 @@ enum HeadingHelpers {
 
     static func textWidth(_ text: String, font: NSFont) -> CGFloat {
         (text as NSString).size(withAttributes: [.font: font]).width
+    }
+
+    /// Baseline offset that makes `glyph` drawn in `scaledFont` sit where the
+    /// same glyph drawn in `baseFont` does.
+    ///
+    /// A font's own vertical metrics scale with its point size, and so does
+    /// the glyph's ink box — which grows upward from the baseline. Drawing a
+    /// marker glyph larger therefore lifts it as well as enlarging it, by the
+    /// distance its ink centre travelled. Measuring that distance is the only
+    /// way to enlarge a glyph in place: a constant would be wrong at any other
+    /// font size.
+    static func markerBaselineOffset(
+        glyph: String,
+        baseFont: NSFont,
+        scaledFont: NSFont
+    ) -> CGFloat {
+        inkCenterAboveBaseline(glyph: glyph, font: baseFont)
+            - inkCenterAboveBaseline(glyph: glyph, font: scaledFont)
+    }
+
+    /// Distance from the baseline to the centre of `glyph`'s ink box, in
+    /// points. Zero when the font cannot map the character, which leaves the
+    /// glyph where the font puts it rather than shifting it on a guess.
+    private static func inkCenterAboveBaseline(glyph: String, font: NSFont) -> CGFloat {
+        let utf16 = Array(glyph.utf16)
+        guard !utf16.isEmpty else { return 0 }
+        let ctFont = font as CTFont
+        var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
+        guard CTFontGetGlyphsForCharacters(ctFont, utf16, &glyphs, utf16.count) else { return 0 }
+        let ink = CTFontGetBoundingRectsForGlyphs(ctFont, .horizontal, glyphs, nil, 1)
+        return ink.origin.y + ink.height / 2
     }
 
     /// Air between a task item's square and its text. Not part of the square's

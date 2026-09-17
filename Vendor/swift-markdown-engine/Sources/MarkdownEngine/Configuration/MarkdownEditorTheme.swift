@@ -39,6 +39,13 @@ public struct MarkdownEditorTheme: Sendable {
     /// Foreground color for heading marker glyphs (`#`, `##`, …).
     public var headingMarker: NSColor
 
+    // MARK: List markers
+
+    /// Foreground color for a list item's marker glyph: the bullet (`-` or
+    /// `•`) and the ordered number (`1.`). A task item's marker is not drawn
+    /// at all — its square replaces the whole marker zone.
+    public var listMarker: NSColor
+
     // MARK: Links
 
     /// Foreground color for hyperlinks that resolve to an URL.
@@ -74,6 +81,18 @@ public struct MarkdownEditorTheme: Sendable {
     /// (e.g. completed task list items, horizontal rules).
     public var strikethroughColor: NSColor
 
+    // MARK: Task checkbox
+
+    /// Fill of an unticked task square.
+    public var checkboxFill: NSColor
+    /// Border of an unticked task square.
+    public var checkboxBorder: NSColor
+    /// Fill of a ticked task square. Drawn behind ``checkboxCheckmark``, so
+    /// the two must contrast.
+    public var checkboxCheckedFill: NSColor
+    /// The tick drawn inside a ticked task square.
+    public var checkboxCheckmark: NSColor
+
     // MARK: Init
 
     public init(
@@ -81,18 +100,24 @@ public struct MarkdownEditorTheme: Sendable {
         mutedText: NSColor = .secondaryLabelColor,
         disabledText: NSColor = .tertiaryLabelColor,
         headingMarker: NSColor = .gray,
+        listMarker: NSColor = .labelColor,
         link: NSColor = .linkColor,
         incompleteLink: NSColor = .systemBlue,
         findMatchHighlight: NSColor = .systemYellow,
         findCurrentMatchHighlight: NSColor = .systemYellow,
         latexLightModeText: NSColor = .black,
         latexDarkModeText: NSColor = .white,
-        strikethroughColor: NSColor = .labelColor
+        strikethroughColor: NSColor = .labelColor,
+        checkboxFill: NSColor = NSColor(white: 1.0, alpha: 0.035),
+        checkboxBorder: NSColor = NSColor(white: 1.0, alpha: 0.30),
+        checkboxCheckedFill: NSColor = NSColor(calibratedRed: 0.69, green: 0.93, blue: 0.81, alpha: 1.0),
+        checkboxCheckmark: NSColor = NSColor(calibratedRed: 0.06, green: 0.07, blue: 0.08, alpha: 1.0)
     ) {
         self.bodyText = bodyText
         self.mutedText = mutedText
         self.disabledText = disabledText
         self.headingMarker = headingMarker
+        self.listMarker = listMarker
         self.link = link
         self.incompleteLink = incompleteLink
         self.findMatchHighlight = findMatchHighlight
@@ -100,6 +125,10 @@ public struct MarkdownEditorTheme: Sendable {
         self.latexLightModeText = latexLightModeText
         self.latexDarkModeText = latexDarkModeText
         self.strikethroughColor = strikethroughColor
+        self.checkboxFill = checkboxFill
+        self.checkboxBorder = checkboxBorder
+        self.checkboxCheckedFill = checkboxCheckedFill
+        self.checkboxCheckmark = checkboxCheckmark
     }
 
     /// System-native palette built from `NSColor` dynamic system colors.

@@ -14,6 +14,7 @@
 //   - MarkdownStyler+Code.swift          (fenced + inline code)
 //   - MarkdownStyler+Latex.swift         (block + inline LaTeX)
 //   - MarkdownStyler+Images.swift        (image embeds)
+//   - MarkdownStyler+ListMarkers.swift   (list markers)
 //   - MarkdownStyler+TaskCheckboxes.swift
 import AppKit
 import Foundation
@@ -169,6 +170,10 @@ enum MarkdownStyler {
         result += styleInlineLatex(ctx)
         result += styleHorizontalRules(ctx)
         result += styleIncompleteLinkBrackets(ctx)
+        // Before the task checkboxes, whose marker and spacer are painted
+        // clear: a task item's square replaces them, so the marker pass must
+        // not be the one that gets the last word on that run.
+        result += styleListMarkers(ctx)
         result += styleTaskCheckboxes(ctx)
         result += shrinkInactiveMarkers(ctx)
         return result

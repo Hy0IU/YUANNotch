@@ -219,19 +219,26 @@ public struct ListStyle: Sendable {
     public var maximumNestingLevel: Int
     /// Extra line height added on top of the default to give list items room.
     public var extraLineHeight: CGFloat
+    /// How much larger than the body font a bullet glyph is drawn, so a
+    /// bullet reads as a marker rather than as punctuation. `1` keeps it at
+    /// body size. Ordered numbers are never scaled — a number spells the
+    /// item's position and is read as text.
+    public var bulletFontScale: CGFloat
 
     public init(
         helpersEnabled: Bool = true,
         autoClosePairsEnabled: Bool = true,
         indentPerLevel: CGFloat = 27.5,
         maximumNestingLevel: Int = 3,
-        extraLineHeight: CGFloat = 2
+        extraLineHeight: CGFloat = 2,
+        bulletFontScale: CGFloat = 1
     ) {
         self.helpersEnabled = helpersEnabled
         self.autoClosePairsEnabled = autoClosePairsEnabled
         self.indentPerLevel = indentPerLevel
         self.maximumNestingLevel = maximumNestingLevel
         self.extraLineHeight = extraLineHeight
+        self.bulletFontScale = bulletFontScale
     }
 
     public static let `default` = ListStyle()
