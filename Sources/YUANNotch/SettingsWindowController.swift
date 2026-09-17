@@ -213,16 +213,32 @@ private struct AppearanceSettingsView: View {
     /// other, and so the fields beside them can be held to the same limits.
     static let cornerRadiusRange: ClosedRange<Double> = 0...50
 
+    /// One tick every this many points.
+    ///
+    /// The range is 50 wide, so `step: 1` would put 51 ticks on a 220pt track
+    /// and read as a ruler rather than a slider. Five is the coarsest spacing
+    /// that still leaves the track aimable; any value the ticks skip is still a
+    /// perfectly good radius and can be typed into the field instead.
+    static let cornerRadiusTickSpacing: Double = 5
+
     var body: some View {
         Form {
             Section {
-                CornerRadiusSlider(
+                ValueSliderRow(
                     title: "Top corners:",
-                    value: $settingsStore.expandedTopCornerRadius
+                    value: $settingsStore.expandedTopCornerRadius,
+                    range: Self.cornerRadiusRange,
+                    step: Self.cornerRadiusTickSpacing,
+                    unit: "pt",
+                    decimals: 0
                 )
-                CornerRadiusSlider(
+                ValueSliderRow(
                     title: "Bottom corners:",
-                    value: $settingsStore.expandedBottomCornerRadius
+                    value: $settingsStore.expandedBottomCornerRadius,
+                    range: Self.cornerRadiusRange,
+                    step: Self.cornerRadiusTickSpacing,
+                    unit: "pt",
+                    decimals: 0
                 )
             } header: {
                 Text("Corner Radius")
@@ -234,39 +250,63 @@ private struct AppearanceSettingsView: View {
     }
 }
 
-private struct CornerRadiusSlider: View {
+/// A slider and a field editing the same value under the same limits.
+///
+/// One implementation for every numeric setting, because the behaviour that
+/// matters is subtle and must not drift between surfaces: the ticks are a
+/// visual rhythm rather than the set of legal values, so the field accepts a
+/// number the ticks skip, and a typed value is held to the range but never
+/// snapped to the step.
+private struct ValueSliderRow: View {
     let title: String
     @Binding var value: Double
-
-    /// One tick every this many points.
-    ///
-    /// The range is 50 wide, so `step: 1` would put 51 ticks on a 220pt track
-    /// and read as a ruler rather than a slider. Five is the coarsest spacing
-    /// that still leaves the track aimable; any value the ticks skip is still a
-    /// perfectly good radius and can be typed into the field instead.
-    private static let tickSpacing: Double = 5
+    let range: ClosedRange<Double>
+    let step: Double
+    let unit: String
+    /// Digits the field shows. Also the precision a typed value settles to.
+    let decimals: Int
+    /// The row is greyed out and inert when this is false.
+    var isEnabled = true
+    /// `nil` leaves the controls described by the row's `LabeledContent` title
+    /// alone, rather than labelling them twice.
+    var accessibilityLabel: String? = nil
 
     var body: some View {
         LabeledContent(title) {
             HStack(spacing: 10) {
-                Slider(
+                Slider(value: $value, in: range, step: step)
+                    .frame(maxWidth: 220)
+                    .explicitAccessibilityLabel(accessibilityLabel)
+                ValueField(
                     value: $value,
-                    in: AppearanceSettingsView.cornerRadiusRange,
-                    step: Self.tickSpacing
+                    range: range,
+                    decimals: decimals,
+                    unit: unit,
+                    isEnabled: isEnabled,
+                    accessibilityLabel: accessibilityLabel
                 )
-                .frame(maxWidth: 220)
-                CornerRadiusField(value: $value)
             }
         }
+        // Disabling the row rather than the two controls keeps them in step with
+        // each other; the field also watches this so a half-typed number is
+        // settled before it can no longer be edited.
+        .disabled(!isEnabled)
     }
 }
 
-/// The editable value beside a radius slider.
+/// The editable value beside a slider.
 ///
 /// It exists because the ticks are a visual rhythm, not the set of legal values:
-/// typing the number beats dragging until it happens to land on it.
-private struct CornerRadiusField: View {
+/// typing the number beats dragging until it happens to land on it. The text is
+/// held here and written out on submit or on losing focus, so a half-typed
+/// number is never committed and a drag never overwrites what is being typed.
+private struct ValueField: View {
     @Binding var value: Double
+    let range: ClosedRange<Double>
+    let decimals: Int
+    let unit: String
+    var isEnabled = true
+    var accessibilityLabel: String? = nil
 
     @State private var text = ""
     @FocusState private var isEditing: Bool
@@ -283,7 +323,7 @@ private struct CornerRadiusField: View {
                     if editing {
                         // Start from the committed value rather than from
                         // whatever the field happened to be showing.
-                        text = Self.format(value)
+                        text = Self.format(value, decimals: decimals)
                     } else {
                         commit()
                     }
@@ -292,27 +332,105 @@ private struct CornerRadiusField: View {
                     // Dragging has to keep the field in step — but not while
                     // the user is midway through typing into it.
                     guard !isEditing else { return }
-                    text = Self.format(newValue)
+                    text = Self.format(newValue, decimals: decimals)
                 }
-                .onAppear { text = Self.format(value) }
+                .onChange(of: isEnabled) { _, enabled in
+                    // A row going disabled does not reliably end editing, and a
+                    // field left mid-edit never gets corrected afterwards: the
+                    // handler above stays suppressed for as long as `isEditing`
+                    // is true. Settle it here instead of leaving text and value
+                    // out of step until the next successful commit.
+                    guard !enabled else { return }
+                    isEditing = false
+                    commit()
+                }
+                .onAppear { text = Self.format(value, decimals: decimals) }
+                .explicitAccessibilityLabel(accessibilityLabel)
 
-            Text("pt")
+            Text(unit)
                 .foregroundStyle(.secondary)
         }
     }
 
     private func commit() {
-        let range = AppearanceSettingsView.cornerRadiusRange
-        guard let entered = Double(text.trimmingCharacters(in: .whitespaces)) else {
-            text = Self.format(value)
+        guard let entered = Self.parse(text, to: range, decimals: decimals) else {
+            // Not a number: put the field back to the committed value.
+            text = Self.format(value, decimals: decimals)
             return
         }
-        value = min(max(entered.rounded(), range.lowerBound), range.upperBound)
-        text = Self.format(value)
+        value = entered
+        text = Self.format(value, decimals: decimals)
     }
 
-    private static func format(_ value: Double) -> String {
-        String(Int(value.rounded()))
+    // MARK: - Pure rules
+    //
+    // Static and free of view state on purpose: these are the rules the row is
+    // built on, and they can be lifted out of this file and exercised on their
+    // own, which is the only way this project can check them.
+
+    /// The field's text for a value: at most `decimals` digits, no trailing
+    /// zeros, and always a dot.
+    ///
+    /// The locale is pinned rather than taken from the system because the other
+    /// half of the pair only reads dots: on a machine set to a comma decimal
+    /// separator, a localised style would print "0,30" and `parse` would then
+    /// reject it, turning a commit into a silent revert.
+    private static func format(_ value: Double, decimals: Int) -> String {
+        // Zero negated would print as "-0"; a radius or a delay of nothing is
+        // zero, not minus zero.
+        let settled = value.isZero ? 0 : value
+        return settled.formatted(
+            .number
+                .locale(Locale(identifier: "en_US_POSIX"))
+                .precision(.fractionLength(0...decimals))
+                .grouping(.never)
+        )
+    }
+
+    /// The value a typed number means: held to the row's range, and settled to
+    /// `decimals` digits so a dragged 0.30000000000000004 is stored as 0.3.
+    ///
+    /// Deliberately not snapped to the slider's step: a value the ticks skip is
+    /// still a legal value.
+    private static func clamp(
+        _ value: Double,
+        to range: ClosedRange<Double>,
+        decimals: Int
+    ) -> Double {
+        let held = min(max(value, range.lowerBound), range.upperBound)
+        let scale = pow(10, Double(decimals))
+        let settled = (held * scale).rounded() / scale
+        return settled.isZero ? 0 : settled
+    }
+
+    /// `nil` for anything that is not a plain number, so the caller can put the
+    /// field back to the committed value instead of writing nonsense out.
+    ///
+    /// `nan` and `inf` have to be rejected explicitly: `Double(_:)` accepts both,
+    /// and a non-finite value clamped afterwards would land silently on one end
+    /// of the range — a delay of 0 or 2 out of a typed "nan" is worse than
+    /// leaving the field as it was.
+    private static func parse(
+        _ text: String,
+        to range: ClosedRange<Double>,
+        decimals: Int
+    ) -> Double? {
+        guard let entered = Double(text.trimmingCharacters(in: .whitespaces)),
+              entered.isFinite else { return nil }
+        return clamp(entered, to: range, decimals: decimals)
+    }
+}
+
+private extension View {
+    /// Labels the view only when a label was given, so a control the surrounding
+    /// `LabeledContent` already describes is not read out twice.
+    @ViewBuilder
+    func explicitAccessibilityLabel(_ label: String?) -> some View {
+        if let label {
+            accessibilityLabel(label)
+        } else {
+            self
+        }
     }
 }
 
@@ -320,6 +438,10 @@ private struct CornerRadiusField: View {
 
 private struct TriggerSettingsView: View {
     @ObservedObject var settingsStore: AppSettingsStore
+
+    /// One tick every 0.2s across a two-second range: eleven ticks, the same
+    /// rhythm the corner-radius sliders keep on their own range.
+    private static let hoverDelayTickSpacing: Double = 0.2
 
     var body: some View {
         Form {
@@ -335,52 +457,23 @@ private struct TriggerSettingsView: View {
             }
 
             Section {
-                HStack(spacing: 10) {
-                    Text("Hover delay:")
-                        .fixedSize()
-
-                    Spacer(minLength: 16)
-
-                    Slider(
-                        value: hoverDelayBinding,
-                        in: AppSettingsStore.hoverActivationDelayRange,
-                        step: 0.2
-                    )
-                    .frame(width: 110)
-
-                    TextField(
-                        "",
-                        value: hoverDelayBinding,
-                        format: .number.precision(.fractionLength(0...2))
-                    )
-                    .textFieldStyle(.roundedBorder)
-                    .multilineTextAlignment(.trailing)
-                    .monospacedDigit()
-                    .frame(width: 58)
-                    .accessibilityLabel("Hover delay in seconds")
-
-                    Text("s")
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                }
-                .disabled(settingsStore.triggerMode != .hover)
+                ValueSliderRow(
+                    title: "Hover delay:",
+                    value: $settingsStore.hoverActivationDelay,
+                    range: AppSettingsStore.hoverActivationDelayRange,
+                    step: Self.hoverDelayTickSpacing,
+                    unit: "s",
+                    decimals: 2,
+                    // The delay only means anything in hover mode; clicking the
+                    // notch ignores it.
+                    isEnabled: settingsStore.triggerMode == .hover,
+                    accessibilityLabel: "Hover delay in seconds"
+                )
             } footer: {
                 Text("How long the pointer must remain over the notch before the panel opens. Set to 0 for an immediate response.")
             }
         }
         .formStyle(.grouped)
-    }
-
-    private var hoverDelayBinding: Binding<Double> {
-        Binding(
-            get: { settingsStore.hoverActivationDelay },
-            set: { value in
-                settingsStore.hoverActivationDelay = min(
-                    max(value, AppSettingsStore.hoverActivationDelayRange.lowerBound),
-                    AppSettingsStore.hoverActivationDelayRange.upperBound
-                )
-            }
-        )
     }
 }
 
