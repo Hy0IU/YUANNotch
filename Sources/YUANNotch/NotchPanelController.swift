@@ -51,19 +51,21 @@ final class NotchPanelController: NSObject {
     private var drawerScreen: NSScreen?
     private var activeMenuTrackingCount = 0
     private var collapseTask: DispatchWorkItem?
-    /// Consecutive 60Hz ticks in which the shelf should no longer be shown.
-    /// The hide is held off for a few ticks so a single odd sample can't
-    /// blink the shelf while a drag is running.
-    private var pendingHideTickCount = 0
+    /// When the shelf last failed its reveal conditions, so the hide can be
+    /// held off for a grace period instead of retracting on a single odd
+    /// sample while a drag is running. Nil while conditions hold.
+    private var pendingHideStartedAt: TimeInterval?
     /// ~0.33s of grace before the shelf retracts, so travelling from the notch
     /// down to the shelf does not blink it while parking over the editor does
     /// dismiss it.
-    private static let hideTicksBeforeRetract = 20
+    private static let hideGraceInterval: TimeInterval = 0.33
     /// Set from the compact notch panel's AppKit drag callbacks: a file drag
     /// over the notch strip is what reveals the shelf on its way in.
     private var isCompactDragTargeted = false
-    private var disarmTickCount = 0
-    private static let disarmTicksInterval = 30
+    /// Last time the editor file-drop guard was swept; the sweep runs on the
+    /// wall clock so its cadence is independent of the polling rate.
+    private var lastDisarmSweepAt: TimeInterval?
+    private static let disarmSweepInterval: TimeInterval = 0.5
     private var hoverActivationCandidate: (screenID: String, startedAt: TimeInterval)?
     private var floatingPanel: NotchPanel?
     private var floatingHostingView: FirstMouseHostingView<NotebookView>?
@@ -558,8 +560,13 @@ final class NotchPanelController: NSObject {
     }
 
     private func startMousePolling() {
+        // 30 Hz is enough for everything this tick drives: the hover delay,
+        // the hide grace, and the disarm sweep are all ≥0.3s and measured on
+        // the wall clock, so the extra 33ms of sampling latency is invisible
+        // next to them — while halving the timer wakeups and the drag
+        // pasteboard reads.
         let timer = Timer(
-            timeInterval: 1.0 / 60.0,
+            timeInterval: 1.0 / 30.0,
             target: self,
             selector: #selector(mousePollingTick),
             userInfo: nil,
@@ -660,7 +667,8 @@ final class NotchPanelController: NSObject {
             fileDragTrackingState.markPasteboardSettled(pasteboard)
         }
         updateFloatingBackgroundDrag()
-        updateShelfReveal()
+        let now = ProcessInfo.processInfo.systemUptime
+        updateShelfReveal(at: now)
         if !isFileDragInProgress() {
             isCompactDragTargeted = false
             finishFileDragRevealIfNeeded()
@@ -668,9 +676,8 @@ final class NotchPanelController: NSObject {
         // The editor's text view arms itself as a file-drop destination
         // shortly after it joins a window; sweep often enough that a file
         // drag can never find it armed.
-        disarmTickCount += 1
-        if disarmTickCount >= Self.disarmTicksInterval {
-            disarmTickCount = 0
+        if lastDisarmSweepAt == nil || now - lastDisarmSweepAt! >= Self.disarmSweepInterval {
+            lastDisarmSweepAt = now
             EditorFileDropGuard.disarm(in: activeHostingView)
         }
         handleMouseLocation(NSEvent.mouseLocation)
@@ -683,10 +690,10 @@ final class NotchPanelController: NSObject {
     /// Both edges are derived from the *panel frame* and the cursor position,
     /// so they stand still during a drag — the shelf changing the editor's
     /// height cannot move the trigger region out from under the cursor, which
-    /// is what made the shelf oscillate before. The hide is held off for a
-    /// few ticks so travelling from the notch down to the shelf does not
+    /// is what made the shelf oscillate before. The hide is held off by a
+    /// grace period so travelling from the notch down to the shelf does not
     /// blink it, while parking the drag over the editor does dismiss it.
-    private func updateShelfReveal() {
+    private func updateShelfReveal(at now: TimeInterval) {
         guard !workspaceState.isPreviewingShelfItem else { return }
 
         let isFileDrag = settingsStore.isFileShelfEnabled && isFileDragInProgress()
@@ -706,15 +713,20 @@ final class NotchPanelController: NSObject {
             && !workspaceState.isDraggingShelfItem
 
         if shouldReveal {
-            pendingHideTickCount = 0
+            pendingHideStartedAt = nil
         } else if workspaceState.isShelfDropTargeted {
-            pendingHideTickCount += 1
+            if pendingHideStartedAt == nil {
+                pendingHideStartedAt = now
+            }
         } else {
-            pendingHideTickCount = 0
+            pendingHideStartedAt = nil
         }
 
+        let isHideGraceExpired = pendingHideStartedAt.map {
+            now - $0 >= Self.hideGraceInterval
+        } ?? false
         let keepRevealed = shouldReveal
-            || (workspaceState.isShelfDropTargeted && pendingHideTickCount < Self.hideTicksBeforeRetract)
+            || (workspaceState.isShelfDropTargeted && !isHideGraceExpired)
         guard keepRevealed != workspaceState.isShelfDropTargeted else { return }
 
         FileDragDiagnostics.log(
