@@ -100,6 +100,11 @@ final class ReminderStore: ObservableObject {
     @Published private(set) var authorization: RemindersAuthorization = .notDetermined
     @Published private(set) var lists: [ReminderList] = []
     @Published private(set) var items: [ReminderPanelItem] = []
+    /// Which list the rows on screen were read from; `nil` before the first
+    /// read. Paired with `selectedList` by `content`, so the panel can tell
+    /// "not read yet" and "still showing the previous list's rows" apart from
+    /// "read, and it is empty" — a distinction `items.isEmpty` cannot make.
+    @Published private(set) var displayedListID: String?
     /// True while the integration is doing work the panel should show.
     ///
     /// Held for a minimum period once raised (see `minimumBusyDuration`), which
@@ -120,6 +125,8 @@ final class ReminderStore: ObservableObject {
     private let service: RemindersServing
     private let queueStore: ReminderQueueStore
 
+    /// What the store has read for `displayedListID`, unfiltered — the truth
+    /// behind the panel. Suppression is applied once, when the rows are built.
     private var snapshot: [ReminderSnapshot] = []
     private var placeholders: [PendingPlaceholder] = []
     /// Rows hidden from the panel while their write waits out the undo window
@@ -281,6 +288,58 @@ final class ReminderStore: ObservableObject {
 
     var selectedListIsLocalOnly: Bool { selectedList?.isLocalOnly ?? false }
 
+    /// What the panel's content area should show.
+    ///
+    /// One decision, made here: the view switches on this instead of combining
+    /// emptiness, the list the rows came from and a loading flag of its own.
+    enum ListContent: Equatable {
+        /// Nothing read for this list yet, and no earlier list to fall back on.
+        case loading
+        /// Rows are on screen, but they belong to another list: a switch is in
+        /// flight. They are shown dimmed and inert.
+        case stale
+        /// Read, and there is nothing in it. The only honest way to say this —
+        /// which is why it is its own case rather than "no rows".
+        case empty
+        case rows
+    }
+
+    var content: ListContent {
+        Self.listContent(
+            displayedListID: displayedListID,
+            selectedListID: selectedList?.id,
+            isEmpty: items.isEmpty
+        )
+    }
+
+    /// The rule behind `content`, with its inputs spelled out.
+    ///
+    /// Pure on purpose: this is the decision that dictates whether the panel
+    /// says "nothing here", says nothing yet, or shows another list's rows, and
+    /// the project has no test target to pin it down — so it takes what it
+    /// needs instead of reaching for it.
+    static func listContent(
+        displayedListID: String?,
+        selectedListID: String?,
+        isEmpty: Bool
+    ) -> ListContent {
+        // Nothing selected: nothing can be asserted about any list.
+        guard let selectedListID else { return .loading }
+
+        if displayedListID == selectedListID {
+            // Read, and the answer is known: empty is only ever said here.
+            return isEmpty ? .empty : .rows
+        }
+
+        // No read has ever landed, so the rows can only be placeholders for
+        // this very list — the one case where rows without a read behind them
+        // are current rather than stale.
+        if displayedListID == nil { return isEmpty ? .loading : .rows }
+
+        // A committed read of a different list: a switch is in flight.
+        return isEmpty ? .loading : .stale
+    }
+
     /// Rows whose write has not landed yet — work in progress, not failure.
     var inFlightCount: Int {
         items.filter { $0.syncState == .writing }.count
@@ -391,7 +450,13 @@ final class ReminderStore: ObservableObject {
     }
 
     private func performRefresh(reloadLists: Bool) async {
-        authorization = service.authorizationStatus()
+        // Compared before assigning: `@Published` publishes on every write, and
+        // the visible tick runs this pass every five seconds, so an unchanged
+        // value would cost a full panel rebuild each time for nothing.
+        let status = service.authorizationStatus()
+        if status != authorization {
+            authorization = status
+        }
 
         // Whatever the user asked for is answered by this pass, so the
         // user-caused part of the busy state ends with it — including on the
@@ -409,13 +474,15 @@ final class ReminderStore: ObservableObject {
 
         guard isEnabled, authorization.canRead else {
             lists = []
-            snapshot = []
-            rebuildItems()
+            commit(snapshot: [], for: nil)
             return
         }
 
         if reloadLists || lists.isEmpty {
-            lists = await service.availableLists()
+            let refreshed = await service.availableLists()
+            if refreshed != lists {
+                lists = refreshed
+            }
             reconcileSelectedList()
         }
 
@@ -531,9 +598,8 @@ final class ReminderStore: ObservableObject {
 
         guard enabled else {
             lists = []
-            snapshot = []
             placeholders = []
-            rebuildItems()
+            commit(snapshot: [], for: nil)
             lastError = nil
             // Disabling does not go through the refresh pipeline, so the
             // background work is stopped explicitly here.
@@ -553,9 +619,16 @@ final class ReminderStore: ObservableObject {
         guard settingsStore.remindersCalendarIdentifier != listID else { return }
         settingsStore.remindersCalendarIdentifier = listID
         // Placeholders belong to the list they were created for, so they are
-        // filtered per list rather than cleared here.
-        snapshot = []
-        rebuildItems()
+        // filtered per list rather than cleared here — and the snapshot is not
+        // cleared either. The rows on screen stay put until the read for the
+        // new list lands, which is what keeps a switch from passing through a
+        // blank panel; `content` reports them as stale and the view dims them.
+        //
+        // The selection lives in the settings store, which this store does not
+        // observe, so the change is announced here. Clearing the snapshot used
+        // to do that by accident — the picker label and `content` both read the
+        // selection, and neither would notice on its own.
+        objectWillChange.send()
         // Switching list is a user action, so the read is acknowledged.
         requestRefresh(showingProgress: true)
     }
@@ -607,15 +680,7 @@ final class ReminderStore: ObservableObject {
         // The suppression guard covers the race where the row is deleted while
         // its completion animation is still playing.
         guard let remoteID = item.remoteID, !suppressedIDs.contains(remoteID) else { return }
-        suppressAndDefer(
-            DeferredWrite(
-                remoteID: remoteID,
-                externalID: snapshot.first { $0.id == remoteID }?.externalID,
-                listID: selectedList?.id ?? "",
-                title: item.title,
-                operation: .complete
-            )
-        )
+        suppressAndDefer(deferredWrite(remoteID: remoteID, title: item.title, operation: .complete))
     }
 
     /// Starts the undo window. Nothing reaches the store until it expires, so
@@ -634,14 +699,27 @@ final class ReminderStore: ObservableObject {
         }
 
         guard let remoteID = item.remoteID else { return }
-        suppressAndDefer(
-            DeferredWrite(
-                remoteID: remoteID,
-                externalID: snapshot.first { $0.id == remoteID }?.externalID,
-                listID: selectedList?.id ?? "",
-                title: item.title,
-                operation: .delete
-            )
+        suppressAndDefer(deferredWrite(remoteID: remoteID, title: item.title, operation: .delete))
+    }
+
+    /// The store-side identity of one deferred write, read from the row it
+    /// refers to rather than from the current selection.
+    ///
+    /// The two can disagree for a moment while a list switch is in flight, and
+    /// a queued write has to follow its own row: `ReminderSnapshot` carries the
+    /// list it was read from, so nothing here has to assume.
+    private func deferredWrite(
+        remoteID: String,
+        title: String,
+        operation: DeferredWrite.Operation
+    ) -> DeferredWrite {
+        let entry = snapshot.first { $0.id == remoteID }
+        return DeferredWrite(
+            remoteID: remoteID,
+            externalID: entry?.externalID,
+            listID: entry?.listID ?? selectedList?.id ?? "",
+            title: title,
+            operation: operation
         )
     }
 
@@ -817,22 +895,36 @@ final class ReminderStore: ObservableObject {
     // MARK: - Snapshot
 
     private func reloadSnapshot() async {
-        guard isEnabled, authorization.canRead, let list = selectedList else {
-            snapshot = []
-            rebuildItems()
+        guard isEnabled, authorization.canRead, let listID = selectedList?.id else {
+            commit(snapshot: [], for: nil)
             return
         }
 
         do {
-            let fetched = try await service.snapshot(in: list.id)
+            let fetched = try await service.snapshot(in: listID)
+            // A read that lands after the user moved on belongs to a list that
+            // is no longer selected. Committing it would put one list's rows
+            // under another list's title for as long as the follow-up pass
+            // takes — and the switch already queued that pass, so the result is
+            // dropped instead of shown.
+            guard listID == selectedList?.id else { return }
             // The store's truth, unfiltered. Suppression is display-only and is
             // applied once, in `rebuildItems`: filtering here would throw away
             // the copy a pending undo needs, so a refresh landing inside the
             // window would make undo wait for the next round trip.
-            snapshot = fetched
+            commit(snapshot: fetched, for: listID)
         } catch {
             lastError = error.localizedDescription
+            rebuildItems()
         }
+    }
+
+    /// The only place the panel's rows are swapped in: the snapshot, the list
+    /// it was read from and the rebuilt rows move together, so `content` never
+    /// observes a half-applied state.
+    private func commit(snapshot newSnapshot: [ReminderSnapshot], for listID: String?) {
+        snapshot = newSnapshot
+        displayedListID = listID
         rebuildItems()
     }
 

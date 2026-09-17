@@ -43,6 +43,25 @@ struct RemindersPanelView: View {
     @State private var completingItemIDs: Set<String> = []
     private static let completionAnimationDuration: TimeInterval = 0.45
 
+    /// The drawer's surface colour. Shared with the scrim that dims the list
+    /// while another list is being read, so the two can never drift apart.
+    private static let panelBackground = Color(red: 0.06, green: 0.06, blue: 0.07)
+
+    /// How dark the list goes while it is still showing the previous list's
+    /// rows, and how long it takes to get there and back.
+    private static let staleScrimOpacity = 0.62
+    private static let staleScrimDuration: TimeInterval = 0.15
+
+    /// The dim itself, as a value the view can animate on its own schedule.
+    ///
+    /// Deliberately not `.animation(_:value:)` on the scrim: that would put the
+    /// animation into the same update as the store's commit, and an animated
+    /// update plays the row transitions too — which belong to a delete or a
+    /// completion, never to a list switch. Driving it from `onChange` lands the
+    /// fade in the update *after* the rows have been swapped, so the swap
+    /// happens behind a full-strength scrim and the new rows fade up.
+    @State private var staleScrim: Double = 0
+
     @FocusState private var isDraftFocused: Bool
 
     // MARK: - Due date model
@@ -250,7 +269,7 @@ struct RemindersPanelView: View {
             }
         }
         .frame(width: size.width, height: size.height, alignment: .top)
-        .background(Color(red: 0.06, green: 0.06, blue: 0.07))
+        .background(Self.panelBackground)
         // The view reports only its visible lifetime. The refresh schedule,
         // interval and trigger set live in ReminderStore, so there is one place
         // to reason about staleness rather than one per surface.
@@ -801,21 +820,28 @@ struct RemindersPanelView: View {
     @ViewBuilder
     private var content: some View {
         VStack(spacing: 0) {
-            if store.items.isEmpty {
-                emptyListState
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(store.groupedItems(), id: \.group) { section in
-                            groupHeader(section.group.title)
-                            ForEach(section.items) { item in
-                                row(for: item)
-                                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-                            }
-                        }
-                    }
-                    .padding(.vertical, 4)
+            switch store.content {
+            case .loading:
+                // Nothing has been read for this list yet. A quiet blank beats
+                // the "no reminders in this list" this used to show, which
+                // asserted emptiness nothing had verified; the header glyph
+                // already says the read is in flight.
+                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            case .stale, .rows:
+                // The previous list's rows stay on screen while the next one is
+                // read, and are dimmed rather than cleared. `staleScrim` carries
+                // the dim so the rows themselves are never part of an animated
+                // update.
+                ZStack {
+                    listArea.allowsHitTesting(store.content != .stale)
+                    Self.panelBackground
+                        .opacity(staleScrim)
+                        .allowsHitTesting(false)
                 }
+
+            case .empty:
+                emptyListState
             }
 
             if let undo = store.pendingUndo {
@@ -828,6 +854,26 @@ struct RemindersPanelView: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .onChange(of: store.content) { _, newContent in
+            withAnimation(.easeInOut(duration: Self.staleScrimDuration)) {
+                staleScrim = newContent == .stale ? Self.staleScrimOpacity : 0
+            }
+        }
+    }
+
+    private var listArea: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(store.groupedItems(), id: \.group) { section in
+                    groupHeader(section.group.title)
+                    ForEach(section.items) { item in
+                        row(for: item)
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
     }
 
     private func groupHeader(_ title: String) -> some View {
