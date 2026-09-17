@@ -11,21 +11,218 @@ struct RemindersPanelView: View {
     let onOpenSettings: () -> Void
 
     @State private var draft = ""
-    @State private var selectedMinutes = ReminderTimePreset.fifteen.minutes
-    @State private var customMinutes = ""
-    @State private var isCustomTime = false
+
+    /// The two halves of a due date, held independently and always both
+    /// meaningful.
+    ///
+    /// They are not one list of intervals because the combinations that matter
+    /// are not intervals: "tomorrow" with no time is a day-level reminder,
+    /// "tomorrow" at 09:00 is a timed one, and a time with no date is "today at
+    /// that time". A single axis can only offer "in fifteen minutes" or a full
+    /// date and time, and has no word for the cases in between — which is what
+    /// the chip row this replaces could not express.
+    @State private var dueDateOption: DueDateOption = .none
+    @State private var dueTimeOption: DueTimeOption = .none
+
+    /// One value behind the custom time, written by the text field and by the
+    /// wheel alike, so the row can never show two different times. Only the
+    /// time of day inside it is ever read; the day it is anchored to is noise.
+    @State private var customTime = Date()
+    @State private var customTimeText = ""
+    @State private var customTimeParseFailed = false
+    /// The day the custom date picker shows. Separate from `customTime`: the
+    /// two custom inputs are independent, as the date and time menus are.
+    @State private var customDate = Date()
+    @State private var isTimeWheelShown = false
+
     @State private var hoveredItemID: String?
     @FocusState private var isDraftFocused: Bool
 
-    private enum ReminderTimePreset: Int, CaseIterable, Identifiable {
-        case five = 5
-        case fifteen = 15
-        case thirty = 30
-        case hour = 60
+    // MARK: - Due date model
 
-        var id: Int { rawValue }
-        var minutes: Int { rawValue }
-        var title: String { self == .hour ? "1h" : "\(rawValue)m" }
+    /// The date half, as a shortcut rather than a value.
+    private enum DueDateOption {
+        case none
+        case today
+        case tomorrow
+        case thisWeekend
+        case nextWeek
+        case custom
+
+        var title: String {
+            switch self {
+            case .none: return "No Date"
+            case .today: return "Today"
+            case .tomorrow: return "Tomorrow"
+            case .thisWeekend: return "This Weekend"
+            case .nextWeek: return "Next Week"
+            case .custom: return "Custom…"
+            }
+        }
+    }
+
+    /// The time half. `custom` reads its value from the compose row's state;
+    /// every other case is a fixed clock time.
+    private enum DueTimeOption: CaseIterable, Hashable {
+        case none
+        case morning9
+        case noon12
+        case evening18
+        case night21
+        case custom
+
+        /// The clock time this shortcut stands for, or `nil` for "no time" and
+        /// for "custom", which takes its value from the row.
+        var preset: TimeOfDay? {
+            switch self {
+            case .morning9: return TimeOfDay(hour: 9, minute: 0)
+            case .noon12: return TimeOfDay(hour: 12, minute: 0)
+            case .evening18: return TimeOfDay(hour: 18, minute: 0)
+            case .night21: return TimeOfDay(hour: 21, minute: 0)
+            case .none, .custom: return nil
+            }
+        }
+
+        /// The shortcuts that carry a clock time, derived from the cases so a
+        /// new one cannot be declared without also being offered in the menu.
+        static var presets: [DueTimeOption] { allCases.filter { $0.preset != nil } }
+
+        var title: String {
+            switch self {
+            case .none: return "No Time"
+            case .custom: return "Custom…"
+            case .morning9, .noon12, .evening18, .night21: return preset?.formatted() ?? ""
+            }
+        }
+    }
+
+    /// A time of day with no day attached — the unit the time half speaks in
+    /// until the date half says which day it belongs to.
+    private struct TimeOfDay: Equatable {
+        let hour: Int
+        let minute: Int
+
+        init(hour: Int, minute: Int) {
+            self.hour = hour
+            self.minute = minute
+        }
+
+        init(_ date: Date, calendar: Calendar = .current) {
+            let parts = calendar.dateComponents([.hour, .minute], from: date)
+            self.init(hour: parts.hour ?? 0, minute: parts.minute ?? 0)
+        }
+
+        var dateComponents: DateComponents { DateComponents(hour: hour, minute: minute) }
+
+        /// Read through the system locale, so a 24-hour region renders `21:00`
+        /// and a 12-hour one `9:00 PM`. No time anywhere in this panel is
+        /// written with a fixed format — the list rows read theirs the same way.
+        func formatted(calendar: Calendar = .current) -> String {
+            let anchor = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: Date())
+            return (anchor ?? Date()).formatted(.dateTime.hour().minute())
+        }
+    }
+
+    /// What the two menus add up to.
+    ///
+    /// One derivation, read by the button labels and by the write alike: a
+    /// label computed separately from the value it describes is a label that
+    /// can lie.
+    private struct DueResolution {
+        /// Start of the day the reminder lands on, or `nil` when it carries no
+        /// due date at all.
+        let day: Date?
+        /// The exact moment, or `nil` for a day-level reminder — the shape that
+        /// carries a date but no time of day.
+        let instant: Date?
+
+        var due: ReminderDue? {
+            guard let day else { return nil }
+            guard let instant else { return ReminderDue(date: day, isAllDay: true) }
+            return ReminderDue(date: instant, isAllDay: false)
+        }
+    }
+
+    /// What the two menus hold, and the one rule that combines them.
+    ///
+    /// | Date | Time | Result |
+    /// | --- | --- | --- |
+    /// | none | none | no due date |
+    /// | any | none | that day, day-level — no alarm |
+    /// | none | any | today at that time, or tomorrow once the moment has passed |
+    /// | any | any | that day and time, precise — absolute alarm |
+    private struct DueSelection {
+        var date: DueDateOption = .none
+        var time: DueTimeOption = .none
+        /// Read only when `date` is `.custom`.
+        var customDate = Date()
+        /// Read only when `time` is `.custom`.
+        var customTime = Date()
+
+        func resolution(now: Date, calendar: Calendar = .current) -> DueResolution {
+            let today = calendar.startOfDay(for: now)
+            let clock = time == .custom ? TimeOfDay(customTime, calendar: calendar) : time.preset
+
+            let chosenDay: Date?
+            switch date {
+            case .none: chosenDay = nil
+            case .today: chosenDay = today
+            case .tomorrow: chosenDay = calendar.date(byAdding: .day, value: 1, to: today)
+            case .thisWeekend: chosenDay = Self.nextWeekday(Self.saturday, after: today, calendar: calendar)
+            case .nextWeek: chosenDay = Self.nextWeekday(Self.monday, after: today, calendar: calendar)
+            case .custom: chosenDay = calendar.startOfDay(for: customDate)
+            }
+
+            switch (chosenDay, clock) {
+            case (nil, nil):
+                return DueResolution(day: nil, instant: nil)
+
+            case let (day?, nil):
+                return DueResolution(day: day, instant: nil)
+
+            case let (nil, clock?):
+                // A time with no date means "today at that time", which becomes
+                // tomorrow once the moment has passed — and lands on tomorrow
+                // outright when the time belongs to the day after today.
+                let todayInstant = calendar.date(byAdding: clock.dateComponents, to: today) ?? today
+                let day = todayInstant > now ? today : (calendar.date(byAdding: .day, value: 1, to: today) ?? today)
+                let instant = calendar.date(byAdding: clock.dateComponents, to: day) ?? todayInstant
+                return DueResolution(day: day, instant: instant)
+
+            case let (day?, clock?):
+                let instant = calendar.date(byAdding: clock.dateComponents, to: day) ?? day
+                return DueResolution(day: day, instant: instant)
+            }
+        }
+
+        /// `Calendar`'s weekday numbering, where 1 is Sunday.
+        private static let monday = 2
+        private static let saturday = 7
+
+        /// The next such weekday strictly after `day`: "this weekend" is the
+        /// coming Saturday, "next week" the coming Monday, and neither is ever
+        /// today.
+        private static func nextWeekday(_ weekday: Int, after day: Date, calendar: Calendar) -> Date? {
+            calendar.nextDate(
+                after: day,
+                matching: DateComponents(hour: 0, minute: 0, weekday: weekday),
+                matchingPolicy: .nextTime
+            )
+        }
+
+        /// An offset from now — "in 15 minutes", "in 1 hour" — expressed in the
+        /// two dimensions. A shortcut is not a third state: it resolves to the
+        /// concrete day it lands on rather than being carried as "today", so
+        /// that one taken just before midnight lands on tomorrow instead of on
+        /// a moment that has already passed.
+        static func relative(minutes: Int, now: Date, calendar: Calendar = .current) -> DueSelection {
+            let target = now.addingTimeInterval(TimeInterval(minutes) * 60)
+            return DueSelection(
+                date: calendar.isDateInTomorrow(target) ? .tomorrow : .today,
+                time: .custom,
+                customTime: target
+            )
+        }
     }
 
     var body: some View {
@@ -130,102 +327,459 @@ struct RemindersPanelView: View {
     // MARK: - Compose
 
     private var compose: some View {
-        VStack(spacing: 8) {
-            TextField("New reminder", text: $draft)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(0.9))
-                .focused($isDraftFocused)
-                .onSubmit(commit)
-                .padding(.horizontal, 9)
-                .frame(height: 28)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(.white.opacity(0.045))
-                )
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                draftField
+                addButton
+            }
 
             HStack(spacing: 6) {
-                ForEach(ReminderTimePreset.allCases) { preset in
-                    timeChip(title: preset.title, isSelected: !isCustomTime && selectedMinutes == preset.minutes) {
-                        isCustomTime = false
-                        selectedMinutes = preset.minutes
-                    }
-                }
+                dateMenu
+                timeMenu
+                Spacer(minLength: 0)
+            }
 
-                timeChip(title: "Custom", isSelected: isCustomTime) {
-                    isCustomTime = true
-                }
-
-                if isCustomTime {
-                    TextField("min", text: $customMinutes)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 44, height: 22)
-                        .padding(.horizontal, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(.white.opacity(0.06))
-                        )
-                        .onSubmit(commit)
-                }
-
-                Spacer(minLength: 8)
-
-                Button(action: commit) {
-                    Text("Add")
-                        .font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 11)
-                        .frame(height: 24)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(MarkdownToolbarButtonStyle())
-                .disabled(!canCommit)
-                .help("Add to Apple Reminders")
+            if showsCustomRow {
+                customRow
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
     }
 
-    private func timeChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+    private var draftField: some View {
+        TextField("New reminder", text: $draft)
+            .textFieldStyle(.plain)
+            .font(.system(size: 13))
+            .foregroundStyle(.white.opacity(0.9))
+            .focused($isDraftFocused)
+            .onSubmit(commit)
+            .padding(.horizontal, 9)
+            .frame(maxWidth: .infinity)
+            .frame(height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(.white.opacity(0.045))
+            )
+    }
+
+    private var addButton: some View {
+        Button(action: commit) {
+            Text("Add")
+                .font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 11)
+                .frame(height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(MarkdownToolbarButtonStyle())
+        .disabled(!canCommit)
+        .help("Add to Apple Reminders")
+    }
+
+    // MARK: - Due date menus
+
+    /// The due-date menu. Its label is read back off the resolution rather than
+    /// off the option, so a time chosen with no date names the day it will land
+    /// on instead of claiming there is none.
+    private var dateMenu: some View {
+        Menu {
+            menuEntry(DueDateOption.none.title, isSelected: dueDateOption == .none) {
+                selectDateOption(.none)
+            }
+            Divider()
+            menuEntry(DueDateOption.today.title, isSelected: dueDateOption == .today) {
+                selectDateOption(.today)
+            }
+            menuEntry(DueDateOption.tomorrow.title, isSelected: dueDateOption == .tomorrow) {
+                selectDateOption(.tomorrow)
+            }
+            menuEntry(DueDateOption.thisWeekend.title, isSelected: dueDateOption == .thisWeekend) {
+                selectDateOption(.thisWeekend)
+            }
+            menuEntry(DueDateOption.nextWeek.title, isSelected: dueDateOption == .nextWeek) {
+                selectDateOption(.nextWeek)
+            }
+            Divider()
+            menuEntry(DueDateOption.custom.title, isSelected: dueDateOption == .custom) {
+                selectDateOption(.custom)
+            }
+        } label: {
+            menuLabel(symbol: "calendar", title: dateButtonTitle)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Due date")
+    }
+
+    /// The due-time menu. The relative shortcuts sit here rather than under the
+    /// date menu because they are about the time half — they leave the date
+    /// half naming the day the offset lands on.
+    private var timeMenu: some View {
+        Menu {
+            menuEntry(DueTimeOption.none.title, isSelected: dueTimeOption == .none) {
+                selectTimeOption(.none)
+            }
+            Divider()
+            ForEach(DueTimeOption.presets, id: \.self) { option in
+                menuEntry(option.title, isSelected: dueTimeOption == option) {
+                    selectTimeOption(option)
+                }
+            }
+            Divider()
+            menuEntry("In 15 Minutes", isSelected: false) { applyRelative(minutes: 15) }
+            menuEntry("In 1 Hour", isSelected: false) { applyRelative(minutes: 60) }
+            Divider()
+            menuEntry(DueTimeOption.custom.title, isSelected: dueTimeOption == .custom) {
+                selectTimeOption(.custom)
+            }
+        } label: {
+            menuLabel(symbol: "clock", title: timeButtonTitle)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Due time")
+    }
+
+    /// One menu entry, ticked while it is the active choice. Written out per
+    /// entry rather than with `ForEach` because both menus group their entries
+    /// with dividers that do not follow the case order.
+    @ViewBuilder
+    private func menuEntry(_ title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
+            if isSelected {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+    }
+
+    private func menuLabel(symbol: String, title: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
             Text(title)
-                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(.white.opacity(isSelected ? 0.9 : 0.55))
-                .padding(.horizontal, 8)
-                .frame(height: 22)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.82))
+                .lineLimit(1)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 7, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.4))
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 22)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(.white.opacity(0.05))
+        )
+        .contentShape(Rectangle())
+    }
+
+    // MARK: - Due date selection
+
+    private func selectDateOption(_ option: DueDateOption) {
+        // Entering Custom starts from today rather than from whatever was left
+        // over last time; picking Custom again keeps the day already chosen.
+        if option == .custom, dueDateOption != .custom {
+            customDate = Date()
+        }
+        withAnimation(.easeOut(duration: 0.15)) { dueDateOption = option }
+    }
+
+    private func selectTimeOption(_ option: DueTimeOption) {
+        // The wheel belongs to the custom field and does not survive leaving it.
+        isTimeWheelShown = false
+        if option == .custom, dueTimeOption != .custom {
+            setCustomTime(Date())
+        }
+        withAnimation(.easeOut(duration: 0.15)) { dueTimeOption = option }
+    }
+
+    /// "In 15 Minutes" and "In 1 Hour" are shortcuts, not a state of their own:
+    /// the meaning of the offset lives in `DueSelection.relative`, and this only
+    /// lays its result onto the row. Both buttons then read the concrete day and
+    /// time, and either half can still be adjusted.
+    private func applyRelative(minutes: Int) {
+        let shortcut = DueSelection.relative(minutes: minutes, now: Date())
+        dueDateOption = shortcut.date
+        isTimeWheelShown = false
+        setCustomTime(shortcut.customTime)
+        withAnimation(.easeOut(duration: 0.15)) { dueTimeOption = shortcut.time }
+    }
+
+    // MARK: - Custom date and time
+
+    /// The custom inputs appear only when a half has actually been set to
+    /// custom. A control that is on screen while its value is being ignored is
+    /// worse than no control at all.
+    private var showsCustomRow: Bool {
+        dueDateOption == .custom || dueTimeOption == .custom
+    }
+
+    private var customRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if dueDateOption == .custom {
+                HStack(spacing: 6) {
+                    rowLabel("Date")
+                    DatePicker("", selection: $customDate, displayedComponents: [.date])
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                        .font(.system(size: 12))
+                        // The panel paints itself dark regardless of system
+                        // appearance. The menus around it draw their own colors,
+                        // but the picker's compact style is system chrome — it
+                        // needs to be told, or a light-mode Mac gets a light
+                        // control on this dark surface.
+                        .environment(\.colorScheme, .dark)
+                        .fixedSize()
+                    Spacer(minLength: 0)
+                }
+            }
+
+            if dueTimeOption == .custom {
+                HStack(spacing: 6) {
+                    rowLabel("Time")
+                    timeField
+                    wheelToggle
+                    Spacer(minLength: 0)
+                }
+
+                if isTimeWheelShown {
+                    DatePicker("", selection: $customTime, displayedComponents: [.hourAndMinute])
+                        .labelsHidden()
+                        .datePickerStyle(.compact)
+                        .font(.system(size: 12))
+                        .environment(\.colorScheme, .dark)
+                        .fixedSize()
+                        .padding(.leading, Self.rowLabelWidth + 6)
+                        .onChange(of: customTime) { _, _ in syncTimeTextFromWheel() }
+                }
+            }
+        }
+    }
+
+    private static let rowLabelWidth: CGFloat = 34
+
+    private func rowLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(.white.opacity(0.45))
+            .frame(width: Self.rowLabelWidth, alignment: .leading)
+    }
+
+    private var timeField: some View {
+        TextField(TimeOfDay(hour: 21, minute: 0).formatted(), text: $customTimeText)
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
+            .foregroundStyle(.white.opacity(0.9))
+            .onSubmit(commit)
+            .padding(.horizontal, 7)
+            .frame(width: 78, height: 22)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(.orange.opacity(0.8), lineWidth: 1)
+                    .opacity(customTimeParseFailed ? 1 : 0)
+            )
+            .help("Type a time such as 21:00, 9pm or 2130")
+            // The field and the wheel are two views onto one value; this is the
+            // only path from typed text into that value.
+            .onChange(of: customTimeText) { _, _ in applyCustomTimeText() }
+    }
+
+    private var wheelToggle: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.15)) { isTimeWheelShown.toggle() }
+        } label: {
+            Image(systemName: "clock")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(isTimeWheelShown ? 0.85 : 0.55))
+                .frame(width: 24, height: 22)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(.white.opacity(isSelected ? 0.1 : 0.035))
+                        .fill(.white.opacity(isTimeWheelShown ? 0.12 : 0.05))
                 )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help("Pick the time with the system picker instead")
     }
+
+    /// Writes the custom time and refreshes the text from it. Called by the
+    /// wheel, by the shortcuts and by the reset — every writer goes through
+    /// here so the two inputs cannot drift apart.
+    private func setCustomTime(_ date: Date) {
+        customTime = date
+        customTimeText = Self.clockText(date)
+        customTimeParseFailed = false
+    }
+
+    private func applyCustomTimeText() {
+        guard let clock = Self.parseClockTime(customTimeText) else {
+            // Deliberately not a rejection: the last value that parsed stays in
+            // force, the field only says that what is typed is not being read.
+            customTimeParseFailed = !customTimeText.isEmpty
+            return
+        }
+        customTimeParseFailed = false
+        customTime = Self.date(setting: clock)
+    }
+
+    /// Refreshes the text from the wheel. Skipped when the text already means
+    /// the same time, which is what stops the two inputs from echoing.
+    private func syncTimeTextFromWheel() {
+        guard Self.parseClockTime(customTimeText) != TimeOfDay(customTime) else { return }
+        customTimeText = Self.clockText(customTime)
+        customTimeParseFailed = false
+    }
+
+    private static func clockText(_ date: Date) -> String {
+        date.formatted(.dateTime.hour().minute())
+    }
+
+    /// Anchors a bare clock time to today. The day it lands on is discarded
+    /// when the due date is composed, so this is only where the two inputs
+    /// agree on a single representation.
+    private static func date(setting clock: TimeOfDay, calendar: Calendar = .current) -> Date {
+        calendar.date(bySettingHour: clock.hour, minute: clock.minute, second: 0, of: Date()) ?? Date()
+    }
+
+    private enum DayHalf {
+        case am
+        case pm
+    }
+
+    /// Parses the loose forms a person types into the custom-time field.
+    ///
+    /// Accepted: `21:00`, `21.00`, `2130`, `930`, `21`, `9`, `9pm`, `9 pm`,
+    /// `9:30pm`. Anything else — including an hour or minute out of range —
+    /// returns `nil`, which the field shows as a warning rather than as a
+    /// refusal to submit.
+    private static func parseClockTime(_ raw: String) -> TimeOfDay? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !text.isEmpty else { return nil }
+
+        // The meridiem comes off first, so what is left is digits and
+        // separators.
+        var half: DayHalf?
+        for (suffix, value) in [("a.m.", DayHalf.am), ("p.m.", DayHalf.pm), ("am", .am), ("pm", .pm)] {
+            guard half == nil, text.hasSuffix(suffix) else { continue }
+            half = value
+            text.removeLast(suffix.count)
+        }
+        text = text.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return nil }
+
+        // `9:30`, `9.30` and `9 30` are two fields; `930` and `2130` are one run
+        // of digits, split at the hundreds.
+        let fields = text.split(whereSeparator: { ":.： ".contains($0) })
+        var hour: Int
+        var minute: Int
+        switch fields.count {
+        case 1:
+            guard let digits = Int(fields[0]) else { return nil }
+            switch fields[0].count {
+            case 1, 2:
+                hour = digits
+                minute = 0
+            case 3, 4:
+                hour = digits / 100
+                minute = digits % 100
+            default:
+                return nil
+            }
+        case 2:
+            guard let first = Int(fields[0]), let second = Int(fields[1]) else { return nil }
+            hour = first
+            minute = second
+        default:
+            return nil
+        }
+
+        if let half {
+            guard (1...12).contains(hour) else { return nil }
+            switch half {
+            case .am: hour = hour == 12 ? 0 : hour
+            case .pm: hour = hour == 12 ? 12 : hour + 12
+            }
+        }
+
+        guard (0...23).contains(hour), (0...59).contains(minute) else { return nil }
+        return TimeOfDay(hour: hour, minute: minute)
+    }
+
+    // MARK: - Derivation
 
     private var canCommit: Bool {
-        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        if isCustomTime {
-            guard let minutes = Int(customMinutes), minutes > 0 else { return false }
-        }
-        return true
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var effectiveMinutes: Int {
-        if isCustomTime, let minutes = Int(customMinutes), minutes > 0 {
-            return minutes
-        }
-        return selectedMinutes
+    /// The two choices as one value. Held as a value so the rule that combines
+    /// them is a pure function of its inputs — "now" among them, which is what
+    /// makes the roll past a given time of day checkable against a fixed clock
+    /// instead of only against the wall clock.
+    private var selection: DueSelection {
+        DueSelection(
+            date: dueDateOption,
+            time: dueTimeOption,
+            customDate: customDate,
+            customTime: customTime
+        )
+    }
+
+    private var resolution: DueResolution {
+        selection.resolution(now: Date())
+    }
+
+    private var dateButtonTitle: String {
+        guard let day = resolution.day else { return DueDateOption.none.title }
+        return Self.dayLabel(day)
+    }
+
+    private var timeButtonTitle: String {
+        guard let instant = resolution.instant else { return DueTimeOption.none.title }
+        return Self.clockText(instant)
+    }
+
+    /// Today and tomorrow are named, anything further out is written as its
+    /// date — the same reading the list rows give a day-level due date.
+    private static func dayLabel(_ day: Date, calendar: Calendar = .current) -> String {
+        if calendar.isDateInToday(day) { return "Today" }
+        if calendar.isDateInTomorrow(day) { return "Tomorrow" }
+        return day.formatted(.dateTime.month(.abbreviated).day())
     }
 
     private func commit() {
         guard canCommit else { return }
         let title = draft
-        let minutes = effectiveMinutes
+        let due = resolution.due
+
         draft = ""
-        Task { await store.create(title: title, minutesFromNow: minutes) }
+        resetDueSelection()
+        // Keep the caret in the field: several reminders in a row should not
+        // need a trip to the mouse between them.
+        isDraftFocused = true
+
+        Task { await store.create(title: title, due: due) }
+    }
+
+    /// Every reminder starts from a blank due row, the way Reminders.app does.
+    /// The chip row this replaces carried the previous choice into the next
+    /// reminder.
+    private func resetDueSelection() {
+        customDate = Date()
+        setCustomTime(Date())
+        withAnimation(.easeOut(duration: 0.15)) {
+            dueDateOption = .none
+            dueTimeOption = .none
+            isTimeWheelShown = false
+        }
     }
 
     // MARK: - Content
@@ -297,7 +851,7 @@ struct RemindersPanelView: View {
             Spacer(minLength: 8)
 
             if let dueDate = item.dueDate {
-                Text(Self.dueText(for: dueDate))
+                Text(Self.dueText(for: dueDate, isAllDay: item.isDueDateAllDay))
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.45))
                     .monospacedDigit()
@@ -486,8 +1040,19 @@ struct RemindersPanelView: View {
 
     /// Compact due label. Deliberately not `DateFormatter` with a fixed format:
     /// the panel shows a *relative* reading for the near term and an absolute
-    /// one beyond that.
-    static func dueText(for date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+    /// one beyond that. An all-day due date carries no time of day, so it
+    /// renders as the bare day.
+    static func dueText(
+        for date: Date,
+        isAllDay: Bool = false,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> String {
+        if isAllDay {
+            if calendar.isDateInToday(date) { return "Today" }
+            if calendar.isDateInTomorrow(date) { return "Tomorrow" }
+            return date.formatted(.dateTime.month(.abbreviated).day())
+        }
         let time = date.formatted(.dateTime.hour().minute())
         if calendar.isDateInToday(date) && date >= now {
             return time
