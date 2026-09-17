@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-YUANNotch is a Swift Package Manager macOS 14+ menu-bar application. Application code lives in `Sources/YUANNotch/`: `main.swift` starts the accessory app, `AppDelegate.swift` wires menus and lifecycle, `NotchPanelController.swift` manages per-display panels, and the SwiftUI views and stores are split into focused files such as `NotebookView.swift` and `NoteStore.swift`. The local Markdown dependency is maintained under `Vendor/swift-markdown-engine/`; avoid modifying vendored code unless the change is intentionally upstreamable. App artwork is in `Resources/`, while `docs/` contains website and downloadable release assets. Packaging logic lives in `Scripts/package-app.sh`.
+YUANNotch is a Swift Package Manager macOS 14+ menu-bar application. Application code lives in `Sources/YUANNotch/`: `main.swift` starts the accessory app, `AppDelegate.swift` wires menus and lifecycle, `NotchPanelController.swift` manages per-display panels, and the SwiftUI views and stores are split into focused files such as `NotebookView.swift` and `NoteStore.swift`. The local Markdown dependency is maintained under `Vendor/swift-markdown-engine/`; avoid modifying vendored code unless the change is intentionally upstreamable. App artwork is in `Resources/`. Packaging logic lives in `Scripts/package-app.sh`.
 
 ## Build, Test, and Development Commands
 
