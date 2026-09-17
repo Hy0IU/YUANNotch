@@ -329,6 +329,13 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
             let isChecked = (value as? Bool) ?? false
             guard let pos = drawPosition(forDocumentCharAt: attrRange.location, point: point) else { return }
+            // The square stands on the item's marker column — the column the
+            // `[ ]` run has been collapsed onto (see `MarkdownStyler+TaskCheckboxes`).
+            // Measuring that run's own position instead would push the square
+            // ~2pt right of it: the marker ahead of it carries a negative kern,
+            // and TextKit reports the character right after such a run at only
+            // half the kern's offset.
+            let boxX = markerColumnX(forCheckboxAt: attrRange.location, in: ts, point: point) ?? pos.x
 
             let font = (ts.attribute(.font, at: attrRange.location, effectiveRange: nil) as? NSFont)
                 ?? (textLayoutManager?.textContainer?.textView?.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize))
@@ -344,7 +351,6 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                     floor(markerWidth * configuration.checkbox.sizeFromMarkerWidthFactor)
                 )
             )
-            let boxX = pos.x + max(0, (markerWidth - size) / 2)
             let centerY = pos.baselineY + (descent - ascent) / 2
             let boxY = centerY - size / 2
 
@@ -383,6 +389,24 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                 checkboxPath.stroke()
             }
         }
+    }
+    /// Left edge of a task square: the item's marker column, i.e. the column of
+    /// the line's first non-whitespace character. The `[ ]` run's own position
+    /// can't be used — see the call site.
+    private func markerColumnX(forCheckboxAt index: Int, in storage: NSTextStorage, point: CGPoint) -> CGFloat? {
+        let nsText = storage.string as NSString
+        guard index >= 0, index < nsText.length else { return nil }
+        let lineRange = nsText.lineRange(for: NSRange(location: index, length: 0))
+        let lineEnd = lineRange.location + lineRange.length
+        var cursor = lineRange.location
+        while cursor < lineEnd,
+              nsText.substring(with: NSRange(location: cursor, length: 1))
+                  .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            cursor += 1
+        }
+        guard cursor < lineEnd,
+              let markerPos = drawPosition(forDocumentCharAt: cursor, point: point) else { return nil }
+        return markerPos.x
     }
 }
 

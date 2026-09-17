@@ -113,9 +113,18 @@ struct MarkdownLists {
                 let depthIndent = CGFloat(tabCount) * indentPerLevel + CGFloat(spaceCount) * spaceWidth
 
                 let markerString = nsText.substring(with: markerRange) as NSString
-                let markerWidth = markerString.size(withAttributes: [.font: baseFont]).width
-                let hasCheckbox = markerString.range(of: "[").location != NSNotFound
+                let bracketIndex = markerString.range(of: "[").location
+                let hasCheckbox = bracketIndex != NSNotFound
                 let isChecked = markerString.range(of: "[x]", options: [.caseInsensitive]).location != NSNotFound
+                // A task item's square replaces the `- [ ]` syntax: the marker
+                // and the gap behind it are collapsed to zero advance by the
+                // styler, so only the `[ ]` run and the space behind it still
+                // widen the marker zone. Measuring the raw marker text here
+                // would put the hanging indent one whole marker past the text
+                // it exists to align with.
+                let markerWidth = hasCheckbox
+                    ? markerString.substring(from: bracketIndex).size(withAttributes: [.font: baseFont]).width
+                    : markerString.size(withAttributes: [.font: baseFont]).width
                 let extraSpacing = (hasCheckbox && !isChecked)
                     ? HeadingHelpers.checkboxExtraSpacing(font: baseFont, configuration: configuration.checkbox)
                     : 0

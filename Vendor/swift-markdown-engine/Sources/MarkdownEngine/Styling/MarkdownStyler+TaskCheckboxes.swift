@@ -6,6 +6,12 @@
 //
 //  GitHub-style `- [ ] / - [x]` task checkbox styling and strike-through.
 //
+//  A task item renders as a drawn square that *replaces* its whole syntax: the
+//  marker and the whitespace behind it are collapsed to zero advance, so the
+//  square lands on the column every other list marker shares and the item text
+//  follows right behind it. The syntax is never revealed — clicking the square
+//  is how an item is toggled (`NativeTextView.toggleTaskCheckboxIfHit`).
+//
 
 import AppKit
 import Foundation
@@ -25,18 +31,8 @@ extension MarkdownStyler {
             if MarkdownDetection.isInsideCodeBlock(range: checkboxRange, codeTokens: ctx.codeTokens) { continue }
             let checkboxText = ctx.nsText.substring(with: checkboxRange)
             let isChecked = checkboxText.range(of: "[x]", options: [.caseInsensitive]) != nil
+
             if markerRange.location != NSNotFound {
-                let syntaxStart = markerRange.location
-                let syntaxEnd = checkboxRange.location + checkboxRange.length
-                let syntaxRange = NSRange(location: syntaxStart, length: max(0, syntaxEnd - syntaxStart))
-                var isActiveSyntax = NSLocationInRange(ctx.caretLocation, syntaxRange)
-                if !isActiveSyntax && ctx.caretLocation == syntaxEnd {
-                    let lastIndex = syntaxEnd - 1
-                    if lastIndex >= syntaxStart && lastIndex < ctx.nsText.length {
-                        let lastChar = ctx.nsText.substring(with: NSRange(location: lastIndex, length: 1))
-                        if lastChar != "\n" { isActiveSyntax = true }
-                    }
-                }
                 if isChecked {
                     let lineRange = ctx.nsText.lineRange(for: checkboxRange)
                     var lineEnd = lineRange.location + lineRange.length
@@ -63,12 +59,27 @@ extension MarkdownStyler {
                         ]))
                     }
                 }
-                if isActiveSyntax { continue }
+
+                // The drawn square replaces the whole `- [ ]` syntax, so the
+                // marker and the whitespace behind it are collapsed to zero
+                // advance instead of merely being painted clear — otherwise the
+                // square would sit a whole marker width to the right of the
+                // column every other list marker shares.
+                // `MarkdownLists.paragraphAttributes` measures the hanging
+                // indent from the `[` onward for the same reason.
+                for hiddenRange in [markerRange, spacerRange] where hiddenRange.location != NSNotFound {
+                    let hiddenText = ctx.nsText.substring(with: hiddenRange)
+                    attrs.append((hiddenRange, [
+                        .foregroundColor: NSColor.clear,
+                        .kern: -HeadingHelpers.textWidth(hiddenText, font: ctx.baseFont)
+                    ]))
+                }
+
+                // A little air between the square and the item text.
                 let afterCheckboxIndex = checkboxRange.location + checkboxRange.length
-                if afterCheckboxIndex < ctx.nsText.length {
+                if !isChecked, afterCheckboxIndex < ctx.nsText.length {
                     let spaceRange = NSRange(location: afterCheckboxIndex, length: 1)
-                    let spaceChar = ctx.nsText.substring(with: spaceRange)
-                    if spaceChar == " " && !isChecked {
+                    if ctx.nsText.substring(with: spaceRange) == " " {
                         let extraSpacing = HeadingHelpers.checkboxExtraSpacing(
                             font: ctx.baseFont,
                             configuration: ctx.configuration.checkbox
@@ -76,12 +87,6 @@ extension MarkdownStyler {
                         attrs.append((spaceRange, [.kern: extraSpacing]))
                     }
                 }
-            }
-            if markerRange.location != NSNotFound {
-                attrs.append((markerRange, [.foregroundColor: NSColor.clear]))
-            }
-            if spacerRange.location != NSNotFound {
-                attrs.append((spacerRange, [.foregroundColor: NSColor.clear]))
             }
             attrs.append((checkboxRange, [
                 .taskCheckbox: isChecked,
