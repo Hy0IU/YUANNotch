@@ -120,44 +120,14 @@ struct NotebookView: View {
     private var expandedContent: some View {
         ZStack(alignment: .topTrailing) {
             VStack(spacing: 12) {
-                HStack(alignment: .center, spacing: 10) {
-                    // G7: the tab pager belongs to the notes surface. Hiding it
-                    // in reminders mode is what keeps the toolbar from
-                    // overflowing on a narrow drawer once the mode toggle is
-                    // added.
-                    if !isRemindersMode {
-                        TabPagerControl(store: store, editorInteractionState: editorInteractionState)
-                    }
-
-                    Spacer(minLength: 0)
-
-                    DrawerModeToggle(
-                        mode: isRemindersMode ? .reminders : .notes,
-                        showsLabels: layout.expandedSize.width >= 430
-                    ) { mode in
-                        workspaceState.fileDragForcesNotesMode = false
-                        settingsStore.drawerMode = mode
-                    }
-
-                    // G6: "Clear" means clear the note, so it has no meaning
-                    // while reminders are showing.
-                    if !isRemindersMode {
-                        Button(action: store.clear) {
-                            Image(systemName: "trash")
-                                .frame(width: 28, height: 28)
-                        }
-                        .buttonStyle(DarkIconButtonStyle())
-                        .help("Clear")
-                    }
-
-                    Button(action: onOpenSettings) {
-                        Image(systemName: "gearshape")
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(DarkIconButtonStyle())
-                    .help("Settings")
-                }
-                .frame(height: toolbarHeight, alignment: .center)
+                NotebookToolbar(
+                    store: store,
+                    settingsStore: settingsStore,
+                    workspaceState: workspaceState,
+                    editorInteractionState: editorInteractionState,
+                    layout: toolbarLayout,
+                    onOpenSettings: onOpenSettings
+                )
 
                 VStack(spacing: shelfSpacing) {
                     Group {
@@ -232,6 +202,17 @@ struct NotebookView: View {
             workspaceState.isShelfDropTargeted = false
             workspaceState.isDraggingShelfItem = false
         }
+    }
+
+    /// What the toolbar row can afford at the width it is actually given.
+    ///
+    /// Taken from the content width rather than the drawer's: the row is inset
+    /// by the panel's side padding, and the tab strip's viewport plus the
+    /// controls beside it have to fit inside that. Three of the row's parts read
+    /// this one value — the pager's strip, the mode toggle's labels and the
+    /// narrowing of the strip — so none of them can drift from the others.
+    private var toolbarLayout: NotebookToolbarLayout {
+        NotebookToolbarLayout(width: editorSize.width, isRemindersMode: isRemindersMode)
     }
 
     private var compactIcon: some View {
@@ -379,51 +360,6 @@ struct NotebookView: View {
 
     private func interpolate(from start: CGFloat, to end: CGFloat, progress: CGFloat) -> CGFloat {
         start + (end - start) * min(max(progress, 0), 1)
-    }
-}
-
-/// Two-segment switch between the notes surface and the reminders surface.
-///
-/// Labels collapse to icons on a narrow drawer: at the 360pt minimum width the
-/// toolbar also carries the tab pager, the settings button, and (in notes mode)
-/// "Clear", so spelled-out segments would not fit.
-private struct DrawerModeToggle: View {
-    let mode: DrawerMode
-    let showsLabels: Bool
-    let onSelect: (DrawerMode) -> Void
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(DrawerMode.allCases) { candidate in
-                Button {
-                    onSelect(candidate)
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: candidate.systemImage)
-                            .font(.system(size: 10, weight: .semibold))
-                        if showsLabels {
-                            Text(candidate.title)
-                                .font(.system(size: 11, weight: candidate == mode ? .semibold : .regular))
-                        }
-                    }
-                    .foregroundStyle(.white.opacity(candidate == mode ? 0.88 : 0.48))
-                    .padding(.horizontal, showsLabels ? 7 : 6)
-                    .frame(height: 24)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(.white.opacity(candidate == mode ? 0.1 : 0))
-                    )
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(candidate == .notes ? "Show notes" : "Show Apple Reminders")
-            }
-        }
-        .padding(2)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(.white.opacity(0.045))
-        )
     }
 }
 

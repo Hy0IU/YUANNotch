@@ -162,6 +162,117 @@ enum DrawerMetrics {
     }
 }
 
+/// What the notebook toolbar can afford at the width it is given.
+///
+/// The pager is the only part of the row that grows with the user's data, so it
+/// is the only part that has to know what the rest of the row costs. Before this
+/// existed the strip had no width of its own: it was a `frame(minWidth: 20)`,
+/// which made it the one item the row squeezed when it ran out of room — but its
+/// dots sit in rigid 26pt slots, so a squeeze only shrank the frame and the dots
+/// painted outside it, over the minus/plus buttons and the controls to their
+/// right. Measured at the default 480pt drawer with eight tabs: the toolbar gets
+/// 428pt, the row to the right of the pager costs 242pt, the pager's chrome
+/// 72pt, which left the strip 104pt of space for 312pt of dots — they spilled
+/// 104pt to each side.
+///
+/// The widths below are the real controls', measured rather than guessed, and
+/// `stripWidth(tabCount:)` is the single figure the pager has to ask for.
+struct NotebookToolbarLayout: Equatable {
+    /// The width the toolbar row is given: the drawer less its side padding.
+    let width: CGFloat
+    let isRemindersMode: Bool
+
+    static let iconButton: CGFloat = 28
+    static let itemSpacing: CGFloat = 10
+    /// The mode toggle with its two labels ("Notes" / "Reminders"), and with
+    /// icons only, at the fonts `DrawerModeToggle` uses. Both figures are
+    /// measured, not derived: `Scripts/toolbar-layout-probe.sh` hosts the real
+    /// toggle and fails if either drifts.
+    static let modeToggleLabelledWidth: CGFloat = 158
+    static let modeToggleIconWidth: CGFloat = 57
+    /// The pager's own chrome: minus, plus, the two gaps around the strip and
+    /// the pill's horizontal padding.
+    static let pagerChrome: CGFloat = 72
+    /// Air the pager keeps before the controls to its right, so a full strip
+    /// never crowds the mode toggle.
+    static let pagerTrailingGap: CGFloat = 12
+    /// Dots are drawn in fixed slots so that selecting one widens the capsule
+    /// without moving its neighbours.
+    static let dotSlot: CGFloat = 26
+    static let dotSpacing: CGFloat = 6
+    static let selectedDotWidth: CGFloat = 20
+    static let unselectedDotWidth: CGFloat = 6
+    /// Below this many dots the toggle's labels are not worth their 99pt.
+    static let minimumDotsWithLabels = 3
+
+    static var dotStride: CGFloat { dotSlot + dotSpacing }
+
+    var showsClearButton: Bool { !isRemindersMode }
+
+    /// Labels cost 99pt — three dots — so they are worth showing only where the
+    /// strip still has room for a few. Written as a derivation because the old
+    /// test read the *drawer's* width (`>= 430`) while the row is 52pt narrower:
+    /// a drawer could keep labels the row could not pay for.
+    var showsModeToggleLabels: Bool {
+        guard !isRemindersMode else { return true }
+        return width >= Self.widthNeededForLabels
+    }
+
+    /// Everything the toolbar puts to the right of the pager.
+    static func trailingReserve(showsClearButton: Bool, showsModeToggleLabels: Bool) -> CGFloat {
+        let toggle = showsModeToggleLabels ? modeToggleLabelledWidth : modeToggleIconWidth
+        var reserve = itemSpacing + toggle
+        if showsClearButton { reserve += itemSpacing + iconButton }
+        reserve += itemSpacing + iconButton
+        return reserve + pagerTrailingGap
+    }
+
+    private static var widthNeededForLabels: CGFloat {
+        pagerChrome
+            + trailingReserve(showsClearButton: true, showsModeToggleLabels: true)
+            + CGFloat(minimumDotsWithLabels) * dotStride
+    }
+
+    /// Width of the dot row when nothing constrains it.
+    static func stripContentWidth(tabCount: Int) -> CGFloat {
+        guard tabCount > 0 else { return 0 }
+        return CGFloat(tabCount) * dotStride - dotSpacing
+    }
+
+    /// Width the strip is allowed to occupy. The dots do not shrink to fit: what
+    /// does not fit is reached by sliding the strip, so this is its viewport.
+    func stripWidth(tabCount: Int) -> CGFloat {
+        let budget = width
+            - Self.pagerChrome
+            - Self.trailingReserve(
+                showsClearButton: showsClearButton,
+                showsModeToggleLabels: showsModeToggleLabels
+            )
+        return min(Self.stripContentWidth(tabCount: tabCount), max(budget, 0))
+    }
+
+    /// The furthest the strip can slide before its last dot reaches the edge.
+    func maximumScrollOffset(tabCount: Int) -> CGFloat {
+        max(Self.stripContentWidth(tabCount: tabCount) - stripWidth(tabCount: tabCount), 0)
+    }
+
+    /// The smallest change to `currentOffset` that puts `tabIndex`'s slot fully
+    /// inside the viewport — the rule a list uses to keep a selection visible,
+    /// which moves the strip only when the selected dot would be hidden.
+    func scrollOffset(keepingVisible tabIndex: Int, currentOffset: CGFloat, tabCount: Int) -> CGFloat {
+        let limit = maximumScrollOffset(tabCount: tabCount)
+        var offset = min(max(currentOffset, 0), limit)
+        guard tabCount > 0 else { return offset }
+
+        let viewport = stripWidth(tabCount: tabCount)
+        let slotStart = CGFloat(min(max(tabIndex, 0), tabCount - 1)) * Self.dotStride
+        let slotEnd = slotStart + Self.dotSlot
+        if slotStart < offset { offset = slotStart }
+        if slotEnd > offset + viewport { offset = slotEnd - viewport }
+        return min(max(offset, 0), limit)
+    }
+}
+
 extension NSScreen {
     var displayID: CGDirectDisplayID? {
         guard let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {

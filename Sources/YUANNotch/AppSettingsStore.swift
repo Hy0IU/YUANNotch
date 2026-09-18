@@ -26,28 +26,7 @@ enum TriggerMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// Which surface the drawer shows.
-enum DrawerMode: String, CaseIterable, Identifiable {
-    case notes
-    case reminders
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .notes: return "Notes"
-        case .reminders: return "Reminders"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .notes: return "square.and.pencil"
-        case .reminders: return "checklist"
-        }
-    }
-}
-
+/// Which surface the drawer shows. Defined in DrawerMode.swift.
 @MainActor
 final class AppSettingsStore: ObservableObject {
     /// Persisted, so the drawer reopens on the mode it was left in.
