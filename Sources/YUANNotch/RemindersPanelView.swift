@@ -7,6 +7,11 @@ import SwiftUI
 /// there is no "completed" section and no clear-completed affordance.
 struct RemindersPanelView: View {
     @ObservedObject var store: ReminderStore
+    /// Owns the sort preference, as it owns every persisted choice. Observed
+    /// so picking a new order re-sorts the list in this update, rather than
+    /// waiting for the next store commit; `store` reads the same value when
+    /// it builds the rows, so there is one preference and no copy.
+    @ObservedObject var settingsStore: AppSettingsStore
     /// The reminder being composed — text, due date and all.
     ///
     /// Observed here but owned by the store, because this view is not the only
@@ -88,6 +93,8 @@ struct RemindersPanelView: View {
 
             Spacer(minLength: 8)
 
+            sortPicker
+
             if store.failedWriteCount > 0 {
                 Text("\(store.failedWriteCount) not written")
                     .font(.system(size: 11))
@@ -146,6 +153,36 @@ struct RemindersPanelView: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Switch list")
+    }
+
+    /// Chooses how rows are ordered inside each group. The groups themselves
+    /// and their sequence stay fixed — Overdue → Today → Tomorrow → Later →
+    /// No date is the calendar's narrative, not a preference — so this menu is
+    /// about ordering only.
+    private var sortPicker: some View {
+        Menu {
+            ForEach(ReminderSortOrder.allCases) { order in
+                Button {
+                    settingsStore.reminderSortOrder = order
+                } label: {
+                    if settingsStore.reminderSortOrder == order {
+                        Label(order.label, systemImage: "checkmark")
+                    } else {
+                        Label(order.label, systemImage: order.systemImage)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
+                .frame(width: 26, height: 24)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Sort reminders")
     }
 
     private func listMenuTitle(_ list: ReminderList) -> String {

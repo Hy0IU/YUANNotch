@@ -106,6 +106,16 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    /// How the reminders panel orders the rows inside each group. Read by
+    /// `ReminderStore.groupedItems` and written by the panel's sort menu —
+    /// the settings page and the panel share this one value, never a copy,
+    /// and it survives both a mode switch and a relaunch.
+    @Published var reminderSortOrder: ReminderSortOrder = .dueDate {
+        didSet {
+            UserDefaults.standard.set(reminderSortOrder.rawValue, forKey: Self.reminderSortOrderKey)
+        }
+    }
+
     static let defaultExpandedTopCornerRadius: Double = 10
     static let defaultExpandedBottomCornerRadius: Double = 20
     static let defaultHoverActivationDelay: Double = 0.30
@@ -121,6 +131,7 @@ final class AppSettingsStore: ObservableObject {
     private static let expandedBottomCornerRadiusKey = "yuanNotch.expandedBottomCornerRadius"
     private static let appleRemindersEnabledKey = "yuanNotch.appleReminders.enabled"
     private static let appleRemindersListIDKey = "yuanNotch.appleReminders.listID"
+    private static let reminderSortOrderKey = "yuanNotch.appleReminders.sortOrder"
 
     init() {
         drawerMode = UserDefaults.standard.string(forKey: Self.drawerModeKey)
@@ -156,6 +167,9 @@ final class AppSettingsStore: ObservableObject {
             .object(forKey: Self.appleRemindersEnabledKey) as? Bool ?? false
         remindersCalendarIdentifier = UserDefaults.standard
             .string(forKey: Self.appleRemindersListIDKey)
+        reminderSortOrder = UserDefaults.standard
+            .string(forKey: Self.reminderSortOrderKey)
+            .flatMap(ReminderSortOrder.init(rawValue:)) ?? .dueDate
     }
 
     private static func loadRadius(forKey key: String, fallback: Double) -> Double {

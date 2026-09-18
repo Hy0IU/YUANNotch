@@ -2,87 +2,15 @@ import AppKit
 import Combine
 import Foundation
 
-// MARK: - Panel model
-
-/// How a row's write is doing.
-///
-/// There is deliberately no `synced` case: the app cannot read iCloud state,
-/// and an EventKit write succeeds even when the Mac is offline. Anything
-/// claiming sync would be a lie (see the plan's B2).
-enum ReminderSyncState: Equatable {
-    case idle
-    case writing
-    case failed(String)
-}
-
-/// A reminder as the panel renders it: either a live row from EventKit, or a
-/// local placeholder for a create that has not reached the store yet.
-///
 /// The placeholder is what keeps the failed-write state honest. With EventKit
 /// as the source of truth, a reminder that failed to save does not exist on the
 /// system side, so without a local stand-in the row would silently vanish.
-struct ReminderPanelItem: Identifiable, Equatable {
-    enum Origin: Equatable {
-        case remote(id: String)
-        case pendingLocal(id: UUID)
-    }
-
-    let id: String
-    let origin: Origin
-    let title: String
-    let dueDate: Date?
-    /// True for a day-level due date (see `ReminderDue`): grouping must not
-    /// read a time of day out of `dueDate`.
-    let isDueDateAllDay: Bool
-    let syncState: ReminderSyncState
-
-    /// A placeholder has no system-side existence, so completing it is
-    /// meaningless — these rows have their checkbox disabled.
-    var isCompletable: Bool { remoteID != nil }
-
-    /// Editing rewrites the reminder on the system, so it needs a row that is
-    /// there. The same fact `isCompletable` rests on, asked a different
-    /// question: they travel together today but need not stay married, and each
-    /// name says which behaviour it gates.
-    var isEditable: Bool { remoteID != nil }
-
-    var remoteID: String? {
-        if case .remote(let id) = origin { return id }
-        return nil
-    }
-
-    var localID: UUID? {
-        if case .pendingLocal(let id) = origin { return id }
-        return nil
-    }
-}
-
 /// A placeholder plus the list it was created for. S1: a failed create must
 /// not follow the user to another list, so the list is part of the payload
 /// rather than inferred at render time.
 private struct PendingPlaceholder {
     var item: ReminderPanelItem
     let listID: String
-}
-
-enum ReminderGroup: String, CaseIterable, Identifiable {
-    case overdue
-    case today
-    case tomorrow
-    case later
-    case undated
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .overdue: return "Overdue"
-        case .today: return "Today"
-        case .tomorrow: return "Tomorrow"
-        case .later: return "Later"
-        case .undated: return "No date"
-        }
-    }
 }
 
 // MARK: - Retry queue
@@ -367,7 +295,7 @@ final class ReminderStore: ObservableObject {
         calendar: Calendar = .current
     ) -> [(group: ReminderGroup, items: [ReminderPanelItem])] {
         let bucketed = Dictionary(grouping: items) { item in
-            Self.group(
+            ReminderGroup.group(
                 for: item.dueDate,
                 isAllDay: item.isDueDateAllDay,
                 now: now,
@@ -377,51 +305,9 @@ final class ReminderStore: ObservableObject {
 
         return ReminderGroup.allCases.compactMap { group in
             guard let bucket = bucketed[group], !bucket.isEmpty else { return nil }
-            return (group, bucket.sorted(by: Self.ordersBefore))
-        }
-    }
-
-    static func group(
-        for dueDate: Date?,
-        isAllDay: Bool = false,
-        now: Date,
-        calendar: Calendar
-    ) -> ReminderGroup {
-        guard let dueDate else { return .undated }
-        if isAllDay {
-            // A day-level due date is overdue only once its day has passed:
-            // "today, no time" stays in Today until midnight, the way
-            // Reminders.app reads it.
-            if dueDate < calendar.startOfDay(for: now) { return .overdue }
-            if calendar.isDateInToday(dueDate) { return .today }
-            if calendar.isDateInTomorrow(dueDate) { return .tomorrow }
-            return .later
-        }
-        // Overdue is `dueDate < now`, not `< start of today`: a 15-minute
-        // reminder created this morning is overdue by the afternoon, and
-        // leaving it under "Today" contradicts how Reminders.app reads it.
-        if dueDate < now { return .overdue }
-        if calendar.isDateInToday(dueDate) { return .today }
-        if calendar.isDateInTomorrow(dueDate) { return .tomorrow }
-        return .later
-    }
-
-    private static func ordersBefore(_ lhs: ReminderPanelItem, _ rhs: ReminderPanelItem) -> Bool {
-        switch (lhs.dueDate, rhs.dueDate) {
-        case let (left?, right?):
-            // Reminder due dates carry second granularity only (measured), so
-            // only compare on that scale — sub-second deltas are an artefact of
-            // the components round-trip, not real ordering information.
-            let lhsSecond = Int(left.timeIntervalSince1970)
-            let rhsSecond = Int(right.timeIntervalSince1970)
-            if lhsSecond != rhsSecond { return lhsSecond < rhsSecond }
-            return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
-        case (nil, nil):
-            return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
-        case (nil, _):
-            return false
-        case (_, nil):
-            return true
+            // The preference lives in the settings store — read here, written by
+            // the panel's sort menu — so there is one value, never a copy.
+            return (group, bucket.sorted(by: settingsStore.reminderSortOrder.comparator()))
         }
     }
 
