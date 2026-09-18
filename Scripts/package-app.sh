@@ -28,7 +28,32 @@ if [[ ! -d "$RESOURCE_BUNDLE" ]]; then
   echo "error: swift build did not produce $RESOURCE_BUNDLE_NAME" >&2
   exit 1
 fi
-cp -R "$RESOURCE_BUNDLE" "$MACOS_DIR/"
+
+# Ship it as a bundle that is actually well formed. A directory whose name ends
+# in `.bundle` is a bundle to macOS, and `codesign` refuses to sign one that has
+# no `Contents/Info.plist` — it rejects the whole app with "bundle format
+# unrecognized, invalid, or unsuitable". SwiftPM emits the payload flat, so give
+# it the structure the name promises; `Bundle(url:)` resolves `Glyph/` under
+# `Contents/Resources/`, which is where AppGlyph looks.
+RESOURCE_BUNDLE_DEST="$MACOS_DIR/$RESOURCE_BUNDLE_NAME"
+mkdir -p "$RESOURCE_BUNDLE_DEST/Contents/Resources"
+for item in "$RESOURCE_BUNDLE"/*; do
+  cp -R "$item" "$RESOURCE_BUNDLE_DEST/Contents/Resources/"
+done
+cat > "$RESOURCE_BUNDLE_DEST/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.hy0iu.YUANNotch.resources</string>
+  <key>CFBundleName</key>
+  <string>YUANNotch_YUANNotch</string>
+  <key>CFBundlePackageType</key>
+  <string>BNDL</string>
+</dict>
+</plist>
+PLIST
 
 if [[ -f "$SOURCE_ICON" ]]; then
   TMP_DIR="$(mktemp -d)"
@@ -78,7 +103,11 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR"
+# Sign the resource bundle first and the app second. `--deep` is deprecated for
+# signing — it exists for verification — and the resource bundle is the only
+# nested code there is, so naming it costs nothing and keeps the order explicit.
+codesign --force --sign "$SIGN_IDENTITY" "$MACOS_DIR/$RESOURCE_BUNDLE_NAME"
+codesign --force --sign "$SIGN_IDENTITY" "$APP_DIR"
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
 rm -rf "$APPLICATIONS_APP_DIR"
