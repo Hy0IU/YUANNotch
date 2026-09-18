@@ -338,10 +338,27 @@ struct NotebookView: View {
         )
     }
 
+    /// How much air the content keeps from the panel's own silhouette edge —
+    /// the only part of the horizontal padding that is a design decision.
+    private var contentSideMargin: CGFloat {
+        interpolate(
+            from: DrawerMetrics.contentSideMargin,
+            to: DrawerMetrics.detachedContentSideMargin,
+            progress: drawerState.detachmentProgress
+        )
+    }
+
+    /// The content's inset from the drawer's *frame*.
+    ///
+    /// The shape draws its side edges inside the frame, so the padding has to be
+    /// measured from where the panel actually starts — `panelSideInset` is
+    /// exactly the shape's own `sideInset`, which cannot drift from it. Adding a
+    /// fixed margin to the frame instead is right only at the default radius: at
+    /// a radius of 25 it left the shelf's drop outline 1pt from the panel's
+    /// sides, which is the bug this measures from the shape instead. At the
+    /// default radius of 10 the sum is 26 attached / 18 detached, as before.
     private var contentHorizontalPadding: CGFloat {
-        // The NotchShape insets both side edges by the expanded top corner
-        // radius (10), so add it back to keep a comfortable visible margin
-        interpolate(from: 26, to: 18, progress: drawerState.detachmentProgress)
+        panelSideInset + contentSideMargin
     }
 
     private var contentBottomPadding: CGFloat { DrawerMetrics.contentBottomPadding }

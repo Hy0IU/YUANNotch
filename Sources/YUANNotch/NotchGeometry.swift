@@ -62,6 +62,16 @@ enum DrawerMetrics {
     static let editorSpacing: CGFloat = 12
     static let shelfSpacing: CGFloat = 8
     static let contentBottomPadding: CGFloat = 18
+
+    /// Gap the content keeps from the panel's own silhouette edge.
+    ///
+    /// Not the content's inset from the drawer's frame: `DetachablePanelShape`
+    /// draws its side edges inside the frame by the user's top-corner radius, so
+    /// the real padding is this margin *plus* that inset. Keeping the two apart
+    /// is what stops the padding from being right only at the default radius —
+    /// written as one number it has to assume one.
+    static let contentSideMargin: CGFloat = 16
+    static let detachedContentSideMargin: CGFloat = 18
     /// Below this the editor is not worth opening.
     static let minimumEditorHeight: CGFloat = 120
 
