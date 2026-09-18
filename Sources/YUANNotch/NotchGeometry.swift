@@ -36,6 +36,54 @@ enum ShelfMetrics {
     }
 }
 
+/// Footprint and placement of the bottom-right resize grip.
+///
+/// It sits here with the other drawer metrics because the drawer's bottom
+/// padding has to clear exactly this box. Those two numbers have to agree from
+/// opposite ends — the view places the grip, `DrawerMetrics` keeps the content
+/// out of its way — and while the placement lived in the view and the reserve
+/// was a typed-in `18`, the grip's upper dots ended up drawn on the inner
+/// panel's corner with nothing to catch it.
+enum ResizeGripMetrics {
+    static let size: CGFloat = 16
+    /// Distance from the panel's bottom edge.
+    static let bottomInset: CGFloat = 9
+    /// Distance *inside* the panel's silhouette edge. `DetachablePanelShape`
+    /// draws that edge inside the frame, so the view adds `panelSideInset`.
+    static let silhouetteInset: CGFloat = 8
+    /// Air kept between the grip's footprint and the inner panel above it.
+    static let clearance: CGFloat = 8
+    /// Air added around the grip's footprint inside its grab zone, so the corner
+    /// can be hit without aiming at it.
+    static let grabSlack: CGFloat = 10
+
+    /// The zone whose mouse-down starts a drawer resize, in screen coordinates.
+    ///
+    /// The grip's own box plus `grabSlack` to its left and above, stopped at the
+    /// silhouette's right edge and at the inner panel's bottom edge. Both stops
+    /// are why this is derived rather than typed in: as a fixed `48 x 44`
+    /// measured from a `10`pt inset, a fifth of it sat under the inner panel at
+    /// the 25pt radius this drawer runs, so a click that looked like it belonged
+    /// to the panel started a resize instead. Holding the top at
+    /// `contentBottomInset` makes that overlap impossible at any radius, because
+    /// the panel's own bottom edge is exactly what `contentBottomPadding` sets.
+    static func grabRect(
+        in panelFrame: NSRect,
+        sideInset: CGFloat,
+        contentBottomInset: CGFloat
+    ) -> NSRect {
+        let right = panelFrame.maxX - sideInset
+        let left = right - silhouetteInset - size - grabSlack
+        let height = min(bottomInset + size + grabSlack, contentBottomInset)
+        return NSRect(
+            x: left,
+            y: panelFrame.minY,
+            width: right - left,
+            height: height
+        )
+    }
+}
+
 /// The drawer's layout metrics, and the shortest drawer they add up to.
 ///
 /// They live here rather than in the view because `minimumHeight` has to be
@@ -58,10 +106,33 @@ enum DrawerMetrics {
     static var attachedTopPadding: CGFloat {
         referenceCompactHeight + attachedTopPaddingInset
     }
+
+    /// How far `DetachablePanelShape` draws each side edge inside the frame.
+    ///
+    /// This is the shape's own `sideInset`. Named here because the things
+    /// measured from the panel's *visible* edge — the content's padding, the
+    /// resize grip, and the grip's grab zone — all live in different files, and
+    /// each one carrying its own idea of it is how two of them ended up assuming
+    /// the default radius of 10 while the drawer ran at 25.
+    static func panelSideInset(
+        topCornerRadius: CGFloat,
+        detachmentProgress: CGFloat
+    ) -> CGFloat {
+        topCornerRadius * (1 - min(max(detachmentProgress, 0), 1))
+    }
     static let toolbarHeight: CGFloat = 28
     static let editorSpacing: CGFloat = 12
     static let shelfSpacing: CGFloat = 8
-    static let contentBottomPadding: CGFloat = 18
+
+    /// The gutter under the inner panel — the resize grip's corner.
+    ///
+    /// Not a taste call, and it cannot be smaller than the grip: a 16pt grip
+    /// inset 9pt needs 25pt, so the old flat `18` left the grip's upper dots on
+    /// the inner panel's bottom-right corner. Derived from `ResizeGripMetrics`
+    /// so growing the grip grows the gutter instead of the overlap.
+    static var contentBottomPadding: CGFloat {
+        ResizeGripMetrics.bottomInset + ResizeGripMetrics.size + ResizeGripMetrics.clearance
+    }
 
     /// Gap the content keeps from the panel's own silhouette edge.
     ///

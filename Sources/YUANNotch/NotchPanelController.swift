@@ -1309,13 +1309,40 @@ final class NotchPanelController: NSObject {
     }
 
     /// Bottom-right hot zone of the drawer panel, in screen coordinates.
-    /// Aligned to the visible corner: the NotchShape insets the right edge
-    /// by the expanded top corner radius (10).
+    ///
+    /// The grip's own metrics decide it (see `ResizeGripMetrics.grabRect`), so
+    /// the zone cannot drift from the corner it grabs. It used to be a fixed
+    /// `48 x 44` measured from the frame's right edge by a comment that assumed
+    /// the default 10pt radius — at the 25pt radius this drawer runs, a fifth of
+    /// it lay under the inner panel, and a click there started a resize instead
+    /// of reaching what looked like the panel.
     private var drawerGripRect: NSRect {
-        guard let frame = activeDrawerPanel?.frame else { return .zero }
-        // Generous hot zone ending at the visible (inset) right edge,
-        // so the grip is easy to grab
-        return NSRect(x: frame.maxX - 58, y: frame.minY, width: 48, height: 44)
+        guard let panel = activeDrawerPanel else { return .zero }
+        return ResizeGripMetrics.grabRect(
+            in: panel.frame,
+            sideInset: drawerPanelSideInset,
+            contentBottomInset: DrawerMetrics.contentBottomPadding
+        )
+    }
+
+    /// How far the panel being resized insets its silhouette inside its frame
+    /// right now: the user's top-corner radius while docked, and nothing once the
+    /// drawer floats, because the detach morph has given the inset back.
+    private var drawerPanelSideInset: CGFloat {
+        guard let panel = activeDrawerPanel else { return 0 }
+
+        let progress: CGFloat
+        if panel === floatingPanel {
+            progress = floatingDrawerState?.detachmentProgress ?? 1
+        } else {
+            progress = drawerScreen.flatMap { drawerStates[$0.uniqueID] }?
+                .detachmentProgress ?? 0
+        }
+
+        return DrawerMetrics.panelSideInset(
+            topCornerRadius: CGFloat(settingsStore.expandedTopCornerRadius),
+            detachmentProgress: progress
+        )
     }
 
     /// Panel-level resize handling. This lives on the panel (not a SwiftUI gesture)

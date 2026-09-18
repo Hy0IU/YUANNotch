@@ -105,11 +105,14 @@ struct NotebookView: View {
         .overlay(alignment: .bottomTrailing) {
             // Visual indicator only — dragging is handled at the panel level
             // (see NotchPanelController.handleResizeMouseEvent).
-            // Trailing padding tracks the visible (inset) right edge of the shape.
+            // Trailing padding tracks the visible (inset) right edge of the shape,
+            // so `panelSideInset` is added to the grip's own silhouette inset.
+            // The same metrics give `DrawerMetrics.contentBottomPadding` the
+            // gutter that keeps the inner panel clear of this grip.
             if drawerState.isExpanded {
                 ResizeGrip()
-                    .padding(.trailing, panelSideInset + 8)
-                    .padding(.bottom, 9)
+                    .padding(.trailing, panelSideInset + ResizeGripMetrics.silhouetteInset)
+                    .padding(.bottom, ResizeGripMetrics.bottomInset)
             }
         }
     }
@@ -268,7 +271,10 @@ struct NotebookView: View {
     }
 
     private var panelSideInset: CGFloat {
-        topCornerRadius * (1 - drawerState.detachmentProgress)
+        DrawerMetrics.panelSideInset(
+            topCornerRadius: topCornerRadius,
+            detachmentProgress: drawerState.detachmentProgress
+        )
     }
 
     private var expandedContentOpacity: CGFloat {

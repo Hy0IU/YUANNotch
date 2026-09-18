@@ -14,7 +14,7 @@ struct ResizeGrip: View {
                 }
             }
         }
-        .frame(width: 16, height: 16)
+        .frame(width: ResizeGripMetrics.size, height: ResizeGripMetrics.size)
         .contentShape(Rectangle())
     }
 }
