@@ -134,6 +134,7 @@ struct NotebookView: View {
                         if isRemindersMode {
                             RemindersPanelView(
                                 store: reminderStore,
+                                composer: reminderStore.composer,
                                 size: editorSize,
                                 onOpenSettings: onOpenSettings
                             )

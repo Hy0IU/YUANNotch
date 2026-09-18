@@ -97,6 +97,16 @@ enum PendingOperation: Codable, Equatable {
 /// drawer's reminders panel.
 @MainActor
 final class ReminderStore: ObservableObject {
+    /// The reminder the user is composing.
+    ///
+    /// Held here rather than by the panel because the panel is not permanent: the
+    /// drawer swaps the whole reminders surface for the notes one on every mode
+    /// switch, so anything the panel owns goes with it. A half-typed reminder did
+    /// — twice over, since the draft and the due date chose the same moment to
+    /// vanish. This store lives as long as the app does, which is the lifetime the
+    /// draft needs.
+    let composer = ReminderComposer()
+
     @Published private(set) var authorization: RemindersAuthorization = .notDetermined
     @Published private(set) var lists: [ReminderList] = []
     @Published private(set) var items: [ReminderPanelItem] = []
