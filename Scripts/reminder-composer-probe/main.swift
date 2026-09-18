@@ -343,6 +343,7 @@ private func checkPipeline() {
 private final class SwapFlag: ObservableObject {
     @Published var showsReminders = true
     @Published var keystrokes = 0
+    @Published var focusRequest = 0
 }
 
 @MainActor
@@ -389,12 +390,9 @@ private struct ProbeComposeRow: View {
 }
 
 @MainActor
-private func makeHost(flag: SwapFlag, composer: ReminderComposer) -> NSHostingView<AnyView> {
-    let host = NSHostingView(rootView: AnyView(
-        ProbeSurface(flag: flag, composer: composer)
-            .frame(width: 320, height: 80)
-    ))
-    host.frame = NSRect(x: 0, y: 0, width: 320, height: 80)
+private func makeHost<V: View>(_ view: V, width: CGFloat, height: CGFloat = 80) -> NSHostingView<AnyView> {
+    let host = NSHostingView(rootView: AnyView(view.frame(width: width, height: height)))
+    host.frame = NSRect(x: 0, y: 0, width: width, height: height)
     let window = NSWindow(
         contentRect: host.frame,
         styleMask: [.borderless],
@@ -421,7 +419,7 @@ private func checkOwnership() {
 
     let flag = SwapFlag()
     let composer = ReminderComposer()
-    let host = makeHost(flag: flag, composer: composer)
+    let host = makeHost(ProbeSurface(flag: flag, composer: composer), width: 320)
 
     withExtendedLifetime(host) {
         // "Type" into the row.
@@ -458,12 +456,111 @@ private func checkOwnership() {
     }
 }
 
-// MARK: - 5 · The panel holds no copy of this state
+// MARK: - 5 · The caret lands where typing continues
+
+/// `NotebookView`'s shape again: the drawer shows one surface or the other.
+private struct ProbeComposeSurface: View {
+    @ObservedObject var flag: SwapFlag
+    @ObservedObject var composer: ReminderComposer
+
+    var body: some View {
+        if flag.showsReminders {
+            HStack(spacing: 6) {
+                // The placeholder mirrors the panel's `draftPlaceholder`; the
+                // source check below pins the panel's own copy.
+                TextField("New reminder", text: $composer.draft)
+                    .fieldCaretFocus(request: flag.focusRequest, placeholder: "New reminder")
+                    .frame(width: 150, height: 24)
+                TextField("21:00", text: .constant(""))
+                    .frame(width: 70, height: 22)
+            }
+        } else {
+            Color.clear
+        }
+    }
+}
+
+@MainActor
+private func firstField(placeholder: String, in view: NSView) -> NSTextField? {
+    if let field = view as? NSTextField, field.placeholderString == placeholder { return field }
+    for subview in view.subviews {
+        if let field = firstField(placeholder: placeholder, in: subview) { return field }
+    }
+    return nil
+}
+
+@MainActor
+private func checkCaret() {
+    print("")
+    print("— 5 · the caret lands where typing continues —")
+
+    let flag = SwapFlag()
+    let composer = ReminderComposer()
+    let host = makeHost(
+        ProbeComposeSurface(flag: flag, composer: composer),
+        width: 320
+    )
+
+    withExtendedLifetime(host) {
+        // Type into the row, then ask for focus the plain way — what the first
+        // version of the restore did, and what the user saw.
+        composer.draft = "买牛奶"
+        flag.showsReminders = true
+        settle(host)
+        guard let field = firstField(placeholder: "New reminder", in: host) else {
+            check(false, "the compose field exists in the AppKit tree", "no NSTextField with that placeholder")
+            return
+        }
+
+        host.window?.makeFirstResponder(field)
+        settle(host)
+        let plainRange = field.currentEditor().map { "\($0.selectedRange)" } ?? "no editor"
+        check(
+            plainRange == "{0, 3}",
+            "plain focus selects all of the text — the behaviour being avoided",
+            "draft of 3 characters, editor selection = \(plainRange)"
+        )
+
+        // The field and its editor also have to be findable when a second field
+        // (the custom time) shares the row.
+        let other = firstField(placeholder: "21:00", in: host)
+        check(
+            other != nil && other !== field,
+            "placeholder targeting tells the two fields apart",
+            other != nil ? "two fields found, matched by placeholder" : "the second field is missing"
+        )
+
+        // Now the restore path: surface away and back, then the caret request.
+        host.window?.makeFirstResponder(nil)
+        settle(host)
+        flag.showsReminders = false
+        settle(host)
+        flag.showsReminders = true
+        settle(host)
+        flag.focusRequest += 1
+        settle(host)
+
+        guard let restored = firstField(placeholder: "New reminder", in: host) else {
+            check(false, "the field exists after the round trip", "no NSTextField with that placeholder")
+            return
+        }
+        let editor = restored.currentEditor()
+        let range = editor.map { "\($0.selectedRange)" } ?? "no editor"
+        let length = (restored.stringValue as NSString).length
+        let isEditing = host.window?.firstResponder === editor
+        check(
+            editor != nil && range == "{\(length), 0}" && isEditing,
+            "a restored draft comes back with the caret at its end",
+            "text \"\(restored.stringValue)\" (length \(length)), editor selection = \(range), field is first responder = \(isEditing)"
+        )
+    }
+}
+
 
 @MainActor
 private func checkPanelHoldsNoCopy(path: String) {
     print("")
-    print("— 5 · the panel keeps no view-owned copy —")
+    print("— 6 · the panel keeps no view-owned copy and no second focus path —")
 
     guard let source = try? String(contentsOfFile: path, encoding: .utf8) else {
         check(false, "the panel's source could be read", "could not read \(path)")
@@ -471,7 +568,7 @@ private func checkPanelHoldsNoCopy(path: String) {
     }
 
     let forbidden = [
-        "@State private var draft",
+        "@State private var draft =",
         "@State private var dueDateOption",
         "@State private var dueTimeOption",
         "@State private var customTime",
@@ -480,6 +577,11 @@ private func checkPanelHoldsNoCopy(path: String) {
         "@State private var isTimeWheelShown",
         "private var showsCustomRow",
         "private func parseClockTime",
+        // A second focus path: `@FocusState` lands with the whole text selected,
+        // which is the regression the caret bridge exists to prevent. Matched as
+        // a declaration so a doc comment naming it stays allowed.
+        "@FocusState private",
+        ".focused(",
     ]
     let present = forbidden.filter { source.contains($0) }
 
@@ -489,6 +591,19 @@ private func checkPanelHoldsNoCopy(path: String) {
         present.isEmpty
             ? "checked \(forbidden.count) declarations: a view-owned copy of any of them is how this bug returns"
             : "still declared in the panel: \(present.joined(separator: ", "))"
+    )
+
+    let required = [
+        "static let draftPlaceholder = \"New reminder\"",
+        ".fieldCaretFocus(request: draftFocusRequest, placeholder: Self.draftPlaceholder)",
+    ]
+    let absent = required.filter { !source.contains($0) }
+    check(
+        absent.isEmpty,
+        "focus goes through the caret bridge",
+        absent.isEmpty
+            ? "the field declares its placeholder once and asks for focus through FieldCaretFocus"
+            : "missing from the panel: \(absent.joined(separator: ", "))"
     )
 }
 
@@ -511,6 +626,7 @@ MainActor.assumeIsolated {
     checkResolutionTable()
     checkPipeline()
     checkOwnership()
+    checkCaret()
 
     print("")
     print(failures == 0 ? "every check passed" : "\(failures) check(s) failed")

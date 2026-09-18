@@ -45,7 +45,11 @@ struct RemindersPanelView: View {
     /// happens behind a full-strength scrim and the new rows fade up.
     @State private var staleScrim: Double = 0
 
-    @FocusState private var isDraftFocused: Bool
+    /// Raised whenever the caret is wanted in the compose field: after a commit,
+    /// and when this surface comes back with a draft still in it. Handled by
+    /// `FieldCaretFocus`, which focuses the field with the caret at the end —
+    /// not `@FocusState`, whose focus lands with the whole text selected.
+    @State private var draftFocusRequest = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -174,11 +178,11 @@ struct RemindersPanelView: View {
     }
 
     private var draftField: some View {
-        TextField("New reminder", text: $composer.draft)
+        TextField(Self.draftPlaceholder, text: $composer.draft)
             .textFieldStyle(.plain)
             .font(.system(size: 13))
             .foregroundStyle(.white.opacity(0.9))
-            .focused($isDraftFocused)
+            .fieldCaretFocus(request: draftFocusRequest, placeholder: Self.draftPlaceholder)
             .onSubmit(commit)
             .padding(.horizontal, 9)
             .frame(maxWidth: .infinity)
@@ -413,12 +417,16 @@ struct RemindersPanelView: View {
 
     // MARK: - Committing
 
+    /// The compose field's placeholder. Named once because it is also how
+    /// `FieldCaretFocus` finds the field in the AppKit tree.
+    static let draftPlaceholder = "New reminder"
+
     /// One commit: the composer empties the row and hands back what to write, and
     /// this view keeps only what is its own — the caret stays in the field so
     /// several reminders in a row need no trip to the mouse.
     private func commit() {
         guard let pending = composer.consume() else { return }
-        isDraftFocused = true
+        draftFocusRequest += 1
         Task { await store.create(title: pending.title, due: pending.due) }
     }
 
@@ -428,7 +436,7 @@ struct RemindersPanelView: View {
     /// only half returned.
     private func restoreDraftFocus() {
         guard composer.canCommit else { return }
-        isDraftFocused = true
+        draftFocusRequest += 1
     }
 
     // MARK: - Content
