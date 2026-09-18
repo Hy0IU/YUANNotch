@@ -64,12 +64,33 @@ struct ReminderSnapshot: Identifiable, Equatable, Sendable {
     let lastModified: Date?
 }
 
+/// Everything this app can fail with while talking to Reminders, in words someone
+/// can act on.
+///
+/// EventKit's own description is unusable here. Measured on a zh-CN system, an
+/// `EKError` reads "The operation couldn't be completed. (EKErrorDomain error 29.)"
+/// — English, and a number where the reason belongs. So the failures this app can
+/// explain are named, the rest are classified where they are caught, and every throw
+/// this service makes is one of these: callers keep showing
+/// `error.localizedDescription` and never have to know which framework failed.
 enum RemindersServiceError: LocalizedError, Equatable {
     case notAuthorized
     case listNotFound
     case reminderNotFound
     case fetchFailed
-    case operationFailed(String)
+    /// EventKit refused the write because the list cannot be written to.
+    case readOnlyList
+    /// The list, or the account behind it, does not hold reminders.
+    case listRefusesReminders
+    case reminderNotMutable
+    case noList
+    case internalFailure
+    /// EventKit failed for a reason it does not name. The code stays in the sentence
+    /// because it is the only part of the failure that can be searched for; the raw
+    /// error is logged as well.
+    case eventKitFailed(code: Int)
+    /// Something that is not EventKit failed.
+    case unexpected(String)
 
     var errorDescription: String? {
         switch self {
@@ -81,8 +102,61 @@ enum RemindersServiceError: LocalizedError, Equatable {
             return "The reminder no longer exists"
         case .fetchFailed:
             return "EventKit returned no result for the reminders query"
-        case .operationFailed(let reason):
+        case .readOnlyList:
+            return "This reminders list is read-only"
+        case .listRefusesReminders:
+            return "This list does not accept reminders"
+        case .reminderNotMutable:
+            return "This reminder cannot be changed"
+        case .noList:
+            return "No reminders list is available"
+        case .internalFailure:
+            return "Reminders reported an internal error"
+        case .eventKitFailed(let code):
+            return "Reminders failed with error \(code)"
+        case .unexpected(let reason):
             return reason
+        }
+    }
+
+    /// Wraps whatever EventKit threw, so that no raw `EKError` reaches the interface.
+    init(catching error: Error) {
+        if let known = error as? RemindersServiceError {
+            self = known
+            return
+        }
+
+        // Logged whole: the user gets a sentence, and the domain, the code and any
+        // underlying error stay available to whoever has to diagnose this.
+        NSLog("YUANNotch: reminders error: \(error)")
+
+        let failure = error as NSError
+        guard failure.domain == EKErrorDomain,
+              let code = EKError.Code(rawValue: failure.code) else {
+            self = .unexpected(failure.localizedDescription)
+            return
+        }
+
+        switch code {
+        case .eventNotMutable:
+            self = .reminderNotMutable
+        case .noCalendar:
+            self = .noList
+        case .internalFailure:
+            self = .internalFailure
+        // Read-only and immutable are two codes for one thing as far as anyone
+        // writing a reminder is concerned.
+        case .calendarReadOnly, .calendarIsImmutable:
+            self = .readOnlyList
+        // So are the list and the account behind it: both mean "write somewhere else".
+        case .calendarDoesNotAllowReminders, .sourceDoesNotAllowReminders:
+            self = .listRefusesReminders
+        // One condition, one sentence — this is the state `requireReadAccess` reports,
+        // so it says the same thing rather than a second description of it.
+        case .eventStoreNotAuthorized:
+            self = .notAuthorized
+        default:
+            self = .eventKitFailed(code: code.rawValue)
         }
     }
 }
@@ -142,7 +216,11 @@ actor AppleRemindersService: RemindersServing {
     }
 
     func requestAccess() async throws -> RemindersAuthorization {
-        _ = try await store.requestFullAccessToReminders()
+        do {
+            _ = try await store.requestFullAccessToReminders()
+        } catch {
+            throw RemindersServiceError(catching: error)
+        }
 
         // C1: once the store has been touched before access was granted it
         // keeps serving an empty database until `reset()`. Resetting here is
@@ -308,7 +386,7 @@ actor AppleRemindersService: RemindersServing {
         do {
             try store.remove(reminder, commit: true)
         } catch {
-            throw RemindersServiceError.operationFailed(error.localizedDescription)
+            throw RemindersServiceError(catching: error)
         }
     }
 
@@ -390,7 +468,7 @@ actor AppleRemindersService: RemindersServing {
         do {
             try store.save(reminder, commit: true)
         } catch {
-            throw RemindersServiceError.operationFailed(error.localizedDescription)
+            throw RemindersServiceError(catching: error)
         }
     }
 
