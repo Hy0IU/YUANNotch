@@ -9,13 +9,12 @@ import SwiftUI
 /// its point size, or its tint.
 enum AppGlyph {
 
-    /// Point box the artwork is authored in. The mark fills 16 of these 18
-    /// points, which is the optical size of a menu-bar item beside the system
-    /// ones.
+    /// The size every surface draws the mark at, and the point box the artwork
+    /// is authored in. The mark fills 16 of these 18 points, which is the
+    /// optical size of a menu-bar item beside the system ones — so the menu bar
+    /// and the notch show the mark at the same size rather than each picking
+    /// its own.
     static let artworkPointSize: CGFloat = 18
-
-    /// The compact notch is only 28–38 pt tall, so the mark sits smaller there.
-    static let notchPointSize: CGFloat = 15
 
     /// Monochrome template: the menu bar lets AppKit supply the colour, and the
     /// notch tints it through `renderingMode(.template)`.
@@ -79,7 +78,7 @@ enum AppGlyph {
 /// The mark, at a size chosen by the surrounding layout and tinted for the
 /// surface it sits on.
 struct AppGlyphMark: View {
-    var pointSize: CGFloat = AppGlyph.notchPointSize
+    var pointSize: CGFloat = AppGlyph.artworkPointSize
 
     /// The compact notch draws on its own near-black capsule, so the mark is
     /// white there rather than following the system appearance.
