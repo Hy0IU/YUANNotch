@@ -51,7 +51,7 @@ bash ./Scripts/package-app.sh
 
 ## 使用
 
-**首次启动**会请你选择一个文件夹用来存放笔记：每一页都会以该页第一行的名字，存成这个文件夹里的一个 `.md` 文件。也可以取消——那样笔记会落在 `~/Library/Application Support/YUANNotch/Notes/`，之后在**设置 → Notes** 里随时可以改。
+笔记默认存放在 `~/Library/Application Support/YUANNotch/Notes/`，不需要做任何选择：每一页都会以该页第一行的名字，存成这个文件夹里的一个 `.md` 文件。想把它放在自己看得见的地方（「文稿」里、已有的 Obsidian vault 里），用**设置 → Notes → Change…** 改——应用只有在你在那里按下按钮时才会移动笔记。
 
 启动后，把鼠标移到屏幕顶部中央（或点击刘海区，取决于触发方式设置）。面板展开后：
 
@@ -147,7 +147,7 @@ SIGN_IDENTITY="<你的签名身份>" bash Scripts/package-app.sh
 
 ## 数据存放
 
-笔记正文就是普通的 Markdown 文件，放在你自己的文件夹里。首次启动时会请你选择这个文件夹（取消则退回 `~/Library/Application Support/YUANNotch/Notes/`），之后随时可以在**设置 → Notes** 里更改。粘贴进来的图片存在同一个文件夹下的 `attachments/` 里，正文用 `![[attachments/名字.png]]` 引用它——这个写法 Obsidian 能直接解析，图片文件名就是它在正文里的名字。
+笔记正文就是普通的 Markdown 文件，默认放在 `~/Library/Application Support/YUANNotch/Notes/`，可以在**设置 → Notes** 里改到任何地方（应用不会自己去动这个位置，也不会在启动时弹窗问你）。粘贴进来的图片存在同一个文件夹下的 `attachments/` 里，正文用 `![[attachments/名字.png]]` 引用它——这个写法 Obsidian 能直接解析，图片文件名就是它在正文里的名字。
 
 | 内容 | 位置 |
 | --- | --- |

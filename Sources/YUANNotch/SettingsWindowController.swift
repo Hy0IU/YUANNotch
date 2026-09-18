@@ -552,10 +552,12 @@ private struct NotesSettingsView: View {
         } footer: {
             Text(
                 """
-                Each page is one Markdown file in this folder, named after the page's first \
-                line. Pasted images go in the \(LocalImageStore.directoryName) folder inside \
-                it, and a note refers to one as ![[\(LocalImageStore.directoryName)/name.png]] — \
-                so the folder opens as an ordinary notebook anywhere, images included.
+                Notes start out in YUANNotch's own support folder and are only ever moved \
+                from here. Each page is one Markdown file in this folder, named after the \
+                page's first line. Pasted images go in the \(LocalImageStore.directoryName) \
+                folder inside it, and a note refers to one as \
+                ![[\(LocalImageStore.directoryName)/name.png]] — so the folder opens as an \
+                ordinary notebook anywhere, images included.
                 """
             )
         }

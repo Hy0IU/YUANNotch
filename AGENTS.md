@@ -8,6 +8,8 @@ YUANNotch is a Swift Package Manager macOS 14+ menu-bar application. Application
 
 `Sources/YUANNotch/NotesLibrary.swift` owns the notes folder and the Markdown files inside it: one file per page, named after the page's first line, plus an `index.json` holding only what a file cannot carry (tab order, the active tab, caret positions). `Sources/YUANNotch/LegacyNotesSource.swift` reads the pre-file storage — first `workspace.json`, then the `UserDefaults` blobs — and is asked exactly once, guarded by `yuanNotch.didMigrateNotesIntoFiles`.
 
+The folder is fixed, not chosen at launch: `NotesLibrary.directoryAtLaunch()` returns the recorded folder or the app's own support folder and never asks anything. Changing it is a deliberate act from the settings page (`setDirectory`, `copyNotes`), so a stored folder that has gone missing is recreated rather than silently replaced.
+
 The files are the notes and the index is a cache. Three rules follow, and none of them is a preference:
 
 - A Markdown file the app did not write is never modified. New pages take a numbered name instead of a name already on disk.

@@ -7,9 +7,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         migrateLegacyData()
-        // The notes folder is settled before anything reads or writes a note, so
-        // the answer the user gives cannot land in the middle of a migration.
-        let notesLibrary = NotesLibrary(directoryURL: NotesLibrary.resolveDirectoryAtLaunch())
+        // Settled before anything reads or writes a note: the fixed default, or
+        // whatever Settings was last told. Nothing is asked here — a folder picker on
+        // first launch would interrupt the one thing the user opened the app to do,
+        // and the question is answered better from Settings by someone who went there.
+        let notesLibrary = NotesLibrary(directoryURL: NotesLibrary.directoryAtLaunch())
         panelController = NotchPanelController(notesLibrary: notesLibrary)
         panelController?.showDocked()
         buildStatusItem()

@@ -74,10 +74,14 @@ final class NotesLibrary: ObservableObject {
     /// that a later empty folder is not mistaken for a fresh install.
     static let migrationFlagKey = "yuanNotch.didMigrateNotesIntoFiles"
 
-    /// Folder used when the user has not chosen one, and the fallback when the
-    /// chosen one has gone. Deliberately outside Documents: nothing here needs
-    /// the user's consent, so a first launch answered with "Cancel" still stores
-    /// notes without a permission prompt.
+    /// Where the notes live until someone moves them: the app's own support folder.
+    ///
+    /// Deliberately outside Documents. Nothing here needs the user's consent, and
+    /// this app is ad-hoc signed, so a protected folder would re-ask for permission
+    /// whenever the bundle is rebuilt — the friction the reminders integration already
+    /// has. Notes somewhere more visible — a Documents folder, an existing vault — are
+    /// one `Change…` away, and that way the choice is made by someone who has decided
+    /// they want it.
     static var defaultDirectory: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first ?? URL(fileURLWithPath: NSHomeDirectory())
@@ -114,46 +118,40 @@ final class NotesLibrary: ObservableObject {
 
     // MARK: - Launch
 
-    /// The folder to open with, asking the user once when none has been chosen.
+    /// The folder to open with.
     ///
-    /// Called before anything reads or writes a note, so the choice cannot be
-    /// interleaved with a migration writing files somewhere the user did not
-    /// pick.
-    static func resolveDirectoryAtLaunch() -> URL {
+    /// Fixed, not asked for. A folder picker on first launch interrupts the first
+    /// thing the user does with an app whose point is to stay out of the way, and
+    /// the choice would have to be made before they have any notes to lose by it.
+    /// The folder is written down on first use so the setting is inspectable, and it
+    /// is changed from the settings page — deliberately, by someone who went looking
+    /// for it.
+    ///
+    /// A recorded folder that has gone is kept rather than replaced: where the notes
+    /// live must not move behind the user's back. Recreating it leaves the app on one
+    /// empty page with every other file exactly where it was, and the settings page
+    /// is one click from putting the notes somewhere else.
+    static func directoryAtLaunch() -> URL {
         let defaults = UserDefaults.standard
-        let storedPath = defaults.string(forKey: directoryDefaultsKey)
-        let stored = storedPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
-
-        if let stored {
-            if FileManager.default.fileExists(atPath: stored.path) {
-                return stored
+        if let storedPath = defaults.string(forKey: directoryDefaultsKey), !storedPath.isEmpty {
+            let stored = URL(fileURLWithPath: storedPath, isDirectory: true)
+            if !FileManager.default.fileExists(atPath: stored.path) {
+                NSLog("YUANNotch: notes folder \(stored.path) is missing and will be recreated; Settings can point it elsewhere")
             }
-            // The folder was moved or deleted. Ask again, starting from where it
-            // used to be, rather than silently writing the notes somewhere else.
-            NSLog("YUANNotch: notes folder \(stored.path) no longer exists; asking for a new one")
-            if let chosen = presentDirectoryPicker(startingAt: stored.deletingLastPathComponent()) {
-                defaults.set(chosen.path, forKey: directoryDefaultsKey)
-                return chosen
-            }
-        } else if let chosen = presentDirectoryPicker(startingAt: nil) {
-            defaults.set(chosen.path, forKey: directoryDefaultsKey)
-            return chosen
+            return stored
         }
 
-        // No choice was made. Persist the fallback so the question is asked once,
-        // not on every launch; the settings page is where it gets changed.
-        let fallback = defaultDirectory
-        defaults.set(fallback.path, forKey: directoryDefaultsKey)
-        return fallback
+        let directory = defaultDirectory
+        defaults.set(directory.path, forKey: directoryDefaultsKey)
+        NSLog("YUANNotch: keeping notes in \(directory.path); Settings can change that")
+        return directory
     }
 
     /// Asks for a folder. Returns `nil` if the user cancels.
     ///
-    /// The activation dance is done here because this runs both at launch, when
-    /// the app is a menu-bar accessory with nothing frontmost, and from the
-    /// settings window, which has already activated the app. Restoring the
-    /// policy only when this call changed it keeps the two callers from
-    /// fighting over it.
+    /// Only the settings page calls this, and that window activates the app before it
+    /// appears: a panel opened while the app is still a menu-bar accessory would
+    /// arrive behind whatever is frontmost and take no clicks.
     static func presentDirectoryPicker(startingAt directory: URL?) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -168,18 +166,6 @@ final class NotesLibrary: ObservableObject {
 
         if let directory, FileManager.default.fileExists(atPath: directory.path) {
             panel.directoryURL = directory
-        }
-
-        let wasAccessory = NSApp.activationPolicy() == .accessory
-        if wasAccessory {
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        defer {
-            if wasAccessory {
-                NSApp.setActivationPolicy(.accessory)
-                NSApp.deactivate()
-            }
         }
 
         return panel.runModal() == .OK ? panel.url : nil
