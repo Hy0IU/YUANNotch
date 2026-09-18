@@ -4,6 +4,27 @@
 
 YUANNotch is a Swift Package Manager macOS 14+ menu-bar application. Application code lives in `Sources/YUANNotch/`: `main.swift` starts the accessory app, `AppDelegate.swift` wires menus and lifecycle, `NotchPanelController.swift` manages per-display panels, and the SwiftUI views and stores are split into focused files such as `NotebookView.swift` and `NoteStore.swift`. The local Markdown dependency is maintained under `Vendor/swift-markdown-engine/`; avoid modifying vendored code unless the change is intentionally upstreamable. App artwork is in `Resources/`: `AppIcon.png` is the master for the Finder icon, `Glyph.png` the master for the app mark. Packaging logic lives in `Scripts/package-app.sh`.
 
+## Note storage
+
+`Sources/YUANNotch/NotesLibrary.swift` owns the notes folder and the Markdown files inside it: one file per page, named after the page's first line, plus an `index.json` holding only what a file cannot carry (tab order, the active tab, caret positions). `Sources/YUANNotch/LegacyNotesSource.swift` reads the pre-file storage — first `workspace.json`, then the `UserDefaults` blobs — and is asked exactly once, guarded by `yuanNotch.didMigrateNotesIntoFiles`.
+
+The files are the notes and the index is a cache. Three rules follow, and none of them is a preference:
+
+- A Markdown file the app did not write is never modified. New pages take a numbered name instead of a name already on disk.
+- A file the app cannot read is never written over; it is moved aside as `<name>.unreadable-<timestamp>.md` if a write is unavoidable.
+- Deleting a page moves its file to the system Trash, never `removeItem`.
+
+## Images
+
+`Sources/YUANNotch/LocalImageStore.swift` writes embedded images to `<notes folder>/attachments/`, one file per image, named after the name it arrived with (Finder-style numbering on a collision). A note refers to one as `![[attachments/<name>.png]]`.
+
+That reference carries no identifier on purpose. Obsidian reads everything after `|` in an image embed as a size rather than as a label, so an app-private id cannot travel inside it — and a reference only this app can resolve is worth less than a file name both tools understand. Two consequences follow:
+
+- The file name is the image's identity. Renaming one in Finder breaks the note that embeds it; re-linking is not attempted, unlike the notes, which can be found again by title.
+- The images are inside the notes folder, so anything that moves that folder must carry `attachments/` with it — `NotesLibrary.copyNotes` is where that happens, and a folder switch that skipped it would leave every embed broken.
+
+Names are constrained by the reference format rather than by the file system: Obsidian documents `# | ^ : %% [[ ]]` as characters that "may not work as a link", so `sanitizedDisplayName` replaces them instead of writing a reference that resolves to nothing.
+
 ## The app mark
 
 `Sources/YUANNotch/AppGlyph.swift` is the single source of truth for how the mark is *loaded and tinted* — no call site names the artwork, its point size, or its tint. The mark's *geometry* is the single source in `Scripts/make-glyph/main.swift`, run through `Scripts/make-glyph.sh`.
@@ -30,6 +51,8 @@ Follow standard Swift API design guidelines and the existing four-space indentat
 ## Testing Guidelines
 
 Add tests under `Tests/YUANNotchTests/` and declare a `.testTarget` in `Package.swift`. Name XCTest files `<Type>Tests.swift` and methods `test_<behavior>()`. Prioritize persistence migrations, selection/range clamping, notch geometry, file-shelf operations, and multi-display state transitions. For AppKit behavior that is difficult to automate, document manual checks on macOS 14+, including activation, collapse/expand animation, and display handoff.
+
+There is no test target yet, and `YUANNotch` is an executable target with top-level code, so nothing can be `@testable import`ed. Until that changes, storage logic is exercised by a standalone harness compiled from these sources — which is why the naming rules in `NotesLibrary` are `static` and free of instance state, and why `NotesLibrary` takes its folder as an `init` argument rather than resolving it internally. Keep both properties when editing that file.
 
 ## Commit & Pull Request Guidelines
 

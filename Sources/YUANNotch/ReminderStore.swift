@@ -1078,10 +1078,10 @@ final class ReminderStore: ObservableObject {
 /// Persists the pending-write queue at
 /// `Application Support/YUANNotch/reminder-queue.json`.
 ///
-/// Atomic write plus corruption isolation, following `NotePersistence`. There
+/// Atomic write plus corruption isolation, the way the notes are written. There
 /// is no rotating backup on purpose: this file holds only operations that have
 /// not reached the local store yet, so losing it costs a retry the user can
-/// repeat — unlike the notes workspace, where a lost backup is lost writing.
+/// repeat — unlike a note, where a lost file is lost writing.
 struct ReminderQueueStore {
     /// 2: `PendingOperation.create` now carries a `ReminderDue?` instead of a
     /// non-optional `Date`, which changes the persisted JSON shape. A v1 file

@@ -1,13 +1,16 @@
 import AppKit
+import Combine
 import CoreGraphics
 import SwiftUI
 
 @MainActor
 final class NotchPanelController: NSObject {
-    private let store = NoteStore()
+    private let notesLibrary: NotesLibrary
+    private let store: NoteStore
     private let settingsStore = AppSettingsStore()
-    private let imageStore = LocalImageStore()
+    private let imageStore: LocalImageStore
     private let fileShelfStore = FileShelfStore()
+    private var libraryCancellables: Set<AnyCancellable> = []
     private let workspaceState = NotebookWorkspaceState()
     /// Drawer animation state is per display: when the mouse jumps to
     /// another screen mid-collapse, the outgoing drawer finishes its
@@ -26,7 +29,9 @@ final class NotchPanelController: NSObject {
     private lazy var reminderStore = ReminderStore(settingsStore: settingsStore)
     private lazy var settingsWindowController = SettingsWindowController(
         settingsStore: settingsStore,
-        reminderStore: reminderStore
+        reminderStore: reminderStore,
+        notesLibrary: notesLibrary,
+        noteStore: store
     )
     private let displayPanelRegistry = DisplayPanelRegistry()
     private var fileDragTrackingState = FileDragTrackingState()
@@ -87,8 +92,21 @@ final class NotchPanelController: NSObject {
 
     private static let detachmentThreshold: CGFloat = 52
 
-    override init() {
+    init(notesLibrary: NotesLibrary) {
+        self.notesLibrary = notesLibrary
+        store = NoteStore(library: notesLibrary)
+        imageStore = LocalImageStore(notesDirectoryURL: notesLibrary.directoryURL)
         super.init()
+
+        // The images live inside the notes folder, so they move with it. Capturing the
+        // store rather than `self` keeps this a plain call on a plain object: the
+        // folder signal is sent from the notes library, which is already on the main
+        // actor.
+        let imageStore = self.imageStore
+        notesLibrary.folderChanged
+            .sink { imageStore.moveTo(notesDirectoryURL: $0) }
+            .store(in: &libraryCancellables)
+
         startMousePolling()
         observeScreenChanges()
         observeGlobalSelectionMouseEvents()

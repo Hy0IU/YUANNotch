@@ -7,7 +7,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         migrateLegacyData()
-        panelController = NotchPanelController()
+        // The notes folder is settled before anything reads or writes a note, so
+        // the answer the user gives cannot land in the middle of a migration.
+        let notesLibrary = NotesLibrary(directoryURL: NotesLibrary.resolveDirectoryAtLaunch())
+        panelController = NotchPanelController(notesLibrary: notesLibrary)
         panelController?.showDocked()
         buildStatusItem()
         buildMenu()

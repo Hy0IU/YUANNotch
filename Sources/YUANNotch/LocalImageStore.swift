@@ -2,45 +2,76 @@ import AppKit
 import Foundation
 import MarkdownEngine
 
+/// Stores the images that notes embed, in an `attachments` folder beside the notes.
+///
+/// An image is one file named after the name it arrived with, and a note refers to
+/// it as `![[attachments/<name>.png]]`. That shape is not a free choice: it is the
+/// only one this editor and Obsidian can both resolve. Obsidian reads everything
+/// after `|` in an image embed as a size rather than as a label, so an app-private
+/// identifier cannot ride along inside the reference — which leaves the file name as
+/// the image's identity and the reference as the only link between the two.
+///
+/// Reachable from the editor's rendering path, so everything mutable sits behind a
+/// lock rather than on an actor.
 final class LocalImageStore: EmbeddedImageFileProvider, @unchecked Sendable {
+
+    /// The folder inside the notes folder that holds the images. Part of every
+    /// reference written into a note, so renaming it breaks existing notes.
+    static let directoryName = "attachments"
+    static let manifestFilename = "manifest.json"
+    static let fileExtension = "png"
+    /// Used when a paste arrives without a usable name, which is the ordinary case
+    /// for a copied bitmap.
+    static let fallbackDisplayName = "pasted-image"
+    /// APFS allows 255 UTF-8 bytes per name; sixty characters cannot reach that even
+    /// at three bytes each, and they leave room for the ` 2` a collision adds.
+    static let maximumDisplayNameLength = 60
+
     private struct ImageAssetRecord: Codable {
-        var id: String
-        var displayName: String
+        /// The file name on disk, which is also what a reference names.
         var storedFilename: String
+        /// Kept only so the context menu can offer the file the image came from.
         var originalPath: String?
-        var sourceKind: String
         var createdAt: Date
     }
 
-    private let directoryURL: URL
-    private let manifestURL: URL
     private let lock = NSLock()
+    /// The notes folder, held rather than derived: the images live inside it, so a
+    /// folder change lands here once instead of becoming a second reader of the same
+    /// setting.
+    private var notesDirectoryURL: URL
     private var records: [String: ImageAssetRecord]
+    /// Bumped by anything that changes what a reference resolves to, so the engine's
+    /// image cache drops what it is holding.
     private var version = 0
-    private let imageExtension = "png"
 
-    init() {
-        let supportURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        directoryURL = supportURL.appendingPathComponent("YUANNotch/Images", isDirectory: true)
-        Self.migrateLegacyDirectory(in: supportURL)
-        try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        manifestURL = directoryURL.appendingPathComponent("manifest.json")
-        records = Self.loadRecords(from: manifestURL)
+    init(notesDirectoryURL: URL) {
+        self.notesDirectoryURL = notesDirectoryURL
+        records = Self.loadRecords(from: Self.manifestURL(in: notesDirectoryURL))
+        try? FileManager.default.createDirectory(
+            at: Self.imagesDirectory(in: notesDirectoryURL),
+            withIntermediateDirectories: true
+        )
     }
 
-    /// Moves images stored under the previous app identity (NotchNotes).
-    private static func migrateLegacyDirectory(in supportURL: URL) {
-        let fileManager = FileManager.default
-        let legacyDirectory = supportURL.appendingPathComponent("NotchNotes", isDirectory: true)
-        let newDirectory = supportURL.appendingPathComponent("YUANNotch", isDirectory: true)
+    /// Points the store at another notes folder. Its images come with the folder.
+    func moveTo(notesDirectoryURL url: URL) {
+        lock.lock()
+        notesDirectoryURL = url
+        records = Self.loadRecords(from: Self.manifestURL(in: url))
+        version += 1
+        lock.unlock()
 
-        guard fileManager.fileExists(atPath: legacyDirectory.path),
-              !fileManager.fileExists(atPath: newDirectory.path) else { return }
-
-        try? fileManager.moveItem(at: legacyDirectory, to: newDirectory)
+        try? FileManager.default.createDirectory(
+            at: Self.imagesDirectory(in: url),
+            withIntermediateDirectories: true
+        )
     }
 
+    // MARK: - Writing
+
+    /// Files a pasted image and returns the reference to put in the note, or `nil`
+    /// when the pasteboard held no image.
     func saveImage(from pasteboard: NSPasteboard) -> String? {
         if let fileURL = PasteboardImageReader.imageFileURL(from: pasteboard),
            let data = try? Data(contentsOf: fileURL),
@@ -48,8 +79,7 @@ final class LocalImageStore: EmbeddedImageFileProvider, @unchecked Sendable {
             return save(
                 data: pngData(fromImageData: data) ?? data,
                 originalName: fileURL.deletingPathExtension().lastPathComponent,
-                originalFileURL: fileURL,
-                sourceKind: "file"
+                originalFileURL: fileURL
             )
         }
 
@@ -59,50 +89,65 @@ final class LocalImageStore: EmbeddedImageFileProvider, @unchecked Sendable {
 
         return save(
             data: pngData,
-            originalName: "pasted-image",
-            originalFileURL: nil,
-            sourceKind: "clipboardImage"
+            originalName: Self.fallbackDisplayName,
+            originalFileURL: nil
         )
     }
 
-    func image(for reference: EmbeddedImageRequest) -> NSImage? {
-        let candidateNames = [reference.id, reference.name].compactMap { $0 }
+    private func save(data: Data, originalName: String, originalFileURL: URL?) -> String? {
+        // A file already in the folder counts as taken even when this store has never
+        // heard of it: nothing the app did not write may be written over.
+        var taken = Set(onDiskFilenames())
+        lock.lock()
+        taken.formUnion(records.keys)
+        lock.unlock()
 
-        for candidateName in candidateNames {
-            let url = imageURL(for: candidateName)
-            if let image = NSImage(contentsOf: url) {
-                return image
-            }
+        let filename = Self.storedFilename(
+            displayName: Self.sanitizedDisplayName(originalName),
+            fileExtension: Self.fileExtension,
+            taken: taken
+        )
+
+        do {
+            try data.write(to: url(forStoredFilename: filename), options: .atomic)
+        } catch {
+            NSLog("YUANNotch: could not write image \(filename): \(error)")
+            return nil
         }
 
-        return nil
+        lock.lock()
+        records[filename] = ImageAssetRecord(
+            storedFilename: filename,
+            originalPath: originalFileURL?.path,
+            createdAt: Date()
+        )
+        let snapshot = records
+        version += 1
+        lock.unlock()
+        saveRecords(snapshot)
+
+        return Self.reference(storedFilename: filename)
+    }
+
+    // MARK: - Reading
+
+    func image(for reference: EmbeddedImageRequest) -> NSImage? {
+        guard let filename = Self.storedFilename(namedBy: reference.name) else { return nil }
+        return NSImage(contentsOf: url(forStoredFilename: filename))
     }
 
     func storedFileURL(for reference: EmbeddedImageRequest) -> URL? {
-        guard let candidateName = recordCandidateNames(for: reference).first(where: { !$0.isEmpty }) else {
-            return nil
-        }
-
-        lock.lock()
-        let record = records[candidateName]
-        lock.unlock()
-
-        if let record {
-            let url = directoryURL.appendingPathComponent(record.storedFilename)
-            return FileManager.default.fileExists(atPath: url.path) ? url : nil
-        }
-
-        let fallbackURL = imageURL(for: candidateName)
-        return FileManager.default.fileExists(atPath: fallbackURL.path) ? fallbackURL : nil
+        guard let filename = Self.storedFilename(namedBy: reference.name) else { return nil }
+        let url = url(forStoredFilename: filename)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
+    /// The file the image was pasted from, when it was pasted as a file.
     func originalFileURL(for reference: EmbeddedImageRequest) -> URL? {
-        guard let candidateName = recordCandidateNames(for: reference).first(where: { !$0.isEmpty }) else {
-            return nil
-        }
+        guard let filename = Self.storedFilename(namedBy: reference.name) else { return nil }
 
         lock.lock()
-        let path = records[candidateName]?.originalPath
+        let path = records[filename]?.originalPath
         lock.unlock()
 
         guard let path else { return nil }
@@ -116,54 +161,96 @@ final class LocalImageStore: EmbeddedImageFileProvider, @unchecked Sendable {
         return version
     }
 
-    private func save(data: Data, originalName: String, originalFileURL: URL?, sourceKind: String) -> String? {
-        let displayName = sanitizedDisplayName(originalName)
-        let id = UUID()
-        let storedFilename = "\(id.uuidString).\(imageExtension)"
-        let url = imageURL(for: id.uuidString)
+    // MARK: - Naming rules
+    //
+    // Static and free of instance state so they can be exercised on their own: this
+    // project has no test target to hang them off, so the rules that decide what
+    // lands on disk — and what a note then says about it — are kept liftable.
 
-        do {
-            try data.write(to: url, options: .atomic)
-            let record = ImageAssetRecord(
-                id: id.uuidString,
-                displayName: displayName,
-                storedFilename: storedFilename,
-                originalPath: originalFileURL?.path,
-                sourceKind: sourceKind,
-                createdAt: Date()
-            )
-            lock.lock()
-            records[id.uuidString] = record
-            let recordsToSave = records
-            version += 1
-            lock.unlock()
-            saveRecords(recordsToSave)
-            return "![[\(displayName)|\(id.uuidString)]]"
-        } catch {
-            return nil
+    /// Characters a reference cannot carry, replaced rather than left to fail.
+    ///
+    /// Obsidian documents `# | ^ : %% [[ ]]` as characters that "may not work as a
+    /// link", and `/` would turn the name into a path. A name holding one of them
+    /// would produce a reference that silently resolves to nothing.
+    private static let replacedCharacters: Set<Character> = ["/", "\\", ":", "#", "|", "^", "%", "[", "]"]
+
+    /// The name an image is filed under: the name it arrived with, minus only what a
+    /// file name and a reference cannot hold.
+    static func sanitizedDisplayName(_ rawName: String) -> String {
+        var name = String(rawName.map { replacedCharacters.contains($0) ? "-" : $0 })
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // A leading dot would hide the file from an Open panel.
+        while name.hasPrefix(".") { name.removeFirst() }
+        // Runs of whitespace, newlines included, become one space.
+        name = name.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        if name.count > maximumDisplayNameLength {
+            name = String(name.prefix(maximumDisplayNameLength))
+                .trimmingCharacters(in: .whitespaces)
         }
+        return name.isEmpty ? fallbackDisplayName : name
     }
 
-    private func recordCandidateNames(for reference: EmbeddedImageRequest) -> [String] {
-        [reference.id, reference.name].compactMap { $0 }
-    }
-
-    private func imageURL(for idOrName: String) -> URL {
-        if idOrName.lowercased().hasSuffix(".\(imageExtension)") {
-            return directoryURL.appendingPathComponent(idOrName)
+    /// The file name an image gets: its display name, plus a Finder-style number when
+    /// that name is already taken.
+    static func storedFilename(
+        displayName: String,
+        fileExtension: String,
+        taken: Set<String>
+    ) -> String {
+        let candidate = "\(displayName).\(fileExtension)"
+        guard taken.contains(candidate) else { return candidate }
+        for attempt in 2...Int.max {
+            let numbered = "\(displayName) \(attempt).\(fileExtension)"
+            if !taken.contains(numbered) { return numbered }
         }
-
-        return directoryURL.appendingPathComponent("\(idOrName).\(imageExtension)")
+        return candidate
     }
 
-    private func sanitizedDisplayName(_ name: String) -> String {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fallback = trimmed.isEmpty ? "pasted-image" : trimmed
-        return fallback
-            .replacingOccurrences(of: "|", with: "-")
-            .replacingOccurrences(of: "[", with: "")
-            .replacingOccurrences(of: "]", with: "")
-            .replacingOccurrences(of: "\n", with: " ")
+    /// What a note says to embed a stored image.
+    ///
+    /// The folder is spelled out rather than left implicit: Obsidian resolves a link
+    /// from the vault root, and a bare file name would become ambiguous as soon as the
+    /// vault holds any other file of the same name.
+    static func reference(storedFilename: String) -> String {
+        "![[\(directoryName)/\(storedFilename)]]"
+    }
+
+    /// The file name a reference names, or `nil` when it points somewhere this store
+    /// does not look.
+    ///
+    /// Only the reference's name is consulted. Everything after `|` is a size to
+    /// Obsidian, so no app-private handle travels inside a note, and the file name is
+    /// the whole of an image's identity.
+    static func storedFilename(namedBy referenceName: String) -> String? {
+        let trimmed = referenceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = directoryName + "/"
+        guard trimmed.hasPrefix(prefix) else { return nil }
+        let filename = String(trimmed.dropFirst(prefix.count))
+        return filename.isEmpty ? nil : filename
+    }
+
+    // MARK: - Files
+
+    static func imagesDirectory(in notesDirectoryURL: URL) -> URL {
+        notesDirectoryURL.appendingPathComponent(directoryName, isDirectory: true)
+    }
+
+    private static func manifestURL(in notesDirectoryURL: URL) -> URL {
+        imagesDirectory(in: notesDirectoryURL).appendingPathComponent(manifestFilename)
+    }
+
+    private func currentImagesDirectory() -> URL {
+        lock.lock()
+        defer { lock.unlock() }
+        return Self.imagesDirectory(in: notesDirectoryURL)
+    }
+
+    private func url(forStoredFilename filename: String) -> URL {
+        currentImagesDirectory().appendingPathComponent(filename)
+    }
+
+    private func onDiskFilenames() -> [String] {
+        (try? FileManager.default.contentsOfDirectory(atPath: currentImagesDirectory().path)) ?? []
     }
 
     private func pngData(fromImageData data: Data) -> Data? {
@@ -182,12 +269,12 @@ final class LocalImageStore: EmbeddedImageFileProvider, @unchecked Sendable {
             return [:]
         }
 
-        return Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+        return Dictionary(uniqueKeysWithValues: records.map { ($0.storedFilename, $0) })
     }
 
     private func saveRecords(_ records: [String: ImageAssetRecord]) {
-        let sortedRecords = records.values.sorted { $0.createdAt < $1.createdAt }
-        guard let data = try? JSONEncoder().encode(sortedRecords) else { return }
-        try? data.write(to: manifestURL, options: .atomic)
+        let sorted = records.values.sorted { $0.createdAt < $1.createdAt }
+        guard let data = try? JSONEncoder().encode(sorted) else { return }
+        try? data.write(to: Self.manifestURL(in: currentImagesDirectory()), options: .atomic)
     }
 }

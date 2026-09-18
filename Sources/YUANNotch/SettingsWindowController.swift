@@ -6,10 +6,19 @@ import SwiftUI
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let settingsStore: AppSettingsStore
     private let reminderStore: ReminderStore
+    private let notesLibrary: NotesLibrary
+    private let noteStore: NoteStore
 
-    init(settingsStore: AppSettingsStore, reminderStore: ReminderStore) {
+    init(
+        settingsStore: AppSettingsStore,
+        reminderStore: ReminderStore,
+        notesLibrary: NotesLibrary,
+        noteStore: NoteStore
+    ) {
         self.settingsStore = settingsStore
         self.reminderStore = reminderStore
+        self.notesLibrary = notesLibrary
+        self.noteStore = noteStore
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 620, height: 420),
@@ -30,7 +39,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.minSize = NSSize(width: 580, height: 380)
         window.delegate = self
         window.contentView = NSHostingView(
-            rootView: SettingsView(settingsStore: settingsStore, reminderStore: reminderStore)
+            rootView: SettingsView(
+                settingsStore: settingsStore,
+                reminderStore: reminderStore,
+                notesLibrary: notesLibrary,
+                noteStore: noteStore
+            )
         )
     }
 
@@ -95,6 +109,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case appearance
     case trigger
+    case notes
     case fileShelf
     case integrations
     case about
@@ -105,6 +120,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .appearance: return "Appearance"
         case .trigger: return "Trigger"
+        case .notes: return "Notes"
         case .fileShelf: return "File Shelf"
         case .integrations: return "Integrations"
         case .about: return "About"
@@ -115,6 +131,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .appearance: return "paintpalette"
         case .trigger: return "cursorarrow.rays"
+        case .notes: return "doc.text"
         case .fileShelf: return "tray.full"
         case .integrations: return "checklist"
         case .about: return "info.circle"
@@ -125,6 +142,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .appearance: return .purple
         case .trigger: return .blue
+        case .notes: return .teal
         case .fileShelf: return .orange
         case .integrations: return .green
         case .about: return .gray
@@ -135,6 +153,8 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @ObservedObject var settingsStore: AppSettingsStore
     @ObservedObject var reminderStore: ReminderStore
+    let notesLibrary: NotesLibrary
+    let noteStore: NoteStore
     @State private var selection: SettingsTab = .appearance
 
     var body: some View {
@@ -194,6 +214,8 @@ struct SettingsView: View {
             AppearanceSettingsView(settingsStore: settingsStore)
         case .trigger:
             TriggerSettingsView(settingsStore: settingsStore)
+        case .notes:
+            NotesSettingsView(library: notesLibrary, noteStore: noteStore)
         case .fileShelf:
             FileShelfSettingsView(settingsStore: settingsStore)
         case .integrations:
@@ -474,6 +496,142 @@ private struct TriggerSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - Notes
+
+private struct NotesSettingsView: View {
+    @ObservedObject var library: NotesLibrary
+    let noteStore: NoteStore
+
+    /// How many files the last import took in, so the button reports something
+    /// even when the folder it read from had nothing left to take.
+    @State private var lastImportCount: Int?
+
+    var body: some View {
+        Form {
+            locationSection
+            looseFilesSection
+
+            if let error = library.lastError {
+                Section {
+                    LabeledContent("Last error:") {
+                        HStack(spacing: 10) {
+                            Text(error)
+                                .foregroundStyle(.secondary)
+                            Button("Dismiss") { library.dismissError() }
+                        }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        // The folder can gain or lose Markdown while this page is closed, so the
+        // count is taken when the page appears rather than trusted from launch.
+        .task { library.refreshUnclaimedMarkdownCount() }
+    }
+
+    private var locationSection: some View {
+        Section {
+            LabeledContent("Folder:") {
+                HStack(spacing: 10) {
+                    Text(library.directoryURL.path)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: 250, alignment: .leading)
+
+                    Button("Show in Finder") { library.revealDirectoryInFinder() }
+                    Button("Change…") { changeFolder() }
+                }
+            }
+        } header: {
+            Text("Location")
+        } footer: {
+            Text(
+                """
+                Each page is one Markdown file in this folder, named after the page's first \
+                line. Pasted images go in the \(LocalImageStore.directoryName) folder inside \
+                it, and a note refers to one as ![[\(LocalImageStore.directoryName)/name.png]] — \
+                so the folder opens as an ordinary notebook anywhere, images included.
+                """
+            )
+        }
+    }
+
+    private var looseFilesSection: some View {
+        Section {
+            LabeledContent("Not in the notebook:") {
+                HStack(spacing: 10) {
+                    Text(fileCountDescription)
+                        .foregroundStyle(.secondary)
+
+                    Button("Import as Notes") {
+                        lastImportCount = noteStore.adoptLooseMarkdownFiles()
+                    }
+                    .disabled(library.unclaimedMarkdownCount == 0)
+                }
+            }
+
+            if let lastImportCount {
+                Text(importResultDescription(lastImportCount))
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Markdown Files Not in the Notebook")
+        } footer: {
+            Text(
+                """
+                Markdown files in the folder that no page is using. This app never changes \
+                or deletes them. Importing adds a page for each one, which is how a notebook \
+                is put back together if the index beside the notes is lost.
+                """
+            )
+        }
+    }
+
+    private var fileCountDescription: String {
+        let count = library.unclaimedMarkdownCount
+        return count == 1 ? "1 file" : "\(count) files"
+    }
+
+    private func importResultDescription(_ count: Int) -> String {
+        switch count {
+        case 0: return "There was nothing left to import."
+        case 1: return "Imported 1 file."
+        default: return "Imported \(count) files."
+        }
+    }
+
+    /// Switching folders copies the notes across by default rather than moving
+    /// them, so the folder the user has been trusting is never the one at risk
+    /// halfway through the operation.
+    private func changeFolder() {
+        guard let chosen = NotesLibrary.presentDirectoryPicker(startingAt: library.directoryURL),
+              chosen.standardizedFileURL != library.directoryURL.standardizedFileURL else {
+            return
+        }
+
+        if shouldCopyNotes(to: chosen) {
+            noteStore.moveNotes(to: chosen)
+        } else {
+            library.setDirectory(chosen)
+        }
+        lastImportCount = nil
+    }
+
+    private func shouldCopyNotes(to url: URL) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Copy the notes into “\(url.lastPathComponent)”?"
+        alert.informativeText = """
+            YUANNotch can copy the files into the folder you chose. The folder you are \
+            leaving keeps its own copies either way.
+            """
+        alert.addButton(withTitle: "Copy Notes")
+        alert.addButton(withTitle: "Switch Without Copying")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }
 
