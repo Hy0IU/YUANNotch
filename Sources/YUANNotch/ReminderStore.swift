@@ -40,6 +40,12 @@ struct ReminderPanelItem: Identifiable, Equatable {
     /// meaningless — these rows have their checkbox disabled.
     var isCompletable: Bool { remoteID != nil }
 
+    /// Editing rewrites the reminder on the system, so it needs a row that is
+    /// there. The same fact `isCompletable` rests on, asked a different
+    /// question: they travel together today but need not stay married, and each
+    /// name says which behaviour it gates.
+    var isEditable: Bool { remoteID != nil }
+
     var remoteID: String? {
         if case .remote(let id) = origin { return id }
         return nil
@@ -712,6 +718,93 @@ final class ReminderStore: ObservableObject {
         suppressAndDefer(deferredWrite(remoteID: remoteID, title: item.title, operation: .delete))
     }
 
+    // MARK: - Editing
+
+    /// The row being edited, and what it says now.
+    ///
+    /// Store state rather than view state, for the reason the compose draft is:
+    /// the drawer throws the reminders surface away on every mode switch, and an
+    /// edit is exactly the thing the user would miss. It is also what keeps a
+    /// refresh from clobbering the edit — the row being edited renders this
+    /// draft instead of its snapshot title, and a refresh that no longer knows
+    /// the row ends the edit rather than writing into nothing.
+    @Published private(set) var editingID: String?
+    @Published private(set) var editingDraft = ""
+
+    /// Starts editing a row. A row that has not reached the system has nothing
+    /// to update, so it offers no pencil and this refuses it.
+    ///
+    /// Starting a second edit ends the first without writing: a click on another
+    /// row is not a request to save.
+    func beginEditing(_ item: ReminderPanelItem) {
+        guard item.remoteID != nil else { return }
+        editingID = item.id
+        editingDraft = item.title
+    }
+
+    func updateEditingDraft(_ text: String) {
+        editingDraft = text
+    }
+
+    func cancelEditing() {
+        editingID = nil
+        editingDraft = ""
+    }
+
+    /// Writes the edited title, if there is one to write.
+    ///
+    /// Optimistic the way `create` is: the row shows the new title at once and
+    /// the write follows. A failure reverts by re-reading — the system is the
+    /// source of truth, and a title that did not land must not stay on screen
+    /// pretending it did.
+    func commitEditing() async {
+        guard let id = editingID else { return }
+        defer { cancelEditing() }
+        guard let item = items.first(where: { $0.id == id }),
+              let remoteID = item.remoteID,
+              let title = Self.rewrite(original: item.title, draft: editingDraft) else { return }
+
+        snapshot = Self.applyingTitle(title, to: id, in: snapshot)
+        rebuildItems()
+
+        do {
+            try await service.update(id: remoteID, title: title, due: nil)
+        } catch {
+            lastError = error.localizedDescription
+            requestRefresh()
+        }
+    }
+
+    /// The title an edit should write, or `nil` when there is nothing to write:
+    /// a cleared draft is no reminder, and a draft that only restates the title
+    /// is traffic rather than an edit.
+    static func rewrite(original: String, draft: String) -> String? {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != original.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return nil
+        }
+        return trimmed
+    }
+
+    /// Applies a title to one row of the snapshot, leaving every other field of
+    /// every other row exactly as read.
+    static func applyingTitle(_ title: String, to id: String, in snapshots: [ReminderSnapshot]) -> [ReminderSnapshot] {
+        snapshots.map { snapshot in
+            guard snapshot.id == id else { return snapshot }
+            return ReminderSnapshot(
+                id: snapshot.id,
+                externalID: snapshot.externalID,
+                title: title,
+                dueDate: snapshot.dueDate,
+                isDueDateAllDay: snapshot.isDueDateAllDay,
+                isCompleted: snapshot.isCompleted,
+                hasAlarm: snapshot.hasAlarm,
+                listID: snapshot.listID,
+                lastModified: snapshot.lastModified
+            )
+        }
+    }
+
     /// The store-side identity of one deferred write, read from the row it
     /// refers to rather than from the current selection.
     ///
@@ -967,6 +1060,13 @@ final class ReminderStore: ObservableObject {
         // `inFlightCount` reads `items`, so this is where a write starting or
         // landing changes the answer.
         updateBusyState()
+
+        // A refresh that no longer knows the row being edited — it was deleted
+        // or completed somewhere else — ends the edit: there is nothing left to
+        // write into, and keeping the draft would be keeping a ghost.
+        if let editingID, !items.contains(where: { $0.id == editingID }) {
+            cancelEditing()
+        }
     }
 
     private func updatePlaceholder(_ localID: UUID, syncState: ReminderSyncState) {
@@ -1107,13 +1207,20 @@ struct ReminderQueueStore {
     private let fileManager = FileManager.default
     private let queueURL: URL
 
-    init() {
+    /// `queueURL` is where the queue lives. The default is the app's own
+    /// Application Support folder; a harness points it at a scratch file, so
+    /// probing the store never reads or rewrites the user's real queue.
+    init(queueURL: URL? = nil) {
+        self.queueURL = queueURL ?? Self.defaultQueueURL()
+    }
+
+    private static func defaultQueueURL() -> URL {
         let applicationSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first ?? URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Support", isDirectory: true)
-        queueURL = applicationSupport
+        return applicationSupport
             .appendingPathComponent("YUANNotch", isDirectory: true)
             .appendingPathComponent("reminder-queue.json")
     }

@@ -51,6 +51,10 @@ struct RemindersPanelView: View {
     /// not `@FocusState`, whose focus lands with the whole text selected.
     @State private var draftFocusRequest = 0
 
+    /// Same mechanism, for the row being edited. A separate counter on purpose:
+    /// the two bridges would otherwise answer each other's requests.
+    @State private var editFocusRequest = 0
+
     var body: some View {
         VStack(spacing: 0) {
             if store.isEnabled && store.authorization.canRead {
@@ -421,6 +425,11 @@ struct RemindersPanelView: View {
     /// `FieldCaretFocus` finds the field in the AppKit tree.
     static let draftPlaceholder = "New reminder"
 
+    /// The edit field's placeholder, for the same reason. It is rarely seen —
+    /// the field comes pre-filled — but it is what distinguishes the two fields
+    /// the compose row and an edited row can have in the tree.
+    static let editPlaceholder = "Edit reminder"
+
     /// One commit: the composer empties the row and hands back what to write, and
     /// this view keeps only what is its own — the caret stays in the field so
     /// several reminders in a row need no trip to the mouse.
@@ -514,7 +523,18 @@ struct RemindersPanelView: View {
         .padding(.bottom, 4)
     }
 
+    @ViewBuilder
     private func row(for item: ReminderPanelItem) -> some View {
+        // An edit replaces the row's content but keeps its chrome, so the swap
+        // reads as the same row changing its mind about being a label.
+        if store.editingID == item.id {
+            editRow(for: item)
+        } else {
+            displayRow(for: item)
+        }
+    }
+
+    private func displayRow(for item: ReminderPanelItem) -> some View {
         let isCompleting = completingItemIDs.contains(item.id)
         return HStack(spacing: 9) {
             Button {
@@ -582,6 +602,21 @@ struct RemindersPanelView: View {
             .buttonStyle(.plain)
             .foregroundStyle(.white.opacity(hoveredItemID == item.id ? 0.6 : 0))
             .help(item.localID == nil ? "Delete reminder" : "Discard this pending reminder")
+
+            if item.isEditable {
+                Button {
+                    store.beginEditing(item)
+                    editFocusRequest += 1
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 9, weight: .semibold))
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(hoveredItemID == item.id ? 0.6 : 0))
+                .help("Edit reminder")
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -597,6 +632,81 @@ struct RemindersPanelView: View {
         .onHover { isHovering in
             hoveredItemID = isHovering ? item.id : (hoveredItemID == item.id ? nil : hoveredItemID)
         }
+    }
+
+    /// The row while its text is being rewritten. The field takes over from the
+    /// label and everything that would race the edit steps aside: completing the
+    /// row mid-edit would end the edit under the user's hands, and the delete
+    /// button has no business inside a row that is being retyped.
+    private func editRow(for item: ReminderPanelItem) -> some View {
+        HStack(spacing: 9) {
+            // The checkbox is where the user's eye expects it, but inert: acting
+            // on the row while its text is being rewritten would end the edit
+            // under their hands.
+            ZStack {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(.white.opacity(0.18), lineWidth: 1)
+            }
+            .frame(width: 14, height: 14)
+
+            TextField(Self.editPlaceholder, text: editDraftBinding)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .foregroundStyle(.white.opacity(0.9))
+                .fieldCaretFocus(request: editFocusRequest, placeholder: Self.editPlaceholder)
+                .onSubmit { Task { await store.commitEditing() } }
+                // Esc puts the row back the way it was: an abandoned edit is a
+                // cancellation, not a save.
+                .onExitCommand { store.cancelEditing() }
+                .padding(.horizontal, 8)
+                .frame(minHeight: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(.white.opacity(0.07))
+                )
+
+            Spacer(minLength: 8)
+
+            if let dueDate = item.dueDate {
+                Text(Self.dueText(for: dueDate, isAllDay: item.isDueDateAllDay))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .monospacedDigit()
+            }
+
+            Button {
+                Task { await store.commitEditing() }
+            } label: {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // Nothing to write: the draft was cleared, or it still says what the
+            // row already says. `rewrite` is the same rule the commit uses.
+            .disabled(ReminderStore.rewrite(original: item.title, draft: store.editingDraft) == nil)
+            .help("Save reminder")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(minHeight: 30)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(.white.opacity(0.045))
+                .padding(.horizontal, 4)
+        )
+        .onExitCommand { store.cancelEditing() }
+    }
+
+    /// The edit draft's binding goes through the store's method rather than
+    /// straight at the value, for the same reason the compose row's does: the
+    /// store, not the view, is where this state lives and where its rules are.
+    private var editDraftBinding: Binding<String> {
+        Binding(
+            get: { store.editingDraft },
+            set: { store.updateEditingDraft($0) }
+        )
     }
 
     /// Plays the completion animation, then hands the row to the store. The
