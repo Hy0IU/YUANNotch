@@ -913,11 +913,16 @@ struct RemindersPanelView: View {
             .disabled(!item.isCompletable)
             .help(item.isCompletable ? "Mark as completed" : "Not written to Reminders yet")
 
+            // A long reminder wraps instead of being cut off with an ellipsis: this
+            // row is the only place its text is ever read, and the ellipsis hides
+            // exactly the end that tells one long reminder from another. The ideal
+            // height is asked for explicitly, or the text is laid out against the
+            // row's height and folds back onto one line.
             Text(item.title)
                 .font(.system(size: 13))
                 .foregroundStyle(.white.opacity(isCompleting ? 0.45 : (item.syncState == .idle ? 0.88 : 0.55)))
                 .strikethrough(isCompleting, pattern: .solid, color: .white.opacity(0.5))
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
 
             Spacer(minLength: 8)
 
@@ -947,7 +952,10 @@ struct RemindersPanelView: View {
             .help(item.localID == nil ? "Delete reminder" : "Discard this pending reminder")
         }
         .padding(.horizontal, 10)
-        .frame(height: 30)
+        .padding(.vertical, 6)
+        // A floor, not a height: one line of text still comes out at the 30 points
+        // the row has always been, and a wrapped one is allowed to be taller.
+        .frame(minHeight: 30)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(.white.opacity(hoveredItemID == item.id ? 0.045 : 0))
