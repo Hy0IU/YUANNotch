@@ -6,11 +6,13 @@ YUANNotch is a Swift Package Manager macOS 14+ menu-bar application. Application
 
 ## The app mark
 
-`Sources/YUANNotch/AppGlyph.swift` is the single source of truth for the mark drawn in the menu bar and in the compact notch. No call site names the artwork, its point size, or its tint, so replacing those two files is the whole job.
+`Sources/YUANNotch/AppGlyph.swift` is the single source of truth for how the mark is *loaded and tinted* — no call site names the artwork, its point size, or its tint. The mark's *geometry* is the single source in `Scripts/make-glyph/main.swift`, run through `Scripts/make-glyph.sh`.
 
-The artwork is exported from `Resources/Glyph.png` into `Sources/YUANNotch/Glyph/` as `Glyph.png` (18 pt) and `Glyph@2x.png` (36 pt) — monochrome on transparent, with the mark filling 16 of the 18 points. Export with Lanczos resampling: the strokes are ~5% of the mark's width, and box or `sips` resampling erodes them at these sizes.
+The mark is a monoline drawing built from five primitives, so its stroke weight, the inner ring's radius and its height are each one number in that file. The tool draws the geometry at each target size and writes all three tracked PNGs — `Resources/Glyph.png` (989 px, the reference rendering), `Sources/YUANNotch/Glyph/Glyph.png` (18 px) and `Glyph@2x.png` (36 px) — monochrome on transparent, with the mark's outer edge pinned so it always fills 16 of the 18 points. The reps are rendered **at their own size**, not resampled from the master: downscaling 989 px by 29x erodes the strokes, and at 18/36 px a native render puts more of each stroke on full pixels.
 
-`AppGlyph` deliberately does not use `Bundle.module`. SwiftPM generates its lookup as `Bundle.main.bundleURL + "<name>.bundle"`, which inside a `.app` resolves to the bundle root — a location macOS allows only `Contents` in. The code looks beside the executable instead, so `Scripts/package-app.sh` must copy `YUANNotch_YUANNotch.bundle` into `Contents/MacOS/`. Without that copy the app still launches wherever its build tree survives, and crashes elsewhere.
+It prints every clearance between parts before writing anything, so a weight change can be judged before it is drawn. The two dashes run out of room first — at the current 1.25 pt they are what constrains the weight, which is why they rise with the inner ring rather than staying put.
+
+`AppGlyph` deliberately does not use `Bundle.module`. SwiftPM generates its lookup as `Bundle.main.bundleURL + "<name>.bundle"`, which inside a `.app` resolves to the bundle root — a location macOS allows only `Contents` in. The code looks beside the executable instead, so `Scripts/package-app.sh` must copy `YUANNotch_YUANNotch.bundle` into `Contents/MacOS/`, and ship it as a well-formed bundle (`Contents/Info.plist` plus the payload under `Contents/Resources/`) or `codesign` rejects the whole app. Without that copy the app still launches wherever its build tree survives, and crashes elsewhere.
 
 ## Build, Test, and Development Commands
 
@@ -18,6 +20,7 @@ The artwork is exported from `Resources/Glyph.png` into `Sources/YUANNotch/Glyph
 - `swift run YUANNotch`: build and launch the app from the terminal.
 - `swift build -c release`: produce the optimized binary used for distribution.
 - `swift test`: run all SwiftPM tests once test targets are added; currently the package has no test target.
+- `bash Scripts/make-glyph.sh`: regenerate the app mark's three PNGs from the geometry in `Scripts/make-glyph/main.swift`. Pass `--baseline --out-dir <dir>` to re-render the pre-existing weight, which is how the fitted geometry is re-verified.
 - `bash Scripts/package-app.sh`: create, ad-hoc sign, and copy `YUANNotch.app` to `/Applications`. This script replaces existing YUANNotch and legacy NotchNotes app bundles, so use it only when installation is intended. Set `SIGN_IDENTITY` to override ad-hoc signing. It also ships the SwiftPM resource bundle holding the app mark, and aborts if `swift build` did not produce one.
 
 ## Coding Style & Naming Conventions
