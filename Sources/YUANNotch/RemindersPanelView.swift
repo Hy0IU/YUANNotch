@@ -923,6 +923,14 @@ struct RemindersPanelView: View {
                 .foregroundStyle(.white.opacity(isCompleting ? 0.45 : (item.syncState == .idle ? 0.88 : 0.55)))
                 .strikethrough(isCompleting, pattern: .solid, color: .white.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
+                // A reminder's text is often something to carry elsewhere — an
+                // order number, an address, a link. Only the title is selectable
+                // rather than the whole row: the due date and the section headers
+                // are labels about the reminder, not the reminder, and making them
+                // selectable means a drag to the end of the title picks them up
+                // too. The checkbox and the delete button are `Button`s, which
+                // SwiftUI never makes selectable, so their behaviour is unchanged.
+                .textSelection(.enabled)
 
             Spacer(minLength: 8)
 
