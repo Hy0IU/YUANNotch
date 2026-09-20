@@ -97,7 +97,11 @@ struct NotebookView: View {
                     .padding(.bottom, 1)
             }
         }
-        .scaleEffect(drawerState.isBeingDragged ? 0.985 : 1)
+        // Keep the tactile shrink only while pulling the drawer away from the
+        // notch. A detached window is moved by AppKit at native size; scaling
+        // its entire SwiftUI tree during that movement makes small SF Symbols
+        // repeatedly resample at 0.985x and visibly distort.
+        .scaleEffect(drawerState.isBeingDragged && !drawerState.isDetached ? 0.985 : 1)
         .animation(.spring(response: 0.24, dampingFraction: 0.82), value: drawerState.isBeingDragged)
         .animation(.easeOut(duration: 0.14), value: drawerState.isDockingTargeted)
         .contentShape(Rectangle())

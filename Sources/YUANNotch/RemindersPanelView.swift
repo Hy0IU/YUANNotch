@@ -94,11 +94,11 @@ struct RemindersPanelView: View {
             } label: {
                 Image(systemName: "minus")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(store.canRemoveListView ? 0.72 : 0.25))
+                    .foregroundStyle(.white.opacity(0.72))
                     .frame(width: 24, height: 24)
                     .background(
                         Circle()
-                            .fill(.white.opacity(store.canRemoveListView ? 0.06 : 0.025))
+                            .fill(.white.opacity(0.06))
                     )
                     .contentShape(Circle())
             }
