@@ -119,25 +119,6 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
-    /// The lists pinned as tabs in the reminders panel's cylinder strip, in
-    /// strip order. Each entry is a reminders list id; the strip renders
-    /// whatever these resolve to at read time, so a list deleted on the system
-    /// side prunes itself on the next reload instead of lingering as a dead
-    /// tab.
-    @Published var reminderTabListIDs: [String] {
-        didSet {
-            UserDefaults.standard.set(reminderTabListIDs, forKey: Self.reminderTabListIDsKey)
-        }
-    }
-
-    /// Which pinned tab the panel shows. Every writer keeps it inside the
-    /// array's bounds, so nothing else has to clamp it.
-    @Published var reminderActiveTabIndex: Int {
-        didSet {
-            UserDefaults.standard.set(reminderActiveTabIndex, forKey: Self.reminderActiveTabIndexKey)
-        }
-    }
-
     static let defaultExpandedTopCornerRadius: Double = 10
     static let defaultExpandedBottomCornerRadius: Double = 20
     static let defaultHoverActivationDelay: Double = 0.30
@@ -154,8 +135,6 @@ final class AppSettingsStore: ObservableObject {
     private static let appleRemindersEnabledKey = "yuanNotch.appleReminders.enabled"
     private static let appleRemindersListIDKey = "yuanNotch.appleReminders.listID"
     private static let reminderSortOrderKey = "yuanNotch.appleReminders.sortOrder"
-    private static let reminderTabListIDsKey = "yuanNotch.appleReminders.tabListIDs"
-    private static let reminderActiveTabIndexKey = "yuanNotch.appleReminders.activeTabIndex"
 
     init() {
         drawerMode = UserDefaults.standard.string(forKey: Self.drawerModeKey)
@@ -194,45 +173,6 @@ final class AppSettingsStore: ObservableObject {
         reminderSortOrder = UserDefaults.standard
             .string(forKey: Self.reminderSortOrderKey)
             .flatMap(ReminderSortOrder.init(rawValue:)) ?? .added
-
-        reminderTabListIDs = UserDefaults.standard.stringArray(forKey: Self.reminderTabListIDsKey) ?? []
-        let storedTabIndex = UserDefaults.standard.object(forKey: Self.reminderActiveTabIndexKey) == nil
-            ? 0
-            : UserDefaults.standard.integer(forKey: Self.reminderActiveTabIndexKey)
-        reminderActiveTabIndex = storedTabIndex
-    }
-
-    // MARK: - Reminder tabs
-
-    /// Appends a list as a new tab and makes it active — the "+" button's one
-    /// move. One writer for both values, so the two persisted writes cannot
-    /// disagree.
-    func appendReminderTab(listID: String) {
-        reminderTabListIDs.append(listID)
-        reminderActiveTabIndex = reminderTabListIDs.count - 1
-    }
-
-    /// Removes the tab at `index` and keeps the active tab on the same list
-    /// wherever one survives: removing a tab before the active one shifts the
-    /// index down with it, removing the active one lands on whatever took its
-    /// slot.
-    func removeReminderTab(at index: Int) {
-        guard reminderTabListIDs.indices.contains(index) else { return }
-        reminderTabListIDs.remove(at: index)
-        if index < reminderActiveTabIndex {
-            reminderActiveTabIndex -= 1
-        }
-        reminderActiveTabIndex = min(reminderActiveTabIndex, max(reminderTabListIDs.count - 1, 0))
-    }
-
-    /// Drops tabs whose list no longer exists and clamps the active index.
-    /// Called after a list reload, so a list deleted in Reminders prunes itself
-    /// instead of leaving a dead tab the user cannot reach or remove.
-    func pruneReminderTabs(keepingValid validIDs: Set<String>) {
-        let pruned = reminderTabListIDs.filter { validIDs.contains($0) }
-        guard pruned.count != reminderTabListIDs.count else { return }
-        reminderTabListIDs = pruned
-        reminderActiveTabIndex = min(reminderActiveTabIndex, max(pruned.count - 1, 0))
     }
 
     private static func loadRadius(forKey key: String, fallback: Double) -> Double {
