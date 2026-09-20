@@ -6,3 +6,4 @@ DerivedData/
 .workbuddy/
 *.xcuserdatad
 YUANNotch.app/
+.release/

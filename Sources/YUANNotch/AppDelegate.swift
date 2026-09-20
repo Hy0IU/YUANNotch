@@ -4,6 +4,7 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panelController: NotchPanelController?
     private var statusItem: NSStatusItem?
+    private let updateChecker = UpdateChecker()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         migrateLegacyData()
@@ -16,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelController?.showDocked()
         buildStatusItem()
         buildMenu()
+        updateChecker.startAutomaticChecks()
     }
 
     /// One-time migration of notes and settings stored under the previous
@@ -102,6 +104,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsItem.target = self
         appMenu.addItem(settingsItem)
 
+        let updateItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(checkForUpdates),
+            keyEquivalent: ""
+        )
+        updateItem.target = self
+        appMenu.addItem(updateItem)
+
         appMenu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit YUANNotch", action: #selector(quit), keyEquivalent: "q")
@@ -156,6 +166,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         panelController?.openSettings()
+    }
+
+    @objc private func checkForUpdates() {
+        updateChecker.checkManually()
     }
 
     @objc private func quit() {

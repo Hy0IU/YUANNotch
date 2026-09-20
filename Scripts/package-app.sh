@@ -12,6 +12,28 @@ SOURCE_ICON="$ROOT_DIR/Resources/AppIcon.png"
 RESOURCE_BUNDLE_NAME="YUANNotch_YUANNotch.bundle"
 RESOURCE_BUNDLE="$ROOT_DIR/.build/release/$RESOURCE_BUNDLE_NAME"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+APP_VERSION="${APP_VERSION:-0.1.0}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
+INSTALL_APP="${INSTALL_APP:-1}"
+
+# Hardened Runtime and a secure timestamp belong on Developer ID releases.
+# Keep local ad-hoc builds free of distribution-only signing options.
+sign_component() {
+  if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    codesign --force --sign "$SIGN_IDENTITY" "$@"
+  else
+    codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$@"
+  fi
+}
+
+if [[ ! "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+  echo "error: APP_VERSION must be a semantic version (got '$APP_VERSION')" >&2
+  exit 1
+fi
+if [[ ! "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: BUILD_NUMBER must be a positive integer (got '$BUILD_NUMBER')" >&2
+  exit 1
+fi
 
 cd "$ROOT_DIR"
 swift build -c release
@@ -74,7 +96,7 @@ if [[ -f "$SOURCE_ICON" ]]; then
   rm -rf "$TMP_DIR"
 fi
 
-cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
+cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -90,9 +112,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$BUILD_NUMBER</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>LSUIElement</key>
@@ -103,16 +125,17 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# Sign the resource bundle first and the app second. `--deep` is deprecated for
-# signing — it exists for verification — and the resource bundle is the only
-# nested code there is, so naming it costs nothing and keeps the order explicit.
-codesign --force --sign "$SIGN_IDENTITY" "$MACOS_DIR/$RESOURCE_BUNDLE_NAME"
-codesign --force --sign "$SIGN_IDENTITY" "$APP_DIR"
+sign_component "$MACOS_DIR/$RESOURCE_BUNDLE_NAME"
+sign_component "$APP_DIR"
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
-rm -rf "$APPLICATIONS_APP_DIR"
-rm -rf "$LEGACY_APPLICATIONS_APP_DIR"
-cp -R "$APP_DIR" "$APPLICATIONS_APP_DIR"
+if [[ "$INSTALL_APP" == "1" ]]; then
+  rm -rf "$APPLICATIONS_APP_DIR"
+  rm -rf "$LEGACY_APPLICATIONS_APP_DIR"
+  cp -R "$APP_DIR" "$APPLICATIONS_APP_DIR"
+fi
 
 echo "Built $APP_DIR"
-echo "Copied $APPLICATIONS_APP_DIR"
+if [[ "$INSTALL_APP" == "1" ]]; then
+  echo "Copied $APPLICATIONS_APP_DIR"
+fi
