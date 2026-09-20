@@ -11,12 +11,10 @@ YUANNotch 的出发点，是让记录尽可能自然、无感：平时安静地�
 ## 使用演示
 
 <p align="center">
-  <a href="Resources/YUANNotch-Demo.mp4">
-    <img src="Resources/YUANNotch-Demo.jpg" width="900" alt="YUANNotch 使用演示">
-  </a>
+  <img src="Resources/YUANNotch-Demo.webp" width="900" alt="YUANNotch 使用演示">
 </p>
 
-<p align="center"><sub>点击画面播放完整演示</sub></p>
+<p align="center"><sub>演示会自动播放 · <a href="Resources/YUANNotch-Demo.mp4">查看高清 MP4</a></sub></p>
 
 ## 它能做什么
 
