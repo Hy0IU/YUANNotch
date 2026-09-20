@@ -385,6 +385,10 @@ final class ReminderStore: ObservableObject {
             if refreshed != lists {
                 lists = refreshed
             }
+            // A list deleted in Reminders leaves the drum on its own; the
+            // active index is clamped here, and `reconcileSelectedList` right
+            // below handles the selection if the vanished list was showing.
+            settingsStore.pruneReminderTabs(keepingValid: Set(lists.map(\.id)))
             reconcileSelectedList()
         }
 
