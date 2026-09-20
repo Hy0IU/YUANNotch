@@ -89,9 +89,43 @@ struct RemindersPanelView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            listPicker
+            Button {
+                store.removeSelectedListView()
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(store.canRemoveListView ? 0.72 : 0.25))
+                    .frame(width: 24, height: 24)
+                    .background(
+                        Circle()
+                            .fill(.white.opacity(store.canRemoveListView ? 0.06 : 0.025))
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!store.canRemoveListView)
+            .help(store.canRemoveListView ? "Remove the current list view" : "Keep at least one list view")
 
-            Spacer(minLength: 8)
+            listViewStrip
+
+            Button {
+                store.addListView()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(store.canAddListView ? 0.72 : 0.25))
+                    .frame(width: 24, height: 24)
+                    .background(
+                        Circle()
+                            .fill(.white.opacity(store.canAddListView ? 0.06 : 0.025))
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!store.canAddListView)
+            .help(store.canAddListView ? "Add another list view" : "All lists are already shown")
+
+            Spacer(minLength: 0)
 
             sortPicker
 
@@ -113,46 +147,33 @@ struct RemindersPanelView: View {
         .frame(height: 34)
     }
 
-    private var listPicker: some View {
-        Menu {
-            ForEach(store.lists) { list in
-                Button {
-                    store.select(listID: list.id)
-                } label: {
-                    if list.id == store.selectedList?.id {
-                        Label(listMenuTitle(list), systemImage: "checkmark")
-                    } else {
-                        Text(listMenuTitle(list))
-                    }
+    private var listViewStrip: some View {
+        ReminderListStripScroll(height: 24) {
+            HStack(spacing: 6) {
+                ForEach(Array(store.listViews.enumerated()), id: \.offset) { index, list in
+                    ReminderListCapsule(
+                        list: list,
+                        availableLists: store.lists,
+                        occupiedListIDs: Set(store.listViews.map(\.id)),
+                        isSelected: list.id == store.selectedList?.id,
+                        canDelete: store.listViews.count > 1,
+                        onActivate: {
+                            store.select(listID: list.id)
+                        },
+                        onSelect: { listID in
+                            store.assignListView(at: index, listID: listID)
+                        },
+                        onDelete: {
+                            store.removeListView(at: index)
+                        }
+                    )
                 }
             }
-        } label: {
-            HStack(spacing: 5) {
-                Text(store.selectedList?.title ?? "No list")
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                if store.selectedListIsLocalOnly {
-                    Text("this Mac only")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.orange.opacity(0.85))
-                }
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.45))
-            }
-            .foregroundStyle(.white.opacity(0.82))
-            .padding(.horizontal, 8)
-            .frame(height: 24)
-            .background(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(.white.opacity(0.05))
-            )
-            .contentShape(Rectangle())
+            .fixedSize(horizontal: true, vertical: false)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Switch list")
+        .frame(height: 24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .layoutPriority(1)
     }
 
     /// Chooses how rows are ordered inside each group. The groups themselves
@@ -183,16 +204,6 @@ struct RemindersPanelView: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Sort reminders")
-    }
-
-    private func listMenuTitle(_ list: ReminderList) -> String {
-        var parts = [list.title]
-        if list.isLocalOnly {
-            parts.append("this Mac only")
-        } else if !list.sourceTitle.isEmpty {
-            parts.append(list.sourceTitle)
-        }
-        return parts.joined(separator: " · ")
     }
 
     // MARK: - Compose

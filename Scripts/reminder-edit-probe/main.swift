@@ -29,6 +29,7 @@ import SwiftUI
 private let defaultsKeysToRestore = [
     "yuanNotch.appleReminders.enabled",
     "yuanNotch.appleReminders.listID",
+    "yuanNotch.appleReminders.listViews",
 ]
 
 // MARK: - Stand-in service
@@ -209,6 +210,24 @@ private func checkRules() {
         fieldsKept,
         "applyingTitle rewrites one row's title and nothing else",
         fieldsKept ? "r1 titled \"after\" with every other field kept; r2 untouched" : "applied: \(applied)"
+    )
+
+    let replacement = ReminderStore.replacingListViewIdentifier(
+        availableListIDs: ["a", "b", "c", "d"],
+        viewListIDs: ["a", "c"],
+        index: 0,
+        listID: "b"
+    )
+    let duplicate = ReminderStore.replacingListViewIdentifier(
+        availableListIDs: ["a", "b", "c", "d"],
+        viewListIDs: ["a", "c"],
+        index: 0,
+        listID: "c"
+    )
+    check(
+        replacement == ["b", "c"] && duplicate == nil,
+        "a capsule can choose an unused list but cannot duplicate another view",
+        "replacement=\(replacement ?? []), duplicate accepted=\(duplicate != nil)"
     )
 }
 
@@ -414,6 +433,14 @@ private func waitForUpdates(_ service: StubRemindersService, atLeast count: Int,
 private func checkEndOfEditingSaves() async {
     print("")
     print("— 6 · the editing session ending is a save —")
+
+    let defaults = UserDefaults.standard
+    let saved = defaultsKeysToRestore.map { ($0, defaults.object(forKey: $0)) }
+    defer {
+        for (key, value) in saved {
+            if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+    }
 
     let queueURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("probe-reminder-queue-\(UUID().uuidString).json")

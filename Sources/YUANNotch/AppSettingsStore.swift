@@ -106,6 +106,22 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    /// The reminder lists pinned into the drawer's capsule strip, in display
+    /// order. These are views onto EventKit calendars, not calendars of their
+    /// own: adding one must never create or mutate anything in Reminders.app.
+    @Published var reminderListViewIdentifiers: [String] {
+        didSet {
+            if reminderListViewIdentifiers.isEmpty {
+                UserDefaults.standard.removeObject(forKey: Self.appleRemindersListViewsKey)
+            } else {
+                UserDefaults.standard.set(
+                    reminderListViewIdentifiers,
+                    forKey: Self.appleRemindersListViewsKey
+                )
+            }
+        }
+    }
+
     /// How the reminders panel orders the rows inside each group. Read by
     /// `ReminderStore.groupedItems` and written by the panel's sort menu —
     /// the settings page and the panel share this one value, never a copy,
@@ -134,6 +150,7 @@ final class AppSettingsStore: ObservableObject {
     private static let expandedBottomCornerRadiusKey = "yuanNotch.expandedBottomCornerRadius"
     private static let appleRemindersEnabledKey = "yuanNotch.appleReminders.enabled"
     private static let appleRemindersListIDKey = "yuanNotch.appleReminders.listID"
+    private static let appleRemindersListViewsKey = "yuanNotch.appleReminders.listViews"
     private static let reminderSortOrderKey = "yuanNotch.appleReminders.sortOrder"
 
     init() {
@@ -168,8 +185,13 @@ final class AppSettingsStore: ObservableObject {
 
         isAppleRemindersSyncEnabled = UserDefaults.standard
             .object(forKey: Self.appleRemindersEnabledKey) as? Bool ?? false
-        remindersCalendarIdentifier = UserDefaults.standard
+        let storedReminderListID = UserDefaults.standard
             .string(forKey: Self.appleRemindersListIDKey)
+        remindersCalendarIdentifier = storedReminderListID
+        reminderListViewIdentifiers = UserDefaults.standard
+            .stringArray(forKey: Self.appleRemindersListViewsKey)
+            ?? storedReminderListID.map { [$0] }
+            ?? []
         reminderSortOrder = UserDefaults.standard
             .string(forKey: Self.reminderSortOrderKey)
             .flatMap(ReminderSortOrder.init(rawValue:)) ?? .added

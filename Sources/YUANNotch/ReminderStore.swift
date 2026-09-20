@@ -232,6 +232,22 @@ final class ReminderStore: ObservableObject {
 
     var selectedListIsLocalOnly: Bool { selectedList?.isLocalOnly ?? false }
 
+    /// The local view strip projected back onto the lists EventKit currently
+    /// exposes. Reconciliation removes dangling identifiers before the panel
+    /// can render them, but the compactMap keeps this honest during a refresh.
+    var listViews: [ReminderList] {
+        let listsByID = Dictionary(uniqueKeysWithValues: lists.map { ($0.id, $0) })
+        return settingsStore.reminderListViewIdentifiers.compactMap { listsByID[$0] }
+    }
+
+    var canAddListView: Bool {
+        listViews.count < lists.count
+    }
+
+    var canRemoveListView: Bool {
+        listViews.count > 1
+    }
+
     /// What the panel's content area should show.
     ///
     /// One decision, made here: the view switches on this instead of combining
@@ -519,6 +535,12 @@ final class ReminderStore: ObservableObject {
 
     func select(listID: String?) {
         guard settingsStore.remindersCalendarIdentifier != listID else { return }
+
+        if let listID,
+           lists.contains(where: { $0.id == listID }),
+           !settingsStore.reminderListViewIdentifiers.contains(listID) {
+            settingsStore.reminderListViewIdentifiers.append(listID)
+        }
         settingsStore.remindersCalendarIdentifier = listID
         // Placeholders belong to the list they were created for, so they are
         // filtered per list rather than cleared here — and the snapshot is not
@@ -533,6 +555,97 @@ final class ReminderStore: ObservableObject {
         objectWillChange.send()
         // Switching list is a user action, so the read is acknowledged.
         requestRefresh(showingProgress: true)
+    }
+
+    /// Adds one more local view onto an existing Reminders list. It deliberately
+    /// has no service call: the plus button grows the strip, not EventKit.
+    func addListView() {
+        let represented = Set(settingsStore.reminderListViewIdentifiers)
+        guard let candidate = lists.first(where: { !represented.contains($0.id) }) else {
+            return
+        }
+
+        settingsStore.reminderListViewIdentifiers.append(candidate.id)
+        objectWillChange.send()
+
+        if selectedList == nil {
+            select(listID: candidate.id)
+        }
+    }
+
+    /// Removes the view whose reminders are currently shown. This is the
+    /// shortcut used by the minus button beside the strip; the per-capsule menu
+    /// still calls `removeListView(at:)` for an explicit target.
+    @discardableResult
+    func removeSelectedListView() -> Bool {
+        guard let selectedID = selectedList?.id,
+              let index = settingsStore.reminderListViewIdentifiers.firstIndex(of: selectedID) else {
+            return false
+        }
+        return removeListView(at: index)
+    }
+
+    /// Assigns an existing Reminders list to one local capsule, then opens that
+    /// capsule. A list already represented elsewhere is rejected so every view
+    /// in the strip stays distinct.
+    @discardableResult
+    func assignListView(at index: Int, listID: String) -> Bool {
+        let current = settingsStore.reminderListViewIdentifiers
+        guard let replacement = Self.replacingListViewIdentifier(
+            availableListIDs: lists.map(\.id),
+            viewListIDs: current,
+            index: index,
+            listID: listID
+        ) else {
+            return false
+        }
+
+        if replacement != current {
+            settingsStore.reminderListViewIdentifiers = replacement
+        }
+        // Selecting the capsule's current assignment is meaningful too: it
+        // activates a view that may not currently own the reminder content.
+        select(listID: listID)
+        return true
+    }
+
+    /// Removes one local view. The last capsule is retained because composing a
+    /// reminder always needs a concrete target list.
+    @discardableResult
+    func removeListView(at index: Int) -> Bool {
+        let current = settingsStore.reminderListViewIdentifiers
+        guard current.count > 1, current.indices.contains(index) else { return false }
+
+        let removedID = current[index]
+        var remaining = current
+        remaining.remove(at: index)
+        settingsStore.reminderListViewIdentifiers = remaining
+
+        if settingsStore.remindersCalendarIdentifier == removedID {
+            select(listID: remaining[min(index, remaining.count - 1)])
+        } else {
+            objectWillChange.send()
+        }
+        return true
+    }
+
+    /// Pure assignment rule shared by the store and standalone reminder probe.
+    static func replacingListViewIdentifier(
+        availableListIDs: [String],
+        viewListIDs: [String],
+        index: Int,
+        listID: String
+    ) -> [String]? {
+        guard availableListIDs.contains(listID), viewListIDs.indices.contains(index) else {
+            return nil
+        }
+        guard !viewListIDs.enumerated().contains(where: { offset, id in
+            offset != index && id == listID
+        }) else { return nil }
+
+        var result = viewListIDs
+        result[index] = listID
+        return result
     }
 
     // MARK: - Writes
@@ -1055,13 +1168,27 @@ final class ReminderStore: ObservableObject {
     /// Clears a dangling selection (the remembered list may have been deleted)
     /// and falls back to the system default list.
     private func reconcileSelectedList() {
-        if let stored = settingsStore.remindersCalendarIdentifier,
-           lists.contains(where: { $0.id == stored }) {
-            return
+        let validIDs = Set(lists.map(\.id))
+        var seen: Set<String> = []
+        var reconciledViews = settingsStore.reminderListViewIdentifiers.filter { id in
+            validIDs.contains(id) && seen.insert(id).inserted
         }
 
         let fallback = lists.first(where: \.isDefault) ?? lists.first
-        settingsStore.remindersCalendarIdentifier = fallback?.id
+        let selectedID = settingsStore.remindersCalendarIdentifier.flatMap { id in
+            validIDs.contains(id) ? id : nil
+        } ?? fallback?.id
+
+        if let selectedID, !reconciledViews.contains(selectedID) {
+            reconciledViews.append(selectedID)
+        }
+
+        if settingsStore.reminderListViewIdentifiers != reconciledViews {
+            settingsStore.reminderListViewIdentifiers = reconciledViews
+        }
+        if settingsStore.remindersCalendarIdentifier != selectedID {
+            settingsStore.remindersCalendarIdentifier = selectedID
+        }
     }
 
     private func foregroundIfNeeded() -> Bool {
