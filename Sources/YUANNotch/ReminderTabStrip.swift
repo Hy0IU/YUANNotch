@@ -58,13 +58,7 @@ struct ReminderTabStrip: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            // With nothing pinned the drum is not mounted: an empty scroller
-            // would only swallow the wheel over a row with nothing to turn.
-            if pinnedListIDs.isEmpty {
-                Spacer(minLength: 0)
-            } else {
-                cylinder
-            }
+            cylinder
 
             addButton
         }
