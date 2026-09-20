@@ -180,4 +180,3 @@ SIGN_IDENTITY="<你的签名身份>" bash Scripts/package-app.sh
 
 - [swift-markdown-engine](https://github.com/nodes-app/swift-markdown-engine) — 编辑器内核（实时 Markdown 样式、代码块、任务复选框），以源码形式内置于 `Vendor/`，MIT 许可。
 - [Atoll](https://github.com/Ebullioscopic/Atoll) — 窗口层级、多显示器处理与设置窗口「先激活再置前」的做法参考了它。
-- [NotchNotes](https://github.com/oil-oil/NotchNotes) — 本项目的前身，改名后继续发展。
