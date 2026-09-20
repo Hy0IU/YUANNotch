@@ -33,6 +33,7 @@ echo "Compiling probe ..."
 xcrun swiftc -swift-version 5 \
   -o "$EXECUTABLE" \
   "$ROOT_DIR/Scripts/reminder-edit-probe/main.swift" \
+  "$SOURCE_DIR/ReminderOrdering.swift" \
   "$SOURCE_DIR/ReminderStore.swift" \
   "$SOURCE_DIR/ReminderComposer.swift" \
   "$SOURCE_DIR/AppleRemindersService.swift" \

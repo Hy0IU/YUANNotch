@@ -110,7 +110,10 @@ final class AppSettingsStore: ObservableObject {
     /// `ReminderStore.groupedItems` and written by the panel's sort menu —
     /// the settings page and the panel share this one value, never a copy,
     /// and it survives both a mode switch and a relaunch.
-    @Published var reminderSortOrder: ReminderSortOrder = .dueDate {
+    ///
+    /// The default is `ReminderSortOrder.added`: the list is a working
+    /// surface, so what was just added is what should be found first.
+    @Published var reminderSortOrder: ReminderSortOrder = .added {
         didSet {
             UserDefaults.standard.set(reminderSortOrder.rawValue, forKey: Self.reminderSortOrderKey)
         }
@@ -169,7 +172,7 @@ final class AppSettingsStore: ObservableObject {
             .string(forKey: Self.appleRemindersListIDKey)
         reminderSortOrder = UserDefaults.standard
             .string(forKey: Self.reminderSortOrderKey)
-            .flatMap(ReminderSortOrder.init(rawValue:)) ?? .dueDate
+            .flatMap(ReminderSortOrder.init(rawValue:)) ?? .added
     }
 
     private static func loadRadius(forKey key: String, fallback: Double) -> Double {

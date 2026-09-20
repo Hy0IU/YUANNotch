@@ -550,6 +550,11 @@ final class ReminderStore: ObservableObject {
                     title: trimmed,
                     dueDate: due?.date,
                     isDueDateAllDay: due?.isAllDay ?? false,
+                    // A placeholder has no system-side `creationDate` to read —
+                    // it does not exist over there yet. Now *is* when it was
+                    // added, and the value is carried unchanged through every
+                    // later rebuild, so the order does not shuffle under it.
+                    createdDate: Date(),
                     syncState: .writing
                 ),
                 listID: list.id
@@ -686,6 +691,7 @@ final class ReminderStore: ObservableObject {
                 isCompleted: snapshot.isCompleted,
                 hasAlarm: snapshot.hasAlarm,
                 listID: snapshot.listID,
+                createdDate: snapshot.createdDate,
                 lastModified: snapshot.lastModified
             )
         }
@@ -934,6 +940,7 @@ final class ReminderStore: ObservableObject {
                     title: entry.title,
                     dueDate: entry.dueDate,
                     isDueDateAllDay: entry.isDueDateAllDay,
+                    createdDate: entry.createdDate,
                     syncState: .idle
                 )
             }
@@ -963,6 +970,7 @@ final class ReminderStore: ObservableObject {
             title: placeholders[index].item.title,
             dueDate: placeholders[index].item.dueDate,
             isDueDateAllDay: placeholders[index].item.isDueDateAllDay,
+            createdDate: placeholders[index].item.createdDate,
             syncState: syncState
         )
         rebuildItems()

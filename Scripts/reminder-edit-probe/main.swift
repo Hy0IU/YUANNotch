@@ -76,6 +76,7 @@ private actor StubRemindersService: RemindersServing {
             isCompleted: false,
             hasAlarm: false,
             listID: listID,
+            createdDate: Date(),
             lastModified: nil
         )
         reminders.append(created)
@@ -98,6 +99,7 @@ private actor StubRemindersService: RemindersServing {
                 isCompleted: old.isCompleted,
                 hasAlarm: old.hasAlarm,
                 listID: old.listID,
+                createdDate: old.createdDate,
                 lastModified: old.lastModified
             )
         }
@@ -162,6 +164,7 @@ private func reminder(id: String, title: String) -> ReminderSnapshot {
         isCompleted: false,
         hasAlarm: false,
         listID: "list-1",
+        createdDate: nil,
         lastModified: nil
     )
 }
@@ -312,6 +315,7 @@ private func runFlowChecks() async {
         title: "not written yet",
         dueDate: nil,
         isDueDateAllDay: false,
+        createdDate: nil,
         syncState: .failed("probe")
     )
     store.beginEditing(pending)

@@ -28,6 +28,12 @@ struct ReminderPanelItem: Identifiable, Equatable {
     /// True for a day-level due date (see `ReminderDue`): grouping must not
     /// read a time of day out of `dueDate`.
     let isDueDateAllDay: Bool
+    /// When the reminder was added — EventKit's `creationDate` for a row that
+    /// exists on the system, and the moment the user pressed return for a
+    /// placeholder that has not landed yet. Optional because EventKit declares
+    /// `creationDate` nullable; a nil sorts last rather than first, so a row
+    /// whose age is unknown cannot claim to be the newest.
+    let createdDate: Date?
     let syncState: ReminderSyncState
 
     /// A placeholder has no system-side existence, so completing it is
@@ -107,6 +113,10 @@ enum ReminderGroup: String, CaseIterable, Identifiable {
 /// because that order is about time, not about the user's reading preference;
 /// only the ordering *within* a group is a choice.
 enum ReminderSortOrder: String, CaseIterable, Identifiable {
+    /// Newest first. The default: the list is a working surface, and what the
+    /// user just added is what they are most likely to look for. Ordering by
+    /// due date would bury it under everything already scheduled.
+    case added
     case dueDate
     case title
 
@@ -114,6 +124,7 @@ enum ReminderSortOrder: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
+        case .added: return "Recently Added"
         case .dueDate: return "By Due Date"
         case .title: return "By Title"
         }
@@ -121,6 +132,7 @@ enum ReminderSortOrder: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .added: return "clock"
         case .dueDate: return "calendar"
         case .title: return "textformat"
         }
@@ -130,8 +142,29 @@ enum ReminderSortOrder: String, CaseIterable, Identifiable {
     /// so a new order is an added case rather than a second sort somewhere.
     func comparator() -> (ReminderPanelItem, ReminderPanelItem) -> Bool {
         switch self {
+        case .added: return Self.addedDatesBefore
         case .dueDate: return Self.dueDatesBefore
         case .title: return Self.titlesBefore
+        }
+    }
+
+    private static func addedDatesBefore(_ lhs: ReminderPanelItem, _ rhs: ReminderPanelItem) -> Bool {
+        switch (lhs.createdDate, rhs.createdDate) {
+        case let (left?, right?):
+            // **Descending**: the newest addition comes first, which is the
+            // whole point of this order. Seconds only, for the same reason the
+            // due-date order compares on that scale — the value arrives through
+            // a components round-trip, so sub-second deltas are noise.
+            let lhsSecond = Int(left.timeIntervalSince1970)
+            let rhsSecond = Int(right.timeIntervalSince1970)
+            if lhsSecond != rhsSecond { return lhsSecond > rhsSecond }
+            return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+        case (nil, nil):
+            return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+        case (nil, _):
+            return false
+        case (_, nil):
+            return true
         }
     }
 

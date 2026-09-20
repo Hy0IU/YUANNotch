@@ -61,6 +61,10 @@ struct ReminderSnapshot: Identifiable, Equatable, Sendable {
     let isCompleted: Bool
     let hasAlarm: Bool
     let listID: String
+    /// EventKit's `creationDate` — when the reminder was added. Declared
+    /// nullable there, so it is carried as an optional rather than defaulted:
+    /// a row of unknown age must not be able to claim it is the newest.
+    let createdDate: Date?
     let lastModified: Date?
 }
 
@@ -341,6 +345,7 @@ actor AppleRemindersService: RemindersServing {
                 isCompleted: false,
                 hasAlarm: due.map { !$0.isAllDay } ?? false,
                 listID: listID,
+                createdDate: Date(),
                 lastModified: Date()
             )
         }()
@@ -530,6 +535,7 @@ extension ReminderSnapshot {
             isCompleted: reminder.isCompleted,
             hasAlarm: !(reminder.alarms ?? []).isEmpty,
             listID: listID,
+            createdDate: reminder.creationDate,
             lastModified: reminder.lastModifiedDate
         )
     }
