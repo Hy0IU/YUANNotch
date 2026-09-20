@@ -65,12 +65,11 @@ struct RemindersPanelView: View {
             if store.isEnabled && store.authorization.canRead {
                 header
                 divider
-                // The drum only exists once something is pinned in it; with
-                // no tabs the panel is exactly what it was before.
-                if !settingsStore.reminderTabListIDs.isEmpty {
-                    ReminderTabStrip(store: store, settingsStore: settingsStore)
-                    divider
-                }
+                // The drum row always exists while the panel is readable —
+                // with nothing pinned it carries only the "+" that loads the
+                // first list into it.
+                ReminderTabStrip(store: store, settingsStore: settingsStore)
+                divider
                 compose
                 divider
                 content
