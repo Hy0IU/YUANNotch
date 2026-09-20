@@ -36,6 +36,8 @@ xcrun swiftc -swift-version 5 \
   "$SOURCE_DIR/ReminderOrdering.swift" \
   "$SOURCE_DIR/ReminderStore.swift" \
   "$SOURCE_DIR/ReminderComposer.swift" \
+  "$SOURCE_DIR/FieldCaretFocus.swift" \
+  "$SOURCE_DIR/PanelWindowTypes.swift" \
   "$SOURCE_DIR/AppleRemindersService.swift" \
   "$SOURCE_DIR/AppSettingsStore.swift" \
   "$SOURCE_DIR/DrawerMode.swift" \

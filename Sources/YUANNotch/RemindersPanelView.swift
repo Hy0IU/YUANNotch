@@ -690,10 +690,19 @@ struct RemindersPanelView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(.white.opacity(0.9))
-                .fieldCaretFocus(request: editFocusRequest, placeholder: Self.editPlaceholder)
+                // Three ways to save, one pipeline: Return, the checkmark, and
+                // this — the field ending its editing session, whatever ended it.
+                // A save that hangs on one button's press being delivered is a
+                // save with a single point of failure.
+                .fieldCaretFocus(
+                    request: editFocusRequest,
+                    placeholder: Self.editPlaceholder,
+                    onEndEditing: { Task { await store.commitEditing() } }
+                )
                 .onSubmit { Task { await store.commitEditing() } }
                 // Esc puts the row back the way it was: an abandoned edit is a
-                // cancellation, not a save.
+                // cancellation, not a save. It cancels *before* the field lets go,
+                // so the end-of-editing report above finds nothing to write.
                 .onExitCommand { store.cancelEditing() }
                 .padding(.horizontal, 8)
                 .frame(minHeight: 22)
@@ -720,9 +729,10 @@ struct RemindersPanelView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            // Nothing to write: the draft was cleared, or it still says what the
-            // row already says. `rewrite` is the same rule the commit uses.
-            .disabled(ReminderStore.rewrite(original: item.title, draft: store.editingDraft) == nil)
+            // Deliberately never disabled. Whether there is anything to write is
+            // the store's decision (`rewrite`), and a view that recomputed it
+            // here was a second derivation of the same rule — one that could, and
+            // did, disagree with the store about whether the button was live.
             .help("Save reminder")
         }
         .padding(.horizontal, 10)

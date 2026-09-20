@@ -1,6 +1,7 @@
 import AppKit
 import EventKit
 import Foundation
+import SwiftUI
 
 // YUANNotch · reminder editing probe
 //
@@ -326,6 +327,156 @@ private func runFlowChecks() async {
     )
 }
 
+// MARK: - 6 · ending the editing session saves
+
+/// The panel's edit row, reduced to the part this check is about.
+private struct ProbeEditRow: View {
+    @ObservedObject var store: ReminderStore
+    @ObservedObject var box: EditFocusBox
+
+    var body: some View {
+        TextField("Edit reminder", text: editBinding)
+            .textFieldStyle(.plain)
+            .frame(width: 200, height: 24)
+            .fieldCaretFocus(
+                request: box.request,
+                placeholder: "Edit reminder",
+                onEndEditing: { Task { await store.commitEditing() } }
+            )
+    }
+
+    private var editBinding: Binding<String> {
+        Binding(get: { store.editingDraft }, set: { store.updateEditingDraft($0) })
+    }
+}
+
+@MainActor
+private final class EditFocusBox: ObservableObject {
+    @Published var request = 0
+}
+
+@MainActor
+private func makeEditHost(_ view: some View, width: CGFloat, height: CGFloat) -> (NSHostingView<AnyView>, NSWindow) {
+    let host = NSHostingView(rootView: AnyView(view.frame(width: width, height: height)))
+    host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+    // The app's own panel class: a borderless `NSWindow` answers `false` to
+    // `canBecomeKey`, and a field editor will not attach without a key window —
+    // so a probe built on one would test a state the app is never in.
+    let window = NotchPanel(
+        contentRect: host.frame,
+        styleMask: [.borderless],
+        backing: .buffered,
+        defer: false
+    )
+    window.allowsKeyboardFocus = true
+    window.contentView = host
+    NSApp.setActivationPolicy(.accessory)
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+    // A window becomes key on the next turn, not inside `makeKeyAndOrderFront`.
+    for _ in 0 ..< 6 {
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+    }
+    return (host, window)
+}
+
+@MainActor
+private func pump(_ host: NSView, _ window: NSWindow, turns: Int = 6) {
+    for _ in 0 ..< turns {
+        host.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+    }
+    _ = window
+}
+
+@MainActor
+private func field(in view: NSView, placeholder: String) -> NSTextField? {
+    if let field = view as? NSTextField, field.placeholderString == placeholder { return field }
+    for subview in view.subviews {
+        if let found = field(in: subview, placeholder: placeholder) { return found }
+    }
+    return nil
+}
+
+@MainActor
+private func waitForUpdates(_ service: StubRemindersService, atLeast count: Int, timeout: TimeInterval = 3) async -> Int {
+    let deadline = Date().addingTimeInterval(timeout)
+    var recorded = await service.updates.count
+    while recorded < count, Date() < deadline {
+        try? await Task.sleep(for: .milliseconds(20))
+        recorded = await service.updates.count
+    }
+    return recorded
+}
+
+@MainActor
+private func checkEndOfEditingSaves() async {
+    print("")
+    print("— 6 · the editing session ending is a save —")
+
+    let queueURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("probe-reminder-queue-\(UUID().uuidString).json")
+    let service = StubRemindersService(reminders: [reminder(id: "r1", title: "买牛奶")])
+    let (store, _) = makeStore(service: service, queueURL: queueURL)
+    store.requestRefresh(reloadLists: true)
+    guard await waitUntil({ !store.items.isEmpty }), let item = store.items.first else {
+        check(false, "a row to edit", "the read never produced rows")
+        return
+    }
+
+    let box = EditFocusBox()
+    let (host, window) = makeEditHost(ProbeEditRow(store: store, box: box), width: 240, height: 40)
+
+    // Open the edit and let the caret bridge focus the field, as the pencil does.
+    store.beginEditing(item)
+    box.request += 1
+    pump(host, window)
+
+    guard let textField = field(in: host, placeholder: "Edit reminder") else {
+        check(false, "the edit field exists", "no NSTextField with the edit placeholder")
+        return
+    }
+    let isEditing = window.firstResponder === textField.currentEditor()
+    (textField.currentEditor())?.insertText("两瓶")
+    pump(host, window, turns: 3)
+    let typed = store.editingDraft
+
+    // Now end the session the way clicking anything else does.
+    _ = window.makeFirstResponder(nil as NSResponder?)
+    pump(host, window)
+    let recorded = await waitForUpdates(service, atLeast: 1)
+    let update = await service.updates.first
+
+    check(
+        isEditing && typed == "买牛奶两瓶"
+            && recorded == 1
+            && update?.title == "买牛奶两瓶"
+            && store.items.first?.title == "买牛奶两瓶"
+            && store.editingID == nil,
+        "letting the field go writes what was typed",
+        "focused=\(isEditing), typed \"\(typed)\", service saw \(recorded) update(s)\(update.map { " (\"\($0.title ?? "nil")\")" } ?? ""), row now \"\(store.items.first?.title ?? "nil")\""
+    )
+
+    // Esc cancels first, so the end of the session that follows writes nothing.
+    guard let current = store.items.first else { return }
+    store.beginEditing(current)
+    box.request += 1
+    pump(host, window)
+    (textField.currentEditor())?.insertText("!!")
+    pump(host, window, turns: 3)
+    store.cancelEditing()
+    _ = window.makeFirstResponder(nil as NSResponder?)
+    pump(host, window)
+    try? await Task.sleep(for: .milliseconds(150))
+    let afterCancel = await service.updates.count
+    check(
+        afterCancel == recorded && store.editingID == nil,
+        "a cancelled edit writes nothing when the field lets go",
+        "updates still \(afterCancel), editing=\(store.editingID != nil)"
+    )
+}
+
 // MARK: - Entry point
 
 // A main.swift's top-level code is only main-actor isolated in Swift 6 language
@@ -340,6 +491,7 @@ MainActor.assumeIsolated {
     var done = false
     Task { @MainActor in
         await runFlowChecks()
+        await checkEndOfEditingSaves()
         done = true
     }
     // The flow's awaits need the main actor to run; pumping the run loop is what
