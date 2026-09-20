@@ -8,6 +8,10 @@
 
 YUANNotch 的出发点，是让记录尽可能自然、无感：平时安静地留在屏幕顶部，需要时随手展开，用完便回到正在做的事情里。它不是一个庞大的知识库或任务管理系统，而是一个始终在手边的入口——接住突然出现的想法、眼前要做的事，以及工作中需要反复查看的内容。
 
+<p align="center">
+  <img src="Resources/YUANNotch-Hero.png" width="1000" alt="YUANNotch 在银色 MacBook 上展开的效果图">
+</p>
+
 ## 使用演示
 
 <p align="center">
