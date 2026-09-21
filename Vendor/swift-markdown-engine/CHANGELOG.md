@@ -26,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MarkdownEditorConfiguration.contentInsets`.
 
 ### Fixed
+- Image embeds no longer grow the editor's memory without bound. The
+  engine's image cache was a plain `[String: NSImage]` holding whatever
+  the ``EmbeddedImageProvider`` returned — full-resolution bitmaps, kept
+  for the process's lifetime, one per embed, re-fetched wholesale whenever
+  the provider's fingerprint changed. It is now an `NSCache` that stores a
+  copy re-rasterised to the width bucket the embed is drawn at (64pt
+  buckets, so a resized window converges on a handful of entries and every
+  request in a bucket is served by a copy at least as wide as it asked
+  for), accounts cost in decoded bytes against a 32 MB budget, and is
+  therefore evictable under memory pressure. `EmbeddedImageProvider` is
+  unchanged: the provider still returns the image it has, and the engine
+  decides the size to keep. A miss now costs one provider fetch plus one
+  downsample instead of retaining a full-resolution bitmap forever.
 - `NativeTextViewWrapper` now applies its initial styling pass even when
   the bound text starts at its final value (e.g. supplied as a SwiftUI
   `@State` initializer). Previously the editor would render the raw

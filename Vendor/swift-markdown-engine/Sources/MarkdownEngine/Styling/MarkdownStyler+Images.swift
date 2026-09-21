@@ -26,25 +26,34 @@ extension MarkdownStyler {
                 continue
             }
 
-            if let image = EmbeddedImageCache.shared.image(for: reference, services: ctx.services) {
-                let imageEmbedConfig = ctx.configuration.imageEmbed
-                // Determine max width from text container
-                let maxWidth: CGFloat = {
-                    if let tc = ctx.layoutBridge?.firstTextContainer {
-                        let w = tc.containerSize.width - tc.lineFragmentPadding * 2
-                        if w > 0 && w < imageEmbedConfig.unreasonableMaxWidth { return w }
-                    }
-                    return imageEmbedConfig.fallbackMaxWidth
-                }()
-
-                let minWidth = imageEmbedConfig.minimumWidth
-                let imageSize = image.size
-                let targetWidth: CGFloat
-                if let rw = reference.requestedWidth, rw > 0 {
-                    targetWidth = min(max(rw, minWidth), maxWidth)
-                } else {
-                    targetWidth = min(imageSize.width, maxWidth)
+            let imageEmbedConfig = ctx.configuration.imageEmbed
+            // Determine max width from text container
+            let maxWidth: CGFloat = {
+                if let tc = ctx.layoutBridge?.firstTextContainer {
+                    let w = tc.containerSize.width - tc.lineFragmentPadding * 2
+                    if w > 0 && w < imageEmbedConfig.unreasonableMaxWidth { return w }
                 }
+                return imageEmbedConfig.fallbackMaxWidth
+            }()
+
+            let minWidth = imageEmbedConfig.minimumWidth
+            // The width the image will be drawn at, resolved before the image
+            // is fetched: the cache scales to this figure, so asking for the
+            // image first would mean scaling a full-resolution bitmap after
+            // the fact. An explicit width in the embed wins; otherwise the
+            // image is drawn at its natural width, capped by what the
+            // container can show.
+            let requestedWidth = reference.requestedWidth
+                .flatMap { $0 > 0 ? min(max($0, minWidth), maxWidth) : nil }
+            let drawWidthCap = requestedWidth ?? maxWidth
+
+            if let image = EmbeddedImageCache.shared.image(
+                for: reference,
+                targetWidth: drawWidthCap,
+                services: ctx.services
+            ) {
+                let imageSize = image.size
+                let targetWidth = requestedWidth ?? min(imageSize.width, maxWidth)
                 let scale = targetWidth / imageSize.width
                 let displayWidth = imageSize.width * scale
                 let displayHeight = imageSize.height * scale
