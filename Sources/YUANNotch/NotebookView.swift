@@ -10,8 +10,12 @@ struct NotebookView: View {
     @ObservedObject var workspaceState: NotebookWorkspaceState
     @ObservedObject var drawerState: DrawerState
     @ObservedObject var editorInteractionState: EditorInteractionState
-    let layout: NotchLayout
     let onOpenSettings: () -> Void
+
+    /// The drawer's geometry, read from the display's own state rather than
+    /// handed in at construction: a resize has to reach this view without the
+    /// panel building a new root view, which is what a `let layout` forced.
+    private var layout: NotchLayout { drawerState.layout }
 
     /// The drawer's effective mode. Precedence lives in
     /// `NotebookWorkspaceState.showsReminders(persistedMode:)`.

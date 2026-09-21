@@ -20,9 +20,60 @@ final class NotchPanelController: NSObject {
 
     private func drawerState(for key: String) -> DrawerState {
         if let existing = drawerStates[key] { return existing }
-        let state = DrawerState()
+        // A state can only be made for a display that is here (or for the
+        // not-yet-known key, which falls back to whatever is current), because
+        // its layout is derived from that display's geometry.
+        let screen = NSScreen.screens.first { $0.uniqueID == key } ?? currentScreen
+        let state = DrawerState(layout: drawerLayout(for: screen, customSize: nil))
         drawerStates[key] = state
         return state
+    }
+
+    /// The one derivation of a display's drawer geometry.
+    ///
+    /// `NotchGeometry.layout` is the only thing that decides it; every caller
+    /// goes through here so the persisted size, the panel frame and what the
+    /// view draws can never disagree about what the drawer's size is. Callers
+    /// that only need the compact block pass `customSize: nil` and get it
+    /// without the persisted drawer size being read at all — the compact sizes
+    /// come from the display's notch, not from the drawer.
+    private func drawerLayout(for screen: NSScreen?, customSize: CGSize?) -> NotchLayout {
+        NotchGeometry.layout(
+            for: screen,
+            customSize: customSize ?? settingsStore.customExpandedSize
+        )
+    }
+
+    /// Publishes a display's layout to that display's drawer.
+    ///
+    /// This replaces rebuilding the panel's content: the drawer's geometry is
+    /// state its view reads, so a size change is a value assignment instead of
+    /// a teardown. The equality guard keeps a no-op resize (or a re-applied
+    /// preference) from invalidating the view for nothing.
+    @discardableResult
+    private func applyLayout(to screen: NSScreen?, customSize: CGSize?) -> NotchLayout {
+        applyLayout(drawerLayout(for: screen, customSize: customSize), to: drawerState(for: screen?.uniqueID ?? "unknown-screen"))
+    }
+
+    /// Publishes a layout to one drawer.
+    ///
+    /// Separate from the display-scoped call because a floating drawer is no
+    /// longer one of a display's states — it carries its own, and a resize
+    /// while detached has to reach *that* one.
+    @discardableResult
+    private func applyLayout(_ layout: NotchLayout, to state: DrawerState) -> NotchLayout {
+        if state.layout != layout {
+            state.layout = layout
+        }
+        return layout
+    }
+
+    /// Re-derives every connected display's drawer layout from the persisted
+    /// size. Called when that preference changes underneath us.
+    private func refreshAllDrawerLayouts() {
+        for screen in NSScreen.screens {
+            applyLayout(to: screen, customSize: nil)
+        }
     }
 
     private let editorInteractionState = EditorInteractionState()
@@ -107,6 +158,16 @@ final class NotchPanelController: NSObject {
             .sink { imageStore.moveTo(notesDirectoryURL: $0) }
             .store(in: &libraryCancellables)
 
+        // The persisted size is the preference; each display's drawer layout is
+        // the geometry in force. A change to one therefore has to reach the
+        // other, and this is that edge — it is what makes the settings page (or
+        // a resize's own commit) able to move the drawer without the panel
+        // rebuilding its content.
+        settingsStore.$customExpandedSize
+            .dropFirst()
+            .sink { [weak self] _ in self?.refreshAllDrawerLayouts() }
+            .store(in: &libraryCancellables)
+
         startMousePolling()
         observeScreenChanges()
         observeGlobalSelectionMouseEvents()
@@ -163,8 +224,10 @@ final class NotchPanelController: NSObject {
 
     func showDocked() {
         currentScreen = NotchGeometry.targetScreen()
-        let layout = NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
-        rebuildContent(layout: layout)
+        applyLayout(to: currentScreen, customSize: nil)
+        // The launch path: hot panels come into existence here, and only here
+        // or on a display change — their geometry is the compact block, which
+        // the drawer's own size does not enter.
         rebuildAllHotPanels()
         isExpanded = false
         isRevealedForFileDrag = false
@@ -195,17 +258,14 @@ final class NotchPanelController: NSObject {
             // state is per-display) while the new one expands on top.
             handoffCollapse()
         }
-        let layout = NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
+        let layout = applyLayout(to: currentScreen, customSize: nil)
         cancelCollapse()
         isExpanded = true
         drawerScreen = currentScreen
         workspaceState.isShelfDropTargeted = false
-        rebuildContent(layout: layout)
-        // Rebuild hot panels with the same layout so compact widths match exactly
-        rebuildAllHotPanels()
         let panel = drawerPanel(for: currentScreen)
         activeDrawerPanel = panel
-        activeHostingView = hostingView(for: currentScreen, layout: layout)
+        activeHostingView = hostingView(for: currentScreen)
         panel.setFrame(drawerFrame(for: layout, screen: currentScreen), display: true)
         panel.orderFrontRegardless()
         // Never take the compact panel away while it is the window AppKit is
@@ -343,7 +403,7 @@ final class NotchPanelController: NSObject {
         panel.acceptsMouseMovedEvents = true
     }
 
-    private func makeNotebookView(layout: NotchLayout, drawerState: DrawerState) -> NotebookView {
+    private func makeNotebookView(drawerState: DrawerState) -> NotebookView {
         NotebookView(
             store: store,
             settingsStore: settingsStore,
@@ -353,7 +413,6 @@ final class NotchPanelController: NSObject {
             workspaceState: workspaceState,
             drawerState: drawerState,
             editorInteractionState: editorInteractionState,
-            layout: layout,
             onOpenSettings: { [weak self] in self?.openSettings() }
         )
     }
@@ -362,10 +421,14 @@ final class NotchPanelController: NSObject {
     /// own hosting view for its entire lifetime — views never move between
     /// windows (doing so makes the Window Server relocate the receiving
     /// window onto the screen where the view was last visible).
-    private func hostingView(for screen: NSScreen?, layout: NotchLayout) -> FirstMouseHostingView<NotebookView> {
+    ///
+    /// "Entire lifetime" is literal: the root view is built once here. A size
+    /// change reaches the drawer through `DrawerState.layout`, never by
+    /// handing this hosting view a different root view.
+    private func hostingView(for screen: NSScreen?) -> FirstMouseHostingView<NotebookView> {
         let key = screen?.uniqueID ?? "unknown-screen"
         if let existing = displayPanelRegistry.drawerHostingView(for: key) { return existing }
-        let host = DrawerFileDropHostingView(rootView: makeNotebookView(layout: layout, drawerState: drawerState(for: key)))
+        let host = DrawerFileDropHostingView(rootView: makeNotebookView(drawerState: drawerState(for: key)))
         host.autoresizingMask = [.width, .height]
         host.wantsLayer = true
         host.layer?.masksToBounds = true
@@ -373,23 +436,6 @@ final class NotchPanelController: NSObject {
         displayPanelRegistry.setDrawerHostingView(host, for: key)
         displayPanelRegistry.drawerPanel(for: key)?.contentView = host
         return host
-    }
-
-    private func rebuildContent(layout: NotchLayout? = nil) {
-        let layout = layout ?? NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
-        // Rebuild ONLY the active display's content. Another display's
-        // panel may be mid-collapse with its own per-screen layout —
-        // replacing its view would shift the collapse interpolation
-        // endpoints (compact sizes differ between notched and fallback
-        // displays) and glitch the running animation. Inactive displays
-        // rebuild on their next expand.
-        let key = (drawerScreen ?? currentScreen)?.uniqueID ?? "unknown-screen"
-        if let host = displayPanelRegistry.drawerHostingView(for: key) {
-            host.rootView = makeNotebookView(layout: layout, drawerState: drawerState(for: key))
-            // A rebuild installs a fresh editor view, which arms itself for
-            // file drops a moment later; the polling sweep catches that.
-            EditorFileDropGuard.disarm(in: host)
-        }
     }
 
     private func rebuildAllHotPanels() {
@@ -402,7 +448,7 @@ final class NotchPanelController: NSObject {
 
             // Per-screen layout: each display gets its own compact size
             // (notched built-in vs. fallback for external displays).
-            let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
+            let layout = drawerLayout(for: screen, customSize: nil)
             let frame = hotFrame(for: layout, screen: screen)
             let hotView = CompactNotchView(layout: layout, onTap: { [weak self, weak screen] in
                 guard let self, let screen else { return }
@@ -650,7 +696,6 @@ final class NotchPanelController: NSObject {
             self.drawerScreen = nil
         }
         let screen = drawerScreen ?? currentScreen ?? NotchGeometry.targetScreen()
-        let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
         // Drop drawer panels belonging to displays that are gone
         let connectedIDs = Set(NSScreen.screens.map(\.uniqueID))
         for (key, panel) in displayPanelRegistry.drawerPanelEntries where !connectedIDs.contains(key) {
@@ -664,9 +709,12 @@ final class NotchPanelController: NSObject {
             drawerStates.removeValue(forKey: key)
         }
         rebuildAllHotPanels()
+        // Every connected display's drawer geometry is derived from its own
+        // screen, so a change to any screen's frame moves them all — not just
+        // the display the drawer happens to be open on.
+        refreshAllDrawerLayouts()
         if isExpanded {
-            rebuildContent(layout: layout)
-            activeDrawerPanel?.setFrame(drawerFrame(for: layout, screen: screen), display: true)
+            activeDrawerPanel?.setFrame(drawerFrame(for: drawerLayout(for: screen, customSize: nil), screen: screen), display: true)
         }
         // The notification can fire while display frames are still mid-transition;
         // rebuild once more after the geometry settles so panels never keep
@@ -850,7 +898,7 @@ final class NotchPanelController: NSObject {
                 // unpressed button, which a drag never satisfies.
                 for screenID in displayPanelRegistry.hotDisplayIDs where screenID != drawerScreen?.uniqueID {
                     guard let screen = NSScreen.screens.first(where: { $0.uniqueID == screenID }) else { continue }
-                    let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
+                    let layout = drawerLayout(for: screen, customSize: nil)
                     if fileDropFrame(for: layout, screen: screen).contains(point) {
                         currentScreen = screen
                         expand(animated: true)
@@ -893,7 +941,7 @@ final class NotchPanelController: NSObject {
             resetHoverActivationCandidate()
             for screenID in displayPanelRegistry.hotDisplayIDs {
                 guard let screen = NSScreen.screens.first(where: { $0.uniqueID == screenID }) else { continue }
-                let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
+                let layout = drawerLayout(for: screen, customSize: nil)
                 if fileDropFrame(for: layout, screen: screen).contains(point) {
                     currentScreen = screen
                     expand(animated: true)
@@ -981,7 +1029,7 @@ final class NotchPanelController: NSObject {
 
     private func isPointInExpandedStayRegion(_ point: NSPoint) -> Bool {
         let margin: CGFloat = 10
-        let layout = NotchGeometry.layout(for: currentScreen, customSize: settingsStore.customExpandedSize)
+        let layout = drawerLayout(for: currentScreen, customSize: nil)
         let hotRect = hotFrame(for: layout, screen: currentScreen)
         if hotRect.contains(point) { return true }
         guard let panel = activeDrawerPanel else { return false }
@@ -1152,10 +1200,7 @@ final class NotchPanelController: NSObject {
         }
 
         if let dockingScreen {
-            let layout = NotchGeometry.layout(
-                for: dockingScreen,
-                customSize: settingsStore.customExpandedSize
-            )
+            let layout = drawerLayout(for: dockingScreen, customSize: nil)
             let target = drawerFrame(for: layout, screen: dockingScreen)
             let magnetism: CGFloat = 0.22
             frame.origin.x += (target.origin.x - frame.origin.x) * magnetism
@@ -1179,10 +1224,7 @@ final class NotchPanelController: NSObject {
         )
 
         return NSScreen.screens.first { screen in
-            let layout = NotchGeometry.layout(
-                for: screen,
-                customSize: settingsStore.customExpandedSize
-            )
+            let layout = drawerLayout(for: screen, customSize: nil)
             let targetWidth = max(layout.compactSize.width + 72, 240)
             let targetRect = NSRect(
                 x: screen.frame.midX - targetWidth / 2,
@@ -1261,11 +1303,13 @@ final class NotchPanelController: NSObject {
             drawerStates.removeValue(forKey: key)
         }
 
-        let layout = NotchGeometry.layout(for: screen, customSize: settingsStore.customExpandedSize)
-        host.rootView = makeNotebookView(layout: layout, drawerState: drawerState)
+        // The panel is joining this display's registry with the state it
+        // already had; registering first is what lets the shared publisher
+        // below find it, so the layout it gets is this display's.
         displayPanelRegistry.setDrawerPanel(panel, for: key)
         displayPanelRegistry.setDrawerHostingView(host, for: key)
         drawerStates[key] = drawerState
+        let layout = applyLayout(to: screen, customSize: nil)
 
         floatingPanel = nil
         floatingHostingView = nil
@@ -1345,9 +1389,14 @@ final class NotchPanelController: NSObject {
         )
     }
 
-    /// Panel-level resize handling. This lives on the panel (not a SwiftUI gesture)
-    /// because rebuildContent recreates the SwiftUI view tree on every size change,
-    /// which corrupts DragGesture translation state mid-drag.
+    /// Panel-level resize handling.
+    ///
+    /// This is deliberately *not* a SwiftUI gesture. It used to be forced out
+    /// here because a resize rebuilt the view tree and that corrupted a
+    /// `DragGesture`'s translation mid-drag; that reason is gone now that a
+    /// resize only publishes a layout, and moving the grip into SwiftUI is a
+    /// change worth making on its own terms rather than as a side effect of
+    /// this one.
     private func handleResizeMouseEvent(_ event: NSEvent) -> Bool {
         guard (isExpanded || floatingPanel != nil), !isDockingPanel else {
             isResizingDrawer = false
@@ -1369,6 +1418,7 @@ final class NotchPanelController: NSObject {
 
         case .leftMouseUp where isResizingDrawer:
             isResizingDrawer = false
+            finishDrawerResize()
             return true
 
         default:
@@ -1376,8 +1426,24 @@ final class NotchPanelController: NSObject {
         }
     }
 
+    /// Commits a finished resize.
+    ///
+    /// The drag itself only moves the layout (see `resizeDrawer`); persisting
+    /// the size is this once-per-gesture step, so the preference is written
+    /// when the user stops rather than on every drag tick. The editor's layout
+    /// is refreshed here for the same reason: its text re-wraps against the
+    /// width the drawer ended at, and a resize that never ends has no width
+    /// worth re-wrapping for.
+    private func finishDrawerResize() {
+        guard let panel = activeDrawerPanel else { return }
+        settingsStore.customExpandedSize = panel.frame.size
+        editorInteractionState.requestLayoutRefresh(searchingIn: activeHostingView)
+    }
+
     private func resizeDrawer(to mouse: NSPoint) {
-        guard let panel = activeDrawerPanel, let screen = panel.screen else { return }
+        guard let panel = activeDrawerPanel,
+              let screen = panel.screen,
+              let state = activeDrawerState else { return }
         let frame = panel.frame
 
         // Keep the grabbed point under the mouse. The panel stays horizontally
@@ -1395,22 +1461,13 @@ final class NotchPanelController: NSObject {
 
         // Route through NotchGeometry so the panel frame always matches the layout
         // (including screen-edge clamping) — a mismatch shifts the collapse animation off-center
-        let layout = NotchGeometry.layout(for: screen, customSize: proposed)
+        let layout = applyLayout(drawerLayout(for: screen, customSize: proposed), to: state)
         let size = layout.expandedSize
         guard size != frame.size else { return }
 
         let newX = floatingPanel == nil ? screen.frame.midX - size.width / 2 : frame.minX
         let newY = frame.maxY - size.height
         panel.setFrame(NSRect(x: newX, y: newY, width: size.width, height: size.height), display: true)
-        settingsStore.customExpandedSize = size
-        if let floatingHostingView, let floatingDrawerState {
-            floatingHostingView.rootView = makeNotebookView(
-                layout: layout,
-                drawerState: floatingDrawerState
-            )
-        } else {
-            rebuildContent(layout: layout)
-        }
     }
 
     func openSettings() {
