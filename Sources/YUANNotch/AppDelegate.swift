@@ -13,7 +13,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // first launch would interrupt the one thing the user opened the app to do,
         // and the question is answered better from Settings by someone who went there.
         let notesLibrary = NotesLibrary(directoryURL: NotesLibrary.directoryAtLaunch())
-        panelController = NotchPanelController(notesLibrary: notesLibrary)
+        // One check, two entry points: the menu item `makeAppMenu` adds, and
+        // the settings window's About page. Both reach this same checker — the
+        // only reason the second exists is that a menu-bar item can be hidden.
+        panelController = NotchPanelController(
+            notesLibrary: notesLibrary,
+            onCheckForUpdates: { [weak self] in self?.updateChecker.checkManually() }
+        )
         panelController?.showDocked()
         buildStatusItem()
         buildMenu()

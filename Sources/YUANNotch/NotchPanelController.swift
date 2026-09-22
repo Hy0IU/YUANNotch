@@ -6,6 +6,13 @@ import SwiftUI
 @MainActor
 final class NotchPanelController: NSObject {
     private let notesLibrary: NotesLibrary
+    /// The app's one update check, handed in rather than owned here.
+    ///
+    /// It exists so the settings window can offer a second entry point to it.
+    /// The menu-bar item that also runs it can be hidden — a menu-bar manager
+    /// can park it off-screen — so an entry point that lives only in that menu
+    /// is one the user may not be able to reach.
+    private let onCheckForUpdates: () -> Void
     private let store: NoteStore
     private let settingsStore = AppSettingsStore()
     private let imageStore: LocalImageStore
@@ -108,7 +115,8 @@ final class NotchPanelController: NSObject {
         settingsStore: settingsStore,
         reminderStore: reminderStore,
         notesLibrary: notesLibrary,
-        noteStore: store
+        noteStore: store,
+        onCheckForUpdates: onCheckForUpdates
     )
     private let displayPanelRegistry = DisplayPanelRegistry()
     private var fileDragTrackingState = FileDragTrackingState()
@@ -169,8 +177,9 @@ final class NotchPanelController: NSObject {
 
     private static let detachmentThreshold: CGFloat = 52
 
-    init(notesLibrary: NotesLibrary) {
+    init(notesLibrary: NotesLibrary, onCheckForUpdates: @escaping () -> Void) {
         self.notesLibrary = notesLibrary
+        self.onCheckForUpdates = onCheckForUpdates
         store = NoteStore(library: notesLibrary)
         imageStore = LocalImageStore(notesDirectoryURL: notesLibrary.directoryURL)
         super.init()

@@ -8,17 +8,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let reminderStore: ReminderStore
     private let notesLibrary: NotesLibrary
     private let noteStore: NoteStore
+    private let onCheckForUpdates: () -> Void
 
     init(
         settingsStore: AppSettingsStore,
         reminderStore: ReminderStore,
         notesLibrary: NotesLibrary,
-        noteStore: NoteStore
+        noteStore: NoteStore,
+        onCheckForUpdates: @escaping () -> Void
     ) {
         self.settingsStore = settingsStore
         self.reminderStore = reminderStore
         self.notesLibrary = notesLibrary
         self.noteStore = noteStore
+        self.onCheckForUpdates = onCheckForUpdates
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 620, height: 420),
@@ -43,7 +46,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 settingsStore: settingsStore,
                 reminderStore: reminderStore,
                 notesLibrary: notesLibrary,
-                noteStore: noteStore
+                noteStore: noteStore,
+                onCheckForUpdates: onCheckForUpdates
             )
         )
     }
@@ -155,6 +159,7 @@ struct SettingsView: View {
     @ObservedObject var reminderStore: ReminderStore
     let notesLibrary: NotesLibrary
     let noteStore: NoteStore
+    let onCheckForUpdates: () -> Void
     @State private var selection: SettingsTab = .appearance
 
     var body: some View {
@@ -221,7 +226,7 @@ struct SettingsView: View {
         case .integrations:
             IntegrationsSettingsView(settingsStore: settingsStore, reminderStore: reminderStore)
         case .about:
-            AboutSettingsView()
+            AboutSettingsView(onCheckForUpdates: onCheckForUpdates)
         }
     }
 }
@@ -815,6 +820,17 @@ private struct IntegrationsSettingsView: View {
 // MARK: - About
 
 private struct AboutSettingsView: View {
+    /// Runs the check the status-bar menu's item runs.
+    ///
+    /// Handed in rather than reached for, and deliberately only the *entry
+    /// point*: the app has one `UpdateChecker`, it lives where the app is
+    /// launched, and it owns what the user then sees (including the "an update
+    /// check is already in progress" answer while one is running). This button
+    /// exists because the menu-bar item can be hidden — by a menu-bar manager,
+    /// or by a menu bar with no room left — and a feature whose only entry
+    /// point can disappear is one the user cannot reach.
+    let onCheckForUpdates: () -> Void
+
     /// The version the running bundle reports.
     ///
     /// The fallback is only reached when there is no bundle to ask — `swift run`
@@ -845,6 +861,8 @@ private struct AboutSettingsView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
+
+            Button("Check for Updates") { onCheckForUpdates() }
 
             Link("View on GitHub", destination: URL(string: "https://github.com/Hy0IU/YUANNotch")!)
                 .padding(.top, 4)
