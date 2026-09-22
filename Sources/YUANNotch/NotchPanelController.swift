@@ -320,27 +320,6 @@ final class NotchPanelController: NSObject {
             hotPanelForScreen(currentScreen)?.orderOut(nil)
         }
         setDrawerExpanded(true, animated: animated, for: currentScreen?.uniqueID ?? "unknown-screen")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self] in
-            guard let self else { return }
-            guard self.isExpanded else { return }
-            // If the user already clicked into the editor, don't rebuild the
-            // editing session from under them: re-setting the first responder
-            // tears down the field editor (the caret visibly "blips" out and
-            // typing is dead until the next click).
-            let userAlreadyEditing = panel.isKeyWindow && panel.firstResponder is NSTextView
-            if !userAlreadyEditing {
-                self.editorInteractionState.restoreSelection(
-                    self.store.selectionRange(for: self.store.activeTabID),
-                    searchingIn: self.activeHostingView
-                )
-                self.editorInteractionState.requestFocus(searchingIn: self.activeHostingView)
-            }
-            self.editorInteractionState.requestLayoutRefresh(searchingIn: self.activeHostingView)
-            // The editor's text view arms itself for drags shortly after it
-            // joins the window; disarm it as soon as it is definitely there,
-            // in addition to the periodic sweep.
-            EditorFileDropGuard.disarm(in: self.activeHostingView)
-        }
     }
 
     /// Cross-display handoff: unlike `collapse`, the outgoing panel stays
@@ -473,7 +452,46 @@ final class NotchPanelController: NSObject {
         configureDrawerFileDrop(host)
         displayPanelRegistry.setDrawerHostingView(host, for: key)
         displayPanelRegistry.drawerPanel(for: key)?.contentView = host
+        primeEditor(in: host)
         return host
+    }
+
+    /// Points this display's editor at the caret that was in use and makes its
+    /// text view the panel's first responder — once, when the drawer's content
+    /// comes into existence.
+    ///
+    /// This ran on every `expand()` until the drawer stopped rebuilding its
+    /// content: a rebuild installed a fresh editor, so the caret and the
+    /// responder had to be re-established every time the drawer opened. The
+    /// drawer publishes a layout now and the editor outlives a collapse, so only
+    /// a newly created one needs priming — and `expand()` no longer has to know
+    /// anything about the editor.
+    ///
+    /// Two things the priming still buys:
+    ///
+    /// - the caret comes back where the user left it (`restoreSelection` reads
+    ///   the range the store persisted for the active page);
+    /// - the text view is the panel's first responder *before* the panel is key,
+    ///   so clicking anywhere in the drawer — the background included, not just
+    ///   the text — starts typing in the editor. The panel is deliberately never
+    ///   keyed or activated programmatically; it becomes key when the user clicks
+    ///   into it (`EditorInteractionState.focusEditor`, and `cc06e0e` for why).
+    ///
+    /// Delayed because the view has not joined a window at this point; the calls
+    /// themselves retry, this is the outer margin. The drag-type sweep is *not*
+    /// repeated here — `mousePollingTick` already narrows the editor's drop types
+    /// every half second, which is what actually catches the text view arming
+    /// itself when it joins a window.
+    private func primeEditor(in host: FirstMouseHostingView<NotebookView>) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) { [weak self, weak host] in
+            guard let self, let host else { return }
+            self.editorInteractionState.restoreSelection(
+                self.store.selectionRange(for: self.store.activeTabID),
+                searchingIn: host
+            )
+            self.editorInteractionState.requestFocus(searchingIn: host)
+            self.editorInteractionState.requestLayoutRefresh(searchingIn: host)
+        }
     }
 
     private func rebuildAllHotPanels() {
