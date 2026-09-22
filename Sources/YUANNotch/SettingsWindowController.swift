@@ -815,8 +815,14 @@ private struct IntegrationsSettingsView: View {
 // MARK: - About
 
 private struct AboutSettingsView: View {
+    /// The version the running bundle reports.
+    ///
+    /// The fallback is only reached when there is no bundle to ask — `swift run`
+    /// from the build tree. It is kept equal to `Scripts/package-app.sh`'s
+    /// `APP_VERSION` default, which is the source of truth the packaged app is
+    /// stamped from; bump the two together.
     private var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.1"
     }
 
     var body: some View {
