@@ -111,6 +111,9 @@ final class NotchPanelController: NSObject {
 
     private let editorInteractionState = EditorInteractionState()
     private lazy var reminderStore = ReminderStore(settingsStore: settingsStore)
+    private let dailyPlanStore = DailyPlanStore(
+        onPhaseCompleted: { InterfaceSound.focusPhaseCompleted() }
+    )
     private lazy var settingsWindowController = SettingsWindowController(
         settingsStore: settingsStore,
         reminderStore: reminderStore,
@@ -259,6 +262,7 @@ final class NotchPanelController: NSObject {
 
     func flushPendingSave() {
         store.flushPendingSave()
+        dailyPlanStore.flushPendingSave()
     }
 
     func showDocked() {
@@ -317,7 +321,7 @@ final class NotchPanelController: NSObject {
             isRevealedForFileDrag = true
             // G3: the file shelf lives on the notes surface, so a file drag
             // that opens the drawer forces it. The override is what makes the
-            // drag land at all — a drop is rejected on the reminders surface —
+            // drag land at all — a drop is rejected outside the notes surface —
             // and it lasts only as long as the drag. If the drop succeeds the
             // mode is then changed for real in `receiveDroppedFiles`; if the
             // drag is cancelled, the user's own mode comes back untouched.
@@ -428,6 +432,7 @@ final class NotchPanelController: NSObject {
             imageStore: imageStore,
             fileShelfStore: fileShelfStore,
             reminderStore: reminderStore,
+            dailyPlanStore: dailyPlanStore,
             workspaceState: workspaceState,
             drawerState: drawerState,
             editorInteractionState: editorInteractionState,
@@ -634,9 +639,9 @@ final class NotchPanelController: NSObject {
         // G5: the drawer's own file-drop target only exists on the notes
         // surface. During an external drag the session override has already
         // forced that surface, so this only rejects drops made while the user
-        // is deliberately looking at reminders.
-        guard !workspaceState.showsReminders(persistedMode: settingsStore.drawerMode) else {
-            FileDragDiagnostics.log("panel receiveDroppedFiles rejected: reminders surface")
+        // is deliberately looking at another surface.
+        guard workspaceState.effectiveMode(persistedMode: settingsStore.drawerMode) == .notes else {
+            FileDragDiagnostics.log("panel receiveDroppedFiles rejected: non-notes surface")
             return false
         }
 
@@ -831,8 +836,9 @@ final class NotchPanelController: NSObject {
         guard !workspaceState.isPreviewingShelfItem else { return }
 
         let isFileDrag = settingsStore.isFileShelfEnabled && isFileDragInProgress()
-        if isFileDrag, workspaceState.showsReminders(persistedMode: settingsStore.drawerMode) {
-            // G4: revealing the shelf over a reminders surface would put it
+        if isFileDrag,
+           workspaceState.effectiveMode(persistedMode: settingsStore.drawerMode) != .notes {
+            // G4: revealing the shelf over a non-notes surface would put it
             // above a panel that refuses drops. Force the notes surface for
             // this session instead of suppressing the reveal, so the drop the
             // user is already performing still lands.

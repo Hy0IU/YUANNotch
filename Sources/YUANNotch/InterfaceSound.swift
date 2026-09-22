@@ -14,6 +14,7 @@ enum InterfaceSound {
     /// `NSSound(named:)` reads the file and a drop is far too frequent a place
     /// to be doing file I/O.
     private static let stagedSound = NSSound(named: "Tink")
+    private static let focusCompletedSound = NSSound(named: "Glass")
 
     /// Where macOS keeps the sound of something going *into* the Trash: the one
     /// the Dock plays as an item is dropped on it (0.50 s).
@@ -51,5 +52,10 @@ enum InterfaceSound {
     /// a clear that removed nothing has nothing to confirm.
     static func cleared() {
         clearedSound?.play()
+    }
+
+    /// A focus or break interval reached its boundary.
+    static func focusPhaseCompleted() {
+        focusCompletedSound?.play()
     }
 }

@@ -229,7 +229,7 @@ private func checkArithmetic() {
 
     for drawer in drawerCases {
         for tabCount in 1 ... 40 {
-            let layout = NotebookToolbarLayout(width: drawer.width, isRemindersMode: false)
+            let layout = NotebookToolbarLayout(width: drawer.width, mode: .notes)
             let strip = layout.stripWidth(tabCount: tabCount)
             let reserve = NotebookToolbarLayout.trailingReserve(
                 showsClearButton: true,
@@ -283,26 +283,30 @@ private func checkArithmetic() {
             : firstBad
     )
 
-    // The reminders surface has no pager and no "Clear": the toggle, its labels
-    // and the settings button are all that is left, and they have to fit on the
-    // narrowest drawer too.
-    var remindersBad = ""
+    // Non-notes surfaces have no pager and no "Clear": the toggle and settings
+    // button must fit, falling back to icons if a future label grows too wide.
+    var standaloneBad = ""
     for drawer in drawerCases {
-        let layout = NotebookToolbarLayout(width: drawer.width, isRemindersMode: true)
-        let total = NotebookToolbarLayout.itemSpacing
-            + NotebookToolbarLayout.modeToggleLabelledWidth
-            + NotebookToolbarLayout.itemSpacing
-            + NotebookToolbarLayout.iconButton
-        if !layout.showsModeToggleLabels || total > drawer.width + 0.001 {
-            remindersBad = "\(drawer.label): labelled toggle + settings = \(fmt(total)) of \(fmt(drawer.width))"
+        for mode in [DrawerMode.reminders, .plans] {
+            let layout = NotebookToolbarLayout(width: drawer.width, mode: mode)
+            let toggle = layout.showsModeToggleLabels
+                ? NotebookToolbarLayout.modeToggleLabelledWidth
+                : NotebookToolbarLayout.modeToggleIconWidth
+            let total = NotebookToolbarLayout.itemSpacing
+                + toggle
+                + NotebookToolbarLayout.itemSpacing
+                + NotebookToolbarLayout.iconButton
+            if total > drawer.width + 0.001 {
+                standaloneBad = "\(drawer.label), \(mode.title): toggle + settings = \(fmt(total)) of \(fmt(drawer.width))"
+            }
         }
     }
     check(
-        "the reminders row keeps its labels everywhere",
-        remindersBad.isEmpty,
-        remindersBad.isEmpty
-            ? "6 drawer cases: labelled toggle + settings = 206pt at most, against 278pt at the narrowest"
-            : remindersBad
+        "standalone mode rows fit every drawer width",
+        standaloneBad.isEmpty,
+        standaloneBad.isEmpty
+            ? "6 drawer cases x 2 modes: toggle and settings stay inside the row"
+            : standaloneBad
     )
 }
 
@@ -317,10 +321,11 @@ private func checkRenderedRow() {
     var badPlacement = ""
     var badOverlap = ""
     var rowChecked = 0
+    var standaloneChecked = 0
 
     for drawer in drawerCases {
         for tabCount in [1, 2, 3, 4, 6, 10, 24, 40] {
-            let layout = NotebookToolbarLayout(width: drawer.width, isRemindersMode: false)
+            let layout = NotebookToolbarLayout(width: drawer.width, mode: .notes)
             let expectedStrip = layout.stripWidth(tabCount: tabCount)
             let store = NoteStore(tabCount: tabCount)
             let settings = AppSettingsStore()
@@ -418,6 +423,34 @@ private func checkRenderedRow() {
         }
     }
 
+    for drawer in drawerCases {
+        for mode in [DrawerMode.reminders, .plans] {
+            let layout = NotebookToolbarLayout(width: drawer.width, mode: mode)
+            Recorded.reset()
+            let store = NoteStore(tabCount: 1)
+            let interaction = EditorInteractionState()
+            let probeHost = host(
+                ProbeRow(store: store, layout: layout, interaction: interaction),
+                width: drawer.width
+            )
+            withExtendedLifetime(probeHost) { probeHost.layoutSubtreeIfNeeded() }
+            let frames = Recorded.frames
+            standaloneChecked += 1
+
+            if frames["pager"] != nil || frames["clear"] != nil {
+                badOverlap = "\(drawer.label), \(mode.title): a notes-only control was rendered"
+            }
+            guard let toggle = frames["modeToggle"], let settings = frames["settings"] else {
+                badOverlap = "\(drawer.label), \(mode.title): toggle or settings is missing"
+                continue
+            }
+            let hit = toggle.intersection(settings)
+            if (!hit.isNull && hit.width > 0.5) || settings.maxX > drawer.width + 0.5 {
+                badOverlap = "\(drawer.label), \(mode.title): standalone controls overlap or leave the row"
+            }
+        }
+    }
+
     check(
         "the strip is exactly as wide as the layout says",
         badSqueeze.isEmpty,
@@ -431,7 +464,9 @@ private func checkRenderedRow() {
     check(
         "no part of the row touches another",
         badOverlap.isEmpty,
-        badOverlap.isEmpty ? "\(rowChecked) rendered rows: pager, toggle, Clear and settings are disjoint and inside the row" : badOverlap
+        badOverlap.isEmpty
+            ? "\(rowChecked) notes rows + \(standaloneChecked) standalone rows: every control is disjoint and inside the row"
+            : badOverlap
     )
 }
 
@@ -445,17 +480,21 @@ private struct ProbeRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: NotebookToolbarLayout.itemSpacing) {
-            Measured(name: "pager") {
-                TabPagerControl(store: store, editorInteractionState: interaction, layout: layout)
+            if layout.isNotesMode {
+                Measured(name: "pager") {
+                    TabPagerControl(store: store, editorInteractionState: interaction, layout: layout)
+                }
             }
 
             Spacer(minLength: 0)
 
             Measured(name: "modeToggle") {
-                DrawerModeToggle(mode: .notes, showsLabels: layout.showsModeToggleLabels) { _ in }
+                DrawerModeToggle(mode: layout.mode, showsLabels: layout.showsModeToggleLabels) { _ in }
             }
 
-            Measured(name: "clear") { ProbeIconButton(systemName: "trash") }
+            if layout.isNotesMode {
+                Measured(name: "clear") { ProbeIconButton(systemName: "trash") }
+            }
             Measured(name: "settings") { ProbeIconButton(systemName: "gearshape") }
         }
         .frame(height: DrawerMetrics.toolbarHeight, alignment: .center)
@@ -470,7 +509,7 @@ private func checkModeToggleWidths() {
     print("— 3 · what the mode toggle actually costs —")
 
     // Every state the row can render, because the toggle is not one width: the
-    // selected segment's label is semibold and the two labels differ in length,
+    // selected segment's label is semibold and the three labels differ in length,
     // so which mode is selected changes how wide the control is — "Reminders"
     // selected is the widest of the four.
     //
@@ -615,7 +654,7 @@ private func checkReveal() {
     print("")
     print("— 5 · revealing the selected dot —")
 
-    let layout = NotebookToolbarLayout(width: 480 - 52, isRemindersMode: false)
+    let layout = NotebookToolbarLayout(width: 480 - 52, mode: .notes)
     let tabCount = 40
     let viewport = layout.stripWidth(tabCount: tabCount)
 
@@ -638,7 +677,7 @@ private func checkReveal() {
 
     // A drawer resized narrow while a late tab is selected: the offset has to be
     // clamped into the new, smaller limit, and the selected dot has to survive it.
-    let narrow = NotebookToolbarLayout(width: 360 - 52, isRemindersMode: false)
+    let narrow = NotebookToolbarLayout(width: 360 - 52, mode: .notes)
     let narrowViewport = narrow.stripWidth(tabCount: tabCount)
     let narrowLimit = narrow.maximumScrollOffset(tabCount: tabCount)
     offset = layout.scrollOffset(keepingVisible: 20, currentOffset: 0, tabCount: tabCount)

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Two-segment switch between the notes surface and the reminders surface.
+/// Switch between the drawer's notes, reminders and daily-plans surfaces.
 ///
-/// Labels collapse to icons where the row cannot afford them — they cost 99pt,
-/// which is three tab dots. Who decides is `NotebookToolbarLayout`, because the
+/// Labels collapse to icons where the row cannot afford them. Who decides is
+/// `NotebookToolbarLayout`, because the
 /// row also carries the tab pager, the settings button and, in notes mode,
 /// "Clear", and only that one place knows what all of them add up to.
 ///
@@ -40,7 +40,7 @@ struct DrawerModeToggle: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(candidate == .notes ? "Show notes" : "Show Apple Reminders")
+                .help("Show \(candidate.title)")
             }
         }
         .padding(2)

@@ -180,11 +180,11 @@ enum DrawerMetrics {
 struct NotebookToolbarLayout: Equatable {
     /// The width the toolbar row is given: the drawer less its side padding.
     let width: CGFloat
-    let isRemindersMode: Bool
+    let mode: DrawerMode
 
     static let iconButton: CGFloat = 28
     static let itemSpacing: CGFloat = 10
-    /// The width the mode toggle needs: with its two labels and with icons only,
+    /// The width the three-segment mode toggle needs with labels and icons only,
     /// at the fonts `DrawerModeToggle` uses.
     ///
     /// Both figures are measured rather than derived — `Scripts/toolbar-layout-probe.sh`
@@ -193,44 +193,46 @@ struct NotebookToolbarLayout: Equatable {
     /// move that width, and the figures are the worst of both:
     ///
     /// - which segment is selected, because the selected label is semibold and
-    ///   the two labels differ in length ("Reminders" selected is the wide case);
+    ///   the labels differ in length ("Reminders" selected is the wide case);
     /// - the display's backing scale, because at 1x the font metrics round up to
-    ///   whole points. Measured 2026-09-21 on the same build: 156.0pt with Notes
-    ///   selected and 157.5pt with Reminders selected on a 2x screen, against
-    ///   158.0 / 159.0 on a 1x screen.
+    ///   whole points. Measured 2026-09-22 on the same build: the widest labelled
+    ///   state is 218.5pt and icons-only is 82.5pt on a 2x screen.
     ///
     /// So the labelled figure is the 1x worst case plus a point: a drawer that
     /// moves between a Retina and a 1x display is the same row either way.
-    static let modeToggleLabelledWidth: CGFloat = 160
+    static let modeToggleLabelledWidth: CGFloat = 220
     /// Icons-only has no text, so the selection does not enter; only the scale
-    /// does (57 at 1x, 56 at 2x), and this is the 1x figure.
-    static let modeToggleIconWidth: CGFloat = 57
+    /// does. This is the measured 2x figure rounded up to a whole point.
+    static let modeToggleIconWidth: CGFloat = 83
     /// The pager's own chrome: minus, plus, the two gaps around the strip and
     /// the pill's horizontal padding.
     static let pagerChrome: CGFloat = 72
     /// Air the pager keeps before the controls to its right, so a full strip
     /// never crowds the mode toggle.
-    static let pagerTrailingGap: CGFloat = 12
+    static let pagerTrailingGap: CGFloat = 10
     /// Dots are drawn in fixed slots so that selecting one widens the capsule
     /// without moving its neighbours.
     static let dotSlot: CGFloat = 26
     static let dotSpacing: CGFloat = 6
     static let selectedDotWidth: CGFloat = 20
     static let unselectedDotWidth: CGFloat = 6
-    /// Below this many dots the toggle's labels are not worth their 99pt.
+    /// Below this many dots the toggle's labels are not worth their extra width.
     static let minimumDotsWithLabels = 3
 
     static var dotStride: CGFloat { dotSlot + dotSpacing }
 
-    var showsClearButton: Bool { !isRemindersMode }
+    var isNotesMode: Bool { mode == .notes }
+    var showsClearButton: Bool { isNotesMode }
 
-    /// Labels cost 99pt — three dots — so they are worth showing only where the
-    /// strip still has room for a few. Written as a derivation because the old
+    /// In Notes, labels are worth showing only where the strip still has room
+    /// for a few dots. Written as a derivation because the old
     /// test read the *drawer's* width (`>= 430`) while the row is 52pt narrower:
     /// a drawer could keep labels the row could not pay for.
     var showsModeToggleLabels: Bool {
-        guard !isRemindersMode else { return true }
-        return width >= Self.widthNeededForLabels
+        if isNotesMode {
+            return width >= Self.widthNeededForNotesLabels
+        }
+        return width >= Self.standaloneWidthWithLabels
     }
 
     /// Everything the toolbar puts to the right of the pager.
@@ -242,10 +244,14 @@ struct NotebookToolbarLayout: Equatable {
         return reserve + pagerTrailingGap
     }
 
-    private static var widthNeededForLabels: CGFloat {
+    private static var widthNeededForNotesLabels: CGFloat {
         pagerChrome
             + trailingReserve(showsClearButton: true, showsModeToggleLabels: true)
             + CGFloat(minimumDotsWithLabels) * dotStride
+    }
+
+    private static var standaloneWidthWithLabels: CGFloat {
+        itemSpacing + modeToggleLabelledWidth + itemSpacing + iconButton
     }
 
     /// Width of the dot row when nothing constrains it.

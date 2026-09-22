@@ -7,6 +7,7 @@ struct NotebookView: View {
     let imageStore: LocalImageStore
     @ObservedObject var fileShelfStore: FileShelfStore
     @ObservedObject var reminderStore: ReminderStore
+    @ObservedObject var dailyPlanStore: DailyPlanStore
     @ObservedObject var workspaceState: NotebookWorkspaceState
     @ObservedObject var drawerState: DrawerState
     @ObservedObject var editorInteractionState: EditorInteractionState
@@ -17,10 +18,10 @@ struct NotebookView: View {
     /// panel building a new root view, which is what a `let layout` forced.
     private var layout: NotchLayout { drawerState.layout }
 
-    /// The drawer's effective mode. Precedence lives in
-    /// `NotebookWorkspaceState.showsReminders(persistedMode:)`.
-    private var isRemindersMode: Bool {
-        workspaceState.showsReminders(persistedMode: settingsStore.drawerMode)
+    /// The drawer's effective mode. A file drag temporarily borrows Notes
+    /// without replacing the user's persisted choice.
+    private var effectiveMode: DrawerMode {
+        workspaceState.effectiveMode(persistedMode: settingsStore.drawerMode)
     }
 
     var body: some View {
@@ -55,7 +56,7 @@ struct NotebookView: View {
             }
             // G1: the shelf only exists on the notes surface, so a drop while
             // the drawer shows reminders is refused rather than swallowed.
-            guard !isRemindersMode else {
+            guard effectiveMode == .notes else {
                 workspaceState.isShelfDropTargeted = false
                 return false
             }
@@ -139,7 +140,8 @@ struct NotebookView: View {
 
                 VStack(spacing: shelfSpacing) {
                     Group {
-                        if isRemindersMode {
+                        switch effectiveMode {
+                        case .reminders:
                             RemindersPanelView(
                                 store: reminderStore,
                                 settingsStore: settingsStore,
@@ -147,7 +149,12 @@ struct NotebookView: View {
                                 size: editorSize,
                                 onOpenSettings: onOpenSettings
                             )
-                        } else {
+                        case .plans:
+                            DailyPlansPanelView(
+                                store: dailyPlanStore,
+                                size: editorSize
+                            )
+                        case .notes:
                             MarkdownEditorPanel(
                                 store: store,
                                 imageStore: imageStore,
@@ -222,7 +229,7 @@ struct NotebookView: View {
     /// this one value — the pager's strip, the mode toggle's labels and the
     /// narrowing of the strip — so none of them can drift from the others.
     private var toolbarLayout: NotebookToolbarLayout {
-        NotebookToolbarLayout(width: editorSize.width, isRemindersMode: isRemindersMode)
+        NotebookToolbarLayout(width: editorSize.width, mode: effectiveMode)
     }
 
     private var compactIcon: some View {
@@ -303,7 +310,7 @@ struct NotebookView: View {
 
     private var isFileShelfVisible: Bool {
         // G2: the shelf belongs to the notes surface.
-        !isRemindersMode
+        effectiveMode == .notes
             && settingsStore.isFileShelfEnabled
             && (
                 workspaceState.isShelfDropTargeted

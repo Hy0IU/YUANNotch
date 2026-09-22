@@ -16,7 +16,7 @@ struct RemindersPanelView: View {
     ///
     /// Observed here but owned by the store, because this view is not the only
     /// thing whose lifetime matters: the drawer swaps the whole reminders surface
-    /// for the notes one on every mode switch, and this state used to be `@State`
+    /// for another one on every mode switch, and this state used to be `@State`
     /// inside the panel, so it left with the view. Half-typed reminders vanished
     /// when the user glanced at their notes and came back.
     @ObservedObject var composer: ReminderComposer

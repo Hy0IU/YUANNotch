@@ -10,7 +10,7 @@ final class NotebookWorkspaceState: ObservableObject {
     /// Set while an external file drag is in progress.
     ///
     /// The drawer has to show the notes surface then — the file shelf lives
-    /// there, and a drop is rejected on the reminders surface — but
+    /// there, and a drop is rejected on every other surface — but
     /// `AppSettingsStore.drawerMode` writes through to `UserDefaults` on every
     /// assignment, so borrowing the surface for the duration of a drag must not
     /// go through it. This is that session-scoped borrow: a drag that is
@@ -21,15 +21,15 @@ final class NotebookWorkspaceState: ObservableObject {
     /// mode is changed for real at that point.
     @Published var fileDragForcesNotesMode = false
 
-    /// Whether the drawer is showing the reminders surface.
+    /// The surface the drawer should show after session-scoped overrides.
     ///
     /// The session override wins: the file shelf lives on the notes surface, so
     /// an in-flight file drag must show it whatever the user persisted. This is
     /// the single place that precedence is expressed — the notebook view and the
     /// panel controller both ask this, instead of each spelling out the
     /// conjunction (which is how they silently drift apart).
-    func showsReminders(persistedMode: DrawerMode) -> Bool {
-        persistedMode == .reminders && !fileDragForcesNotesMode
+    func effectiveMode(persistedMode: DrawerMode) -> DrawerMode {
+        fileDragForcesNotesMode ? .notes : persistedMode
     }
 
     /// Called when a file actually lands in the shelf.

@@ -20,9 +20,9 @@ struct NotebookToolbar: View {
     var body: some View {
         HStack(alignment: .center, spacing: NotebookToolbarLayout.itemSpacing) {
             // G7: the tab pager belongs to the notes surface. Hiding it in
-            // reminders mode is what keeps the toolbar from overflowing on a
+            // other modes is what keeps the toolbar from overflowing on a
             // narrow drawer once the mode toggle is added.
-            if !isRemindersMode {
+            if layout.isNotesMode {
                 TabPagerControl(
                     store: store,
                     editorInteractionState: editorInteractionState,
@@ -33,7 +33,7 @@ struct NotebookToolbar: View {
             Spacer(minLength: 0)
 
             DrawerModeToggle(
-                mode: isRemindersMode ? .reminders : .notes,
+                mode: layout.mode,
                 showsLabels: layout.showsModeToggleLabels
             ) { mode in
                 workspaceState.fileDragForcesNotesMode = false
@@ -41,8 +41,8 @@ struct NotebookToolbar: View {
             }
 
             // G6: "Clear" means clear the note, so it has no meaning while
-            // reminders are showing.
-            if !isRemindersMode {
+            // another surface is showing.
+            if layout.isNotesMode {
                 Button(action: store.clear) {
                     Image(systemName: "trash")
                         .frame(width: NotebookToolbarLayout.iconButton, height: NotebookToolbarLayout.iconButton)
@@ -60,6 +60,4 @@ struct NotebookToolbar: View {
         }
         .frame(height: DrawerMetrics.toolbarHeight, alignment: .center)
     }
-
-    private var isRemindersMode: Bool { layout.isRemindersMode }
 }
