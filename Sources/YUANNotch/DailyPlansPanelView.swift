@@ -4,15 +4,6 @@ struct DailyPlansPanelView: View {
     @ObservedObject var store: DailyPlanStore
     let size: CGSize
 
-    @State private var page: Page = .today
-
-    private enum Page: String, CaseIterable, Identifiable {
-        case today = "Today"
-        case focus = "Focus"
-
-        var id: String { rawValue }
-    }
-
     private static let panelBackground = Color(red: 0.06, green: 0.06, blue: 0.07)
     private static let cardBackground = Color.white.opacity(0.055)
     private static let accent = Color.orange
@@ -22,13 +13,7 @@ struct DailyPlansPanelView: View {
             VStack(spacing: 0) {
                 header
                 Divider().overlay(Color.white.opacity(0.08))
-
-                switch page {
-                case .today:
-                    todayPage
-                case .focus:
-                    focusPage
-                }
+                todayPage
             }
 
             if store.isEditorPresented {
@@ -39,31 +24,13 @@ struct DailyPlansPanelView: View {
         .frame(width: size.width, height: size.height, alignment: .top)
         .background(Self.panelBackground)
         .animation(.easeOut(duration: 0.16), value: store.isEditorPresented)
-        .onChange(of: store.activeSession?.planID) { _, planID in
-            if planID == nil, page == .focus {
-                page = .today
-            }
-        }
     }
 
     private var header: some View {
-        HStack(spacing: 4) {
-            ForEach(Page.allCases) { candidate in
-                Button {
-                    page = candidate
-                } label: {
-                    Text(candidate.rawValue)
-                        .font(.system(size: 11, weight: candidate == page ? .semibold : .regular))
-                        .foregroundStyle(.white.opacity(candidate == page ? 0.88 : 0.46))
-                        .padding(.horizontal, 9)
-                        .frame(height: 24)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(.white.opacity(candidate == page ? 0.085 : 0))
-                        )
-                }
-                .buttonStyle(.plain)
-            }
+        HStack(spacing: 8) {
+            Text("Today")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.88))
 
             Spacer(minLength: 8)
 
@@ -88,7 +55,7 @@ struct DailyPlansPanelView: View {
                     if store.plans.isEmpty {
                         emptyState
                     } else {
-                        ForEach(store.plans) { plan in
+                        ForEach(store.plans.filter { $0.id != store.activeSession?.planID }) { plan in
                             planRow(plan)
                         }
                     }
@@ -126,7 +93,7 @@ struct DailyPlansPanelView: View {
     private var summary: some View {
         VStack(spacing: 8) {
             HStack {
-                Text("Today")
+                Text("Daily progress")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.86))
                 Spacer()
@@ -180,7 +147,7 @@ struct DailyPlansPanelView: View {
 
                     Spacer(minLength: 4)
 
-                    VStack(spacing: 5) {
+                    HStack(spacing: 5) {
                         Button {
                             store.togglePause()
                         } label: {
@@ -194,15 +161,42 @@ struct DailyPlansPanelView: View {
                         .help(session.isRunning ? "Pause" : nextActionLabel(for: session))
 
                         Button {
-                            page = .focus
+                            store.finishCurrentPhase()
                         } label: {
-                            Image(systemName: "arrow.up.right")
+                            Image(systemName: session.phase == .focus ? "forward.end.fill" : "forward.fill")
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(.white.opacity(0.52))
-                                .frame(width: 24, height: 20)
+                                .frame(width: 28, height: 28)
+                                .background(Circle().fill(.white.opacity(0.055)))
                         }
                         .buttonStyle(.plain)
-                        .help("Open Focus")
+                        .help(session.phase == .focus ? "Finish Round" : "Skip Break")
+
+                        Button {
+                            store.stopSession()
+                        } label: {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.52))
+                                .frame(width: 28, height: 28)
+                                .background(Circle().fill(.white.opacity(0.055)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Stop")
+
+                        Menu {
+                            Button("Edit") { store.beginEditing(plan) }
+                            Divider()
+                            Button("Delete", role: .destructive) { store.deletePlan(id: plan.id) }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 10, weight: .semibold))
+                                .frame(width: 24, height: 24)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .help("Plan options")
                     }
                 }
 
@@ -229,7 +223,6 @@ struct DailyPlansPanelView: View {
 
     private func planRow(_ plan: DailyPlan) -> some View {
         let progress = store.progress(for: plan)
-        let isActive = store.activeSession?.planID == plan.id
 
         return VStack(spacing: 7) {
             HStack(spacing: 8) {
@@ -271,20 +264,16 @@ struct DailyPlansPanelView: View {
                 .fixedSize()
 
                 Button {
-                    if isActive {
-                        store.togglePause()
-                    } else {
-                        store.start(plan)
-                    }
+                    store.start(plan)
                 } label: {
-                    Image(systemName: isActive && store.activeSession?.isRunning == true ? "pause.fill" : "play.fill")
+                    Image(systemName: "play.fill")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.white.opacity(0.76))
                         .frame(width: 28, height: 28)
                         .background(Circle().fill(.white.opacity(0.06)))
                 }
                 .buttonStyle(.plain)
-                .help(isActive && store.activeSession?.isRunning == true ? "Pause" : "Start \(plan.title)")
+                .help("Start \(plan.title)")
             }
 
             HStack(spacing: 8) {
@@ -299,7 +288,7 @@ struct DailyPlansPanelView: View {
         .padding(9)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(.white.opacity(isActive ? 0.05 : 0.025))
+                .fill(.white.opacity(0.025))
         )
     }
 
@@ -319,93 +308,6 @@ struct DailyPlansPanelView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 30)
-    }
-
-    @ViewBuilder
-    private var focusPage: some View {
-        if let session = store.activeSession, let plan = store.activePlan {
-            let phaseColor: Color = session.phase == .focus ? Self.accent : .green
-
-            VStack(spacing: 14) {
-                Spacer(minLength: 8)
-
-                VStack(spacing: 4) {
-                    Text(plan.title)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.9))
-                    Text("\(session.phase.title) · \(roundText(session, plan: plan))")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.42))
-                }
-
-                ZStack {
-                    CircularPlanProgress(
-                        progress: session.phaseDuration > 0
-                            ? store.phaseElapsed() / session.phaseDuration
-                            : 0,
-                        color: phaseColor,
-                        centerText: "",
-                        size: min(max(size.height * 0.34, 88), 132)
-                    )
-
-                    VStack(spacing: 3) {
-                        Text(countdownText(store.phaseRemaining()))
-                            .font(.system(size: 31, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.94))
-                            .monospacedDigit()
-                            .contentTransition(.numericText())
-                        Text(session.isRunning ? "Running" : nextActionLabel(for: session))
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.4))
-                    }
-                }
-
-                HStack(spacing: 8) {
-                    Button(session.isRunning ? "Pause" : nextActionLabel(for: session)) {
-                        store.togglePause()
-                    }
-                    .buttonStyle(FocusActionButtonStyle(isPrimary: true, color: phaseColor))
-
-                    Button(session.phase == .focus ? "Finish Round" : "Skip Break") {
-                        store.finishCurrentPhase()
-                    }
-                    .buttonStyle(FocusActionButtonStyle(isPrimary: false, color: phaseColor))
-
-                    Button("Stop") { store.stopSession() }
-                        .buttonStyle(FocusActionButtonStyle(isPrimary: false, color: phaseColor))
-                }
-
-                VStack(spacing: 7) {
-                    HStack {
-                        Text("Today’s \(plan.title) plan")
-                        Spacer()
-                        Text("\(durationText(store.focusedSeconds(for: plan.id, on: store.now))) / \(durationText(TimeInterval(plan.targetMinutes * 60)))")
-                    }
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.42))
-                    .monospacedDigit()
-
-                    PlanProgressBar(progress: store.progress(for: plan), color: Self.accent)
-                }
-                .padding(.horizontal, 16)
-
-                Spacer(minLength: 8)
-            }
-            .padding(.vertical, 10)
-        } else {
-            VStack(spacing: 10) {
-                Spacer()
-                Image(systemName: "timer")
-                    .font(.system(size: 30, weight: .light))
-                    .foregroundStyle(.white.opacity(0.28))
-                Text("Start a plan to enter Focus")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.62))
-                Button("Back to Today") { page = .today }
-                    .buttonStyle(MarkdownToolbarButtonStyle())
-                Spacer()
-            }
-        }
     }
 
     private var editor: some View {
