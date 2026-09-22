@@ -8,8 +8,9 @@
 #
 # It checks that a notebook with any number of tabs lays out inside the width the
 # drawer gives the row: the strip is never squeezed below what it needs, nothing
-# in the row overlaps anything else, the mode toggle costs what the layout says,
-# one wheel notch slides one dot and the ends clamp.
+# in the row overlaps anything else, the width the layout reserves for the mode
+# toggle covers the control in every state the row can draw it in, one wheel
+# notch slides one dot and the ends clamp.
 #
 # It needs no permissions and writes nothing. Exit status 0 means every check
 # passed.

@@ -184,11 +184,26 @@ struct NotebookToolbarLayout: Equatable {
 
     static let iconButton: CGFloat = 28
     static let itemSpacing: CGFloat = 10
-    /// The mode toggle with its two labels ("Notes" / "Reminders"), and with
-    /// icons only, at the fonts `DrawerModeToggle` uses. Both figures are
-    /// measured, not derived: `Scripts/toolbar-layout-probe.sh` hosts the real
-    /// toggle and fails if either drifts.
-    static let modeToggleLabelledWidth: CGFloat = 158
+    /// The width the mode toggle needs: with its two labels and with icons only,
+    /// at the fonts `DrawerModeToggle` uses.
+    ///
+    /// Both figures are measured rather than derived — `Scripts/toolbar-layout-probe.sh`
+    /// hosts the real toggle and fails if either stops covering it — and what
+    /// they have to cover is the *widest* state, not the typical one. Two things
+    /// move that width, and the figures are the worst of both:
+    ///
+    /// - which segment is selected, because the selected label is semibold and
+    ///   the two labels differ in length ("Reminders" selected is the wide case);
+    /// - the display's backing scale, because at 1x the font metrics round up to
+    ///   whole points. Measured 2026-09-21 on the same build: 156.0pt with Notes
+    ///   selected and 157.5pt with Reminders selected on a 2x screen, against
+    ///   158.0 / 159.0 on a 1x screen.
+    ///
+    /// So the labelled figure is the 1x worst case plus a point: a drawer that
+    /// moves between a Retina and a 1x display is the same row either way.
+    static let modeToggleLabelledWidth: CGFloat = 160
+    /// Icons-only has no text, so the selection does not enter; only the scale
+    /// does (57 at 1x, 56 at 2x), and this is the 1x figure.
     static let modeToggleIconWidth: CGFloat = 57
     /// The pager's own chrome: minus, plus, the two gaps around the strip and
     /// the pill's horizontal padding.

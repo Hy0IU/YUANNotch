@@ -24,8 +24,9 @@ import SwiftUI
 //      NotebookToolbarLayout says — a squeeze would make it narrower — it sits
 //      where the pager's chrome puts it, and the pager, the mode toggle, "Clear"
 //      and the settings button do not intersect one another at any tab count.
-//   3. rendered: the two widths NotebookToolbarLayout assumes for the mode toggle
-//      match the real DrawerModeToggle with and without its labels.
+//   3. rendered: the widths NotebookToolbarLayout reserves for the mode toggle
+//      cover the real DrawerModeToggle in every state the row can show — with
+//      and without its labels, and with either segment selected.
 //   4. the wheel: one notch slides the strip exactly one dot, the ends clamp, and
 //      the offset is reported back so the SwiftUI side stays in step.
 //   5. reveal: switching tabs slides the strip only as far as the selected dot
@@ -468,23 +469,57 @@ private func checkModeToggleWidths() {
     print("")
     print("— 3 · what the mode toggle actually costs —")
 
+    // Every state the row can render, because the toggle is not one width: the
+    // selected segment's label is semibold and the two labels differ in length,
+    // so which mode is selected changes how wide the control is — "Reminders"
+    // selected is the widest of the four.
+    //
+    // What the layout needs is that its reserve *covers* the widest of them.
+    // This asserted equality instead, which turned half a point of font-metric
+    // drift into a failure in the safe direction (a reserve with slack is not a
+    // layout bug) while leaving the unsafe direction — a reserve too small for a
+    // control the row can really draw — unwatched, since only one selected state
+    // was ever measured. Measured 2026-09-21: the real control is 56.00pt with
+    // icons and 156.00 / 157.50pt labelled at 2x, and 57.00 / 158.00 / 159.00 at
+    // 1x, against reserves of 57 and 160 — which is why the reserve is the 1x
+    // figure and why the context is printed below.
+    let scale = NSScreen.main?.backingScaleFactor ?? -1
+    print("    measured on \(NSScreen.screens.count) screen(s), backing scale \(fmt(scale))"
+        + " — the same toggle is up to 1.5pt wider at 1x")
+
     for showsLabels in [false, true] {
-        let host = host(
-            Measured(name: "toggle") {
-                DrawerModeToggle(mode: .notes, showsLabels: showsLabels) { _ in }
-            },
-            width: 600
-        )
-        let measured = withExtendedLifetime(host) { Recorded.frames["toggle"] }
-        Recorded.reset()
-        let assumed = showsLabels
+        let reserve = showsLabels
             ? NotebookToolbarLayout.modeToggleLabelledWidth
             : NotebookToolbarLayout.modeToggleIconWidth
-        let width = measured?.width ?? -1
+
+        var widest: CGFloat = -1
+        var widestSelection = DrawerMode.notes
+        for selection in DrawerMode.allCases {
+            let host = host(
+                Measured(name: "toggle") {
+                    DrawerModeToggle(mode: selection, showsLabels: showsLabels) { _ in }
+                },
+                width: 600
+            )
+            let measured = withExtendedLifetime(host) { Recorded.frames["toggle"] }
+            Recorded.reset()
+
+            let width = measured?.width ?? -1
+            if width > widest {
+                widest = width
+                widestSelection = selection
+            }
+        }
+
+        // Half a point is font-metric rounding; more is the reserve being too
+        // small. The slack is printed either way, so a reserve that is quietly
+        // getting generous shows up here instead of going unnoticed.
+        let slack = reserve - widest
         check(
-            "\(showsLabels ? "labelled" : "icons only") toggle",
-            abs(width - assumed) <= 0.5,
-            "measured \(fmt(width))pt, NotebookToolbarLayout reserves \(fmt(assumed))pt"
+            "the \(showsLabels ? "labelled" : "icons only") reserve covers the toggle",
+            slack >= -0.5,
+            "widest \(fmt(widest))pt with \(widestSelection.title.lowercased()) selected, "
+                + "reserve \(fmt(reserve))pt, slack \(fmt(slack))pt"
         )
     }
 }
