@@ -96,11 +96,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makeAppMenu() -> NSMenu {
         let appMenu = NSMenu()
-        let showItem = NSMenuItem(title: "Show Notes", action: #selector(showNotes), keyEquivalent: "n")
+        let showItem = NSMenuItem(title: "Show YUANNotch", action: #selector(showNotes), keyEquivalent: "n")
         showItem.target = self
         appMenu.addItem(showItem)
 
-        let hideItem = NSMenuItem(title: "Hide Notes", action: #selector(hideNotes), keyEquivalent: "w")
+        let hideItem = NSMenuItem(title: "Hide YUANNotch", action: #selector(hideNotes), keyEquivalent: "w")
         hideItem.target = self
         appMenu.addItem(hideItem)
 
