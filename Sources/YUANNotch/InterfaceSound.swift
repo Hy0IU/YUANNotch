@@ -15,23 +15,28 @@ enum InterfaceSound {
     /// to be doing file I/O.
     private static let stagedSound = NSSound(named: "Tink")
 
-    /// Where macOS keeps the sound Finder plays when a file is moved to the
-    /// Trash — the sound of *deleting* something, as opposed to emptying it
-    /// (that one is `empty trash.aif`, a different and much shorter sound).
+    /// Where macOS keeps the sound of something going *into* the Trash: the one
+    /// the Dock plays as an item is dropped on it (0.50 s).
+    ///
+    /// It is not the only candidate macOS ships for this gesture — the Finder's
+    /// "Move to Trash" is 2.19 s and its "Empty Trash" 0.83 s, both under
+    /// `SystemSounds/finder/`. The Dock's is the one that was chosen, by ear
+    /// against the other two, because it reads as the thing going in rather than
+    /// as a longer ceremony around it.
     ///
     /// It is outside `/System/Library/Sounds`, so it cannot be reached by name,
     /// and neither the path nor the file is a documented API. That is why the
     /// sound built from it is optional: if a future macOS moves it, the buttons
     /// go silent rather than misbehave.
-    private static let moveToTrashSoundPath =
-        "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/finder/move to trash.aif"
+    private static let trashSoundPath =
+        "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/dock/drag to trash.aif"
 
     /// Played when contents are thrown away — the shelf emptied, or the editor.
     ///
-    /// It is the move-to-Trash sound because that is the gesture these buttons
+    /// It is the into-the-Trash sound because that is the gesture these buttons
     /// perform: the content is deleted.
     private static let clearedSound = NSSound(
-        contentsOfFile: moveToTrashSoundPath,
+        contentsOfFile: trashSoundPath,
         byReference: true
     )
 
