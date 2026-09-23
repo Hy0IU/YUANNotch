@@ -13,7 +13,7 @@ RESOURCE_BUNDLE_NAME="YUANNotch_YUANNotch.bundle"
 RESOURCE_BUNDLE="$ROOT_DIR/.build/release/$RESOURCE_BUNDLE_NAME"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 APP_VERSION="${APP_VERSION:-0.3.0}"
-BUILD_NUMBER="${BUILD_NUMBER:-4}"
+BUILD_NUMBER="${BUILD_NUMBER:-5}"
 INSTALL_APP="${INSTALL_APP:-1}"
 
 # Hardened Runtime and a secure timestamp belong on Developer ID releases.

@@ -96,16 +96,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makeAppMenu() -> NSMenu {
         let appMenu = NSMenu()
-        let showItem = NSMenuItem(title: "Show YUANNotch", action: #selector(showNotes), keyEquivalent: "n")
-        showItem.target = self
-        appMenu.addItem(showItem)
-
-        let hideItem = NSMenuItem(title: "Hide YUANNotch", action: #selector(hideNotes), keyEquivalent: "w")
-        hideItem.target = self
-        appMenu.addItem(hideItem)
-
-        appMenu.addItem(.separator())
-
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         appMenu.addItem(settingsItem)
@@ -160,14 +150,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(selectAllItem)
 
         return editMenu
-    }
-
-    @objc private func showNotes() {
-        panelController?.expand(animated: true)
-    }
-
-    @objc private func hideNotes() {
-        panelController?.collapse(animated: true)
     }
 
     @objc private func openSettings() {
