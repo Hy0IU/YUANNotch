@@ -369,13 +369,17 @@ struct DailyPlansPanelView: View {
                                 } label: {
                                     Text(day.shortTitle)
                                         .font(.system(size: 10, weight: isSelected ? .semibold : .regular))
-                                        .foregroundStyle(.white.opacity(isSelected ? 0.9 : 0.4))
+                                        .foregroundStyle(isSelected ? Self.accent : .white.opacity(0.42))
                                         .frame(maxWidth: .infinity)
                                         .frame(height: 25)
                                         .background(
                                             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                                .fill(.white.opacity(isSelected ? 0.11 : 0.035))
+                                                .fill(isSelected ? Self.accent.opacity(0.16) : .white.opacity(0.035))
                                         )
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                                .stroke(Self.accent.opacity(isSelected ? 0.28 : 0), lineWidth: 1)
+                                        }
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel(dayName(day))
@@ -383,6 +387,9 @@ struct DailyPlansPanelView: View {
                                 .help(dayName(day))
                             }
                         }
+                        Text("Highlighted days are active.")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.white.opacity(0.34))
                     }
 
                     Toggle("Use Pomodoro", isOn: $store.draft.pomodoro.isEnabled)
