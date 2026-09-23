@@ -198,12 +198,11 @@ struct NotebookToolbarLayout: Equatable {
     ///   whole points. Measured 2026-09-22 on the same build: the widest labelled
     ///   state is 218.5pt and icons-only is 82.5pt on a 2x screen.
     ///
-    /// So the labelled figure is the 1x worst case plus a point: a drawer that
-    /// moves between a Retina and a 1x display is the same row either way.
-    static let modeToggleLabelledWidth: CGFloat = 220
-    /// Icons-only has no text, so the selection does not enter; only the scale
-    /// does. This is the measured 2x figure rounded up to a whole point.
-    static let modeToggleIconWidth: CGFloat = 83
+    /// The widest measured 1x state is 221pt. Reserve it exactly so the
+    /// minimum-width drawer can still show one full pager dot.
+    static let modeToggleLabelledWidth: CGFloat = 221
+    /// Icons-only has no text. The measured 1x state is 84pt.
+    static let modeToggleIconWidth: CGFloat = 84
     /// The pager's own chrome: minus, plus, the two gaps around the strip and
     /// the pill's horizontal padding.
     static let pagerChrome: CGFloat = 72
