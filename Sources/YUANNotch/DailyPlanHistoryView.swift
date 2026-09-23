@@ -3,14 +3,15 @@ import SwiftUI
 struct DailyPlanHistoryView: View {
     let store: DailyPlanStore
 
-    @State private var snapshot: DailyPlanHistorySnapshot?
+    @State private var snapshot: DailyPlanHistorySnapshot
+
+    @MainActor init(store: DailyPlanStore) {
+        self.store = store
+        _snapshot = State(initialValue: DailyPlanHistorySnapshot(store: store))
+    }
 
     var body: some View {
-        Group {
-            if let snapshot {
-                DailyPlanHistoryContent(snapshot: snapshot)
-            }
-        }
+        DailyPlanHistoryContent(snapshot: snapshot)
         .onAppear {
             snapshot = DailyPlanHistorySnapshot(store: store)
         }
