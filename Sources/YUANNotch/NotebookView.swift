@@ -206,7 +206,8 @@ private struct NotebookViewContent: View {
                         case .plans:
                             DailyPlansPanelView(
                                 store: dailyPlanStore,
-                                size: editorSize
+                                size: editorSize,
+                                isDrawerExpanded: drawerState.isExpanded
                             )
                         case .notes:
                             MarkdownEditorPanel(

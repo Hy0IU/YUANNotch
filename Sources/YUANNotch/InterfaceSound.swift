@@ -2,9 +2,8 @@ import AppKit
 
 /// The sounds the app plays back to the user.
 ///
-/// These are macOS's own, so they follow whatever output device and volume the
-/// system is set to without any audio plumbing of ours — and they sound like the
-/// rest of the system, which is the point of choosing them over our own.
+/// Most are macOS's own, so they follow the system's output device and volume.
+/// The focus completion cue is bundled with the app so it stays consistent.
 @MainActor
 enum InterfaceSound {
     /// Played when something actually lands in the file shelf.
@@ -14,7 +13,7 @@ enum InterfaceSound {
     /// `NSSound(named:)` reads the file and a drop is far too frequent a place
     /// to be doing file I/O.
     private static let stagedSound = NSSound(named: "Tink")
-    private static let focusCompletedSound = NSSound(named: "Glass")
+    private static let focusCompletedSound = loadFocusCompletedSound()
 
     /// Where macOS keeps the sound of something going *into* the Trash: the one
     /// the Dock plays as an item is dropped on it (0.50 s).
@@ -40,6 +39,28 @@ enum InterfaceSound {
         contentsOfFile: trashSoundPath,
         byReference: true
     )
+
+    /// Loads the approved focus cue from the SwiftPM resource bundle. The
+    /// package script places the same bundle beside the executable in the app.
+    private static func loadFocusCompletedSound() -> NSSound? {
+        let executableURL = Bundle.main.executableURL
+            ?? URL(fileURLWithPath: CommandLine.arguments[0])
+        let bundleURL = executableURL.deletingLastPathComponent()
+            .appendingPathComponent("YUANNotch_YUANNotch.bundle")
+
+        guard let bundle = Bundle(url: bundleURL),
+              let soundURL = bundle.url(
+                forResource: "PlanComplete",
+                withExtension: "wav",
+                subdirectory: "Sounds"
+              )
+        else {
+            return NSSound(named: "Glass")
+        }
+
+        return NSSound(contentsOf: soundURL, byReference: false)
+            ?? NSSound(named: "Glass")
+    }
 
     /// A file landed in the shelf.
     static func fileStaged() {

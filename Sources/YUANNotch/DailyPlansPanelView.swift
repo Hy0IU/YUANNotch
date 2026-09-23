@@ -3,6 +3,7 @@ import SwiftUI
 struct DailyPlansPanelView: View {
     @ObservedObject var store: DailyPlanStore
     let size: CGSize
+    let isDrawerExpanded: Bool
 
     @State private var page: Page = .today
 
@@ -171,7 +172,7 @@ struct DailyPlansPanelView: View {
                             .font(.system(size: 25, weight: .medium, design: .rounded))
                             .foregroundStyle(.white.opacity(0.94))
                             .monospacedDigit()
-                            .contentTransition(.numericText())
+                            .contentTransition(isDrawerExpanded ? .numericText() : .identity)
                         Text(session.isRunning ? "Running" : nextActionLabel(for: session))
                             .font(.system(size: 10))
                             .foregroundStyle(.white.opacity(0.4))
@@ -250,6 +251,16 @@ struct DailyPlansPanelView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Self.cardBackground)
             )
+            // A one-second store refresh can arrive while the panel mask is
+            // shrinking. Keep the timer text and progress ring from animating
+            // inside that same reveal transaction; the panel itself still
+            // performs its normal collapse animation.
+            .transaction { transaction in
+                if !isDrawerExpanded {
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
+            }
         }
     }
 
