@@ -3,27 +3,70 @@ import SwiftUI
 struct DailyPlanHistoryView: View {
     @ObservedObject var store: DailyPlanStore
 
-    @State private var displayedMonth = Date()
-    @State private var selectedDate: Date?
+    var body: some View {
+        DailyPlanHistoryContent(
+            store: store,
+            updateKey: DailyPlanHistoryUpdateKey(store: store).value
+        )
+        .equatable()
+    }
+}
+
+private struct DailyPlanHistoryUpdateKey: Equatable {
+    let value: Int
+
+    @MainActor init(store: DailyPlanStore) {
+        var hasher = Hasher()
+        hasher.combine(Int64(store.now.timeIntervalSince1970 / 60))
+
+        for record in store.dayRecords {
+            hasher.combine(record.planID)
+            hasher.combine(record.day.year)
+            hasher.combine(record.day.month)
+            hasher.combine(record.day.day)
+            hasher.combine(record.focusedSeconds)
+        }
+
+        hasher.combine(store.activeSession != nil)
+        if let session = store.activeSession {
+            hasher.combine(session.planID)
+            hasher.combine(session.phase.rawValue)
+            hasher.combine(session.phaseDuration)
+            hasher.combine(session.phaseElapsed)
+            hasher.combine(session.runningSince)
+            hasher.combine(session.completedFocusRounds)
+        }
+
+        value = hasher.finalize()
+    }
+}
+
+@MainActor
+private struct DailyPlanHistoryContent: View, Equatable {
+    let store: DailyPlanStore
+    nonisolated let updateKey: Int
+
+    @State private var monthCount = 18
 
     private let calendar = Calendar.autoupdatingCurrent
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 5), count: 7)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 7)
 
-    private var monthStart: Date {
-        calendar.dateInterval(of: .month, for: displayedMonth)?.start ?? displayedMonth
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.updateKey == rhs.updateKey
     }
 
-    private var dayRange: Range<Int> {
-        calendar.range(of: .day, in: .month, for: monthStart) ?? 1 ..< 29
+    private var latestMonth: Date {
+        calendar.dateInterval(of: .month, for: store.now)?.start ?? store.now
     }
 
-    private var leadingDays: Int {
-        let weekday = calendar.component(.weekday, from: monthStart)
-        return (weekday - calendar.firstWeekday + 7) % 7
+    private var latestDay: Date {
+        calendar.startOfDay(for: store.now)
     }
 
-    private var selectedDay: Date {
-        selectedDate ?? calendar.startOfDay(for: store.now)
+    private var months: [Date] {
+        (0 ..< monthCount).compactMap {
+            calendar.date(byAdding: .month, value: -$0, to: latestMonth)
+        }
     }
 
     private var weekdayTitles: [String] {
@@ -33,209 +76,143 @@ struct DailyPlanHistoryView: View {
         }
     }
 
-    private var canAdvanceMonth: Bool {
-        !calendar.isDate(displayedMonth, equalTo: store.now, toGranularity: .month)
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            monthHeader
-
-            ScrollView {
-                VStack(spacing: 12) {
-                    calendarGrid
-                    intensityLegend
-                    selectedDaySummary
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                historyToolbar {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        proxy.scrollTo(latestDay, anchor: .center)
+                    }
                 }
-                .padding(10)
+
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        ForEach(months, id: \.self) { month in
+                            monthSection(month)
+                                .id(month)
+                                .onAppear { loadMoreIfNeeded(whenShowing: month) }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                }
             }
         }
     }
 
-    private var monthHeader: some View {
-        HStack(spacing: 8) {
-            Button {
-                moveMonth(by: -1)
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(.white.opacity(0.055)))
-            }
-            .buttonStyle(.plain)
-            .help("Previous month")
-
-            Spacer(minLength: 4)
-
-            VStack(spacing: 2) {
-                Text(monthStart.formatted(.dateTime.month(.wide).year()))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.88))
-                Text("\(durationText(monthFocusedSeconds)) focused")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .monospacedDigit()
-            }
-
-            Spacer(minLength: 4)
-
-            Button {
-                moveMonth(by: 1)
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(canAdvanceMonth ? .white.opacity(0.7) : .white.opacity(0.2))
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(.white.opacity(0.055)))
-            }
-            .buttonStyle(.plain)
-            .disabled(!canAdvanceMonth)
-            .help("Next month")
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 42)
-    }
-
-    private var calendarGrid: some View {
-        LazyVGrid(columns: columns, spacing: 5) {
-            ForEach(Array(weekdayTitles.enumerated()), id: \.offset) { _, title in
-                Text(title)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.38))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 17)
-            }
-
-            ForEach(0 ..< leadingDays, id: \.self) { _ in
-                Color.clear
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(1, contentMode: .fit)
-            }
-
-            ForEach(dayRange, id: \.self) { day in
-                dayCell(day)
-            }
-        }
-    }
-
-    private var intensityLegend: some View {
-        HStack(spacing: 5) {
-            Text("Less")
-                .font(.system(size: 9))
-                .foregroundStyle(.white.opacity(0.38))
-
-            ForEach(0 ..< 5, id: \.self) { level in
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(heatColor(for: TimeInterval(level) * 60 * 60))
-                    .frame(width: 12, height: 12)
-            }
-
-            Text("More")
-                .font(.system(size: 9))
-                .foregroundStyle(.white.opacity(0.38))
+    private func historyToolbar(scrollToLatest: @escaping () -> Void) -> some View {
+        HStack {
+            Text("Daily focus time")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.58))
 
             Spacer()
+
+            Button(action: scrollToLatest) {
+                Label("Today", systemImage: "arrow.up.to.line")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .padding(.horizontal, 9)
+                    .frame(height: 25)
+                    .background(Capsule().fill(.white.opacity(0.07)))
+            }
+            .buttonStyle(.plain)
+            .help("Scroll to today")
         }
-        .padding(.horizontal, 2)
+        .padding(.horizontal, 10)
+        .frame(height: 34)
     }
 
-    private var selectedDaySummary: some View {
-        let seconds = store.focusedSeconds(on: selectedDay)
+    private func monthSection(_ month: Date) -> some View {
+        let monthStart = calendar.dateInterval(of: .month, for: month)?.start ?? month
+        let dayRange = calendar.range(of: .day, in: .month, for: monthStart) ?? 1 ..< 29
+        let weekday = calendar.component(.weekday, from: monthStart)
+        let leadingDays = (weekday - calendar.firstWeekday + 7) % 7
 
-        return HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(heatColor(for: seconds))
-                .frame(width: 4, height: 32)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(monthStart.formatted(.dateTime.month(.wide).year()))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.72))
+                .padding(.leading, 2)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(selectedDay.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.82))
-                Text(seconds > 0 ? "Focused across your daily plans" : "No focus time recorded")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.white.opacity(0.38))
+            LazyVGrid(columns: columns, spacing: 3) {
+                ForEach(Array(weekdayTitles.enumerated()), id: \.offset) { _, title in
+                    Text(title)
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.32))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 11)
+                }
+
+                ForEach(0 ..< leadingDays, id: \.self) { _ in
+                    Color.clear
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                }
+
+                ForEach(dayRange, id: \.self) { day in
+                    let date = calendar.date(byAdding: .day, value: day - 1, to: monthStart) ?? monthStart
+                    dayCell(day, date: date)
+                }
             }
-
-            Spacer(minLength: 4)
-
-            Text(durationText(seconds))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.78))
-                .monospacedDigit()
         }
-        .padding(10)
+    }
+
+    private func dayCell(_ day: Int, date: Date) -> some View {
+        let focusedSeconds = store.focusedSeconds(on: date)
+        let focusedMinutes = max(Int(focusedSeconds / 60), 0)
+        let isFuture = calendar.startOfDay(for: date) > latestDay
+        let isToday = calendar.isDate(date, inSameDayAs: latestDay)
+        let duration = isFuture ? "" : compactDuration(focusedMinutes)
+
+        return VStack(spacing: 1) {
+            Text("\(day)")
+                .font(.system(size: 9, weight: isToday ? .semibold : .regular))
+                .foregroundStyle(isFuture ? .white.opacity(0.22) : .white.opacity(0.68))
+
+            Text(duration.isEmpty ? " " : duration)
+                .font(.system(size: 7, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(isFuture ? .clear : .white.opacity(0.78))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(width: 32, height: 32)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(.white.opacity(0.04))
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isFuture ? Color.white.opacity(0.025) : heatColor(for: focusedMinutes))
+        )
+        .overlay {
+            if isToday {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color.orange.opacity(0.76), lineWidth: 1)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .id(date)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "\(date.formatted(date: .complete, time: .omitted)), \(isFuture ? "future date" : "\(compactDuration(focusedMinutes)) focused")"
         )
     }
 
-    private var monthFocusedSeconds: TimeInterval {
-        dayRange.reduce(0) { total, day in
-            guard let date = date(forDay: day) else { return total }
-            return total + store.focusedSeconds(on: date)
-        }
+    private func loadMoreIfNeeded(whenShowing month: Date) {
+        guard let oldestMonth = months.last,
+              calendar.isDate(month, equalTo: oldestMonth, toGranularity: .month) else { return }
+        monthCount += 12
     }
 
-    private func dayCell(_ day: Int) -> some View {
-        let date = date(forDay: day) ?? monthStart
-        let seconds = store.focusedSeconds(on: date)
-        let isFuture = calendar.startOfDay(for: date) > calendar.startOfDay(for: store.now)
-        let isSelected = calendar.isDate(date, inSameDayAs: selectedDay)
-        let isToday = calendar.isDateInToday(date)
-
-        return Button {
-            selectedDate = date
-        } label: {
-            Text("\(day)")
-                .font(.system(size: 10, weight: isSelected || isToday ? .semibold : .regular))
-                .foregroundStyle(isFuture ? .white.opacity(0.22) : .white.opacity(seconds > 0 ? 0.92 : 0.55))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isFuture ? Color.white.opacity(0.025) : heatColor(for: seconds))
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(
-                            isSelected ? Color.white.opacity(0.72) : (isToday ? Color.orange.opacity(0.72) : .clear),
-                            lineWidth: isSelected ? 1.2 : 1
-                        )
-                }
-                .aspectRatio(1, contentMode: .fit)
-        }
-        .buttonStyle(.plain)
-        .disabled(isFuture)
-        .accessibilityLabel(date.formatted(date: .complete, time: .omitted))
-        .accessibilityValue(seconds > 0 ? "\(durationText(seconds)) focused" : "No focus time")
-        .help("\(date.formatted(date: .complete, time: .omitted)) · \(durationText(seconds)) focused")
+    private func heatColor(for focusedMinutes: Int) -> Color {
+        guard focusedMinutes > 0 else { return .white.opacity(0.045) }
+        let intensity = min(Double(focusedMinutes) / 240, 1)
+        return .orange.opacity(0.14 + intensity * 0.74)
     }
 
-    private func date(forDay day: Int) -> Date? {
-        calendar.date(byAdding: .day, value: day - 1, to: monthStart)
-    }
-
-    private func moveMonth(by offset: Int) {
-        guard let newMonth = calendar.date(byAdding: .month, value: offset, to: monthStart) else { return }
-        displayedMonth = newMonth
-        selectedDate = offset > 0 && calendar.isDate(newMonth, equalTo: store.now, toGranularity: .month)
-            ? calendar.startOfDay(for: store.now)
-            : calendar.startOfDay(for: newMonth)
-    }
-
-    private func heatColor(for seconds: TimeInterval) -> Color {
-        guard seconds > 0 else { return .white.opacity(0.045) }
-        let intensity = min(seconds / (4 * 60 * 60), 1)
-        return .orange.opacity(0.16 + intensity * 0.72)
-    }
-
-    private func durationText(_ seconds: TimeInterval) -> String {
-        let totalMinutes = max(Int(seconds) / 60, 0)
-        let hours = totalMinutes / 60
-        let minutes = totalMinutes % 60
-        if hours > 0, minutes > 0 { return "\(hours)h \(minutes)m" }
+    private func compactDuration(_ minutes: Int) -> String {
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        if hours > 0, remainder > 0 { return "\(hours)h\(remainder)" }
         if hours > 0 { return "\(hours)h" }
-        return "\(minutes)m"
+        return "\(remainder)m"
     }
 }
