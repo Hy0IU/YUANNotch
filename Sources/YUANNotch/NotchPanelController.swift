@@ -243,11 +243,13 @@ final class NotchPanelController: NSObject {
             defer: false
         )
         configurePanel(panel)
+        panel.delegate = self
         panel.onMouseEvent = { [weak self, weak panel] event in
-            guard let self, let panel else { return }
-            if self.handlePanelDragEvent(event, panel: panel) { return }
-            if self.handleResizeMouseEvent(event) { return }
+            guard let self, let panel else { return false }
+            if self.handlePanelDragEvent(event, panel: panel) { return true }
+            if self.handleResizeMouseEvent(event) { return true }
             self.editorInteractionState.handleMouseEvent(event, searchingIn: panel.contentView)
+            return false
         }
         return panel
     }
@@ -541,10 +543,11 @@ final class NotchPanelController: NSObject {
                 panel.allowsKeyboardFocus = false
                 configurePanel(panel)
                 panel.onMouseEvent = { [weak self, weak screen] event in
-                    guard let self, let screen else { return }
+                    guard let self, let screen else { return false }
                     self.currentScreen = screen
-                    guard event.type == .leftMouseDown else { return }
+                    guard event.type == .leftMouseDown else { return false }
                     self.expand(animated: true)
+                    return true
                 }
                 let host = CompactFileDropHostingView(rootView: hotView)
                 host.translatesAutoresizingMaskIntoConstraints = false
@@ -1112,6 +1115,8 @@ final class NotchPanelController: NSObject {
 
     private var isResizingDrawer = false
     private var resizeGrabOffset: CGSize = .zero
+    private var resizeAnchorFrame: NSRect = .zero
+    private var resizeScreen: NSScreen?
 
     /// The grip sits at the bottom center, safely away from the physical
     /// MacBook notch and the resize corner. Pulling an attached drawer first
@@ -1249,6 +1254,10 @@ final class NotchPanelController: NSObject {
         session.panel.level = .statusBar
         session.panel.isMovable = true
         session.panel.isMovableByWindowBackground = true
+        // AppKit's live-resize path avoids the visible shaking caused by
+        // resizing this transparent panel with setFrame on every mouse event.
+        session.panel.styleMask.insert(.resizable)
+        session.panel.minSize = NSSize(width: 360, height: DrawerMetrics.minimumHeight)
         showAllHotPanels()
         session.panel.orderFrontRegardless()
 
@@ -1318,6 +1327,7 @@ final class NotchPanelController: NSObject {
               let drawerState = floatingDrawerState,
               panelDragSession == nil,
               !isResizingDrawer,
+              !panel.inLiveResize,
               !isDockingPanel else {
             backgroundDragLastFrame = floatingPanel?.frame
             return
@@ -1398,6 +1408,7 @@ final class NotchPanelController: NSObject {
         activeHostingView = host
         panel.isMovable = false
         panel.isMovableByWindowBackground = false
+        panel.styleMask.remove(.resizable)
         drawerState.isExpanded = true
         drawerState.revealProgress = 1
         drawerState.isBeingDragged = false
@@ -1426,7 +1437,7 @@ final class NotchPanelController: NSObject {
         }
     }
 
-    /// Bottom-right hot zone of the drawer panel, in screen coordinates.
+    /// Bottom-right hot zone of the attached drawer, in screen coordinates.
     ///
     /// The grip's own metrics decide it (see `ResizeGripMetrics.grabRect`), so
     /// the zone cannot drift from the corner it grabs. It used to be a fixed
@@ -1463,17 +1474,15 @@ final class NotchPanelController: NSObject {
         )
     }
 
-    /// Panel-level resize handling.
-    ///
-    /// This is deliberately *not* a SwiftUI gesture. It used to be forced out
-    /// here because a resize rebuilt the view tree and that corrupted a
-    /// `DragGesture`'s translation mid-drag; that reason is gone now that a
-    /// resize only publishes a layout, and moving the grip into SwiftUI is a
-    /// change worth making on its own terms rather than as a side effect of
-    /// this one.
+    /// Attached drawers keep their centered, panel-level resize. Floating
+    /// drawers use AppKit's native corner resize instead.
     private func handleResizeMouseEvent(_ event: NSEvent) -> Bool {
-        guard (isExpanded || floatingPanel != nil), !isDockingPanel else {
+        if floatingPanel != nil { return false }
+        guard isExpanded, !isDockingPanel else {
+            activeDrawerState?.isResizing = false
             isResizingDrawer = false
+            resizeAnchorFrame = .zero
+            resizeScreen = nil
             return false
         }
 
@@ -1482,7 +1491,10 @@ final class NotchPanelController: NSObject {
             let mouse = NSEvent.mouseLocation
             guard drawerGripRect.contains(mouse), let panel = activeDrawerPanel else { return false }
             isResizingDrawer = true
+            activeDrawerState?.isResizing = true
             let frame = panel.frame
+            resizeAnchorFrame = frame
+            resizeScreen = panel.screen
             resizeGrabOffset = CGSize(width: frame.maxX - mouse.x, height: mouse.y - frame.minY)
             return true
 
@@ -1493,6 +1505,9 @@ final class NotchPanelController: NSObject {
         case .leftMouseUp where isResizingDrawer:
             isResizingDrawer = false
             finishDrawerResize()
+            activeDrawerState?.isResizing = false
+            resizeAnchorFrame = .zero
+            resizeScreen = nil
             return true
 
         default:
@@ -1502,53 +1517,49 @@ final class NotchPanelController: NSObject {
 
     /// Commits a finished resize.
     ///
-    /// The drag itself only moves the layout (see `resizeDrawer`); persisting
-    /// the size is this once-per-gesture step, so the preference is written
-    /// when the user stops rather than on every drag tick. The editor's layout
-    /// is refreshed here for the same reason: its text re-wraps against the
-    /// width the drawer ended at, and a resize that never ends has no width
-    /// worth re-wrapping for.
-    ///
-    /// What is committed is the *decided* geometry — the layout's expanded size —
-    /// not the size read back from the window. The layout is the value every
-    /// consumer derives from, so committing it makes the preference write a
-    /// no-op for the layout already on screen (`applyLayout`'s equality guard),
-    /// where committing `panel.frame.size` would persist whatever AppKit made of
-    /// the frame and then derive a *different* layout from it.
+    /// The hosting view follows the window throughout the drag. Publish and
+    /// persist the final, screen-clamped layout only once when the drag ends,
+    /// then ask the editor to refresh text layout at the settled width.
     private func finishDrawerResize() {
         guard let panel = activeDrawerPanel else { return }
-        settingsStore.customExpandedSize = activeDrawerState?.layout.expandedSize ?? panel.frame.size
+        let layout = drawerLayout(for: resizeScreen ?? panel.screen, size: panel.frame.size)
+        if let state = activeDrawerState {
+            applyLayout(layout, to: state)
+        }
+        settingsStore.customExpandedSize = layout.expandedSize
         editorInteractionState.requestLayoutRefresh(searchingIn: activeHostingView)
     }
 
     private func resizeDrawer(to mouse: NSPoint) {
         guard let panel = activeDrawerPanel,
-              let screen = panel.screen,
-              let state = activeDrawerState else { return }
+              let screen = resizeScreen ?? panel.screen else { return }
         let frame = panel.frame
+        let anchor = resizeAnchorFrame
 
-        // Keep the grabbed point under the mouse. The panel stays horizontally
-        // centered while attached; a floating panel keeps its left and top
-        // edges fixed like a conventional bottom-right window resize.
+        // Keep the grabbed point under the mouse while the attached panel
+        // stays horizontally centered. Use the top edge captured at mouse-down
+        // so AppKit's backing-pixel rounding cannot shift the anchor each tick.
         let targetRightEdge = mouse.x + resizeGrabOffset.width
         let targetBottomEdge = mouse.y - resizeGrabOffset.height
-        let proposedWidth = floatingPanel == nil
-            ? (targetRightEdge - screen.frame.midX) * 2
-            : targetRightEdge - frame.minX
         let proposed = CGSize(
-            width: proposedWidth,
-            height: frame.maxY - targetBottomEdge
+            width: (targetRightEdge - screen.frame.midX) * 2,
+            height: anchor.maxY - targetBottomEdge
         )
 
         // Route through NotchGeometry so the panel frame always matches the layout
-        // (including screen-edge clamping) — a mismatch shifts the collapse animation off-center
-        let layout = applyLayout(drawerLayout(for: screen, size: proposed), to: state)
+        // (including screen-edge clamping) — a mismatch shifts the collapse animation off-center.
+        let layout = drawerLayout(for: screen, size: proposed)
         let size = layout.expandedSize
         guard size != frame.size else { return }
 
-        let newX = floatingPanel == nil ? screen.frame.midX - size.width / 2 : frame.minX
-        let newY = frame.maxY - size.height
-        panel.setFrame(NSRect(x: newX, y: newY, width: size.width, height: size.height), display: true)
+        let newX = screen.frame.midX - size.width / 2
+        let newY = anchor.maxY - size.height
+        // The hosting view takes its size from this frame. Redraw with each
+        // frame change: leaving display false lets the window surface grow
+        // before its SwiftUI border and content catch up on a later pass.
+        // Keep the persisted layout unchanged until mouse-up.
+        let targetFrame = NSRect(x: newX, y: newY, width: size.width, height: size.height)
+        panel.setFrame(targetFrame, display: true)
     }
 
     func openSettings() {
@@ -1622,5 +1633,31 @@ final class NotchPanelController: NSObject {
         let y = topY - size.height
 
         return NSRect(x: x, y: y, width: size.width, height: size.height)
+    }
+}
+
+extension NotchPanelController: NSWindowDelegate {
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        guard let panel = sender as? NotchPanel, panel === floatingPanel else { return frameSize }
+        return drawerLayout(for: sender.screen, size: frameSize).expandedSize
+    }
+
+    func windowWillStartLiveResize(_ notification: Notification) {
+        guard let panel = notification.object as? NotchPanel,
+              panel === floatingPanel else { return }
+        isResizingDrawer = true
+        floatingDrawerState?.isResizing = true
+        floatingDrawerState?.isBeingDragged = false
+        isDraggingFloatingPanelBackground = false
+        backgroundDragLastFrame = panel.frame
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        guard let panel = notification.object as? NotchPanel,
+              panel === floatingPanel else { return }
+        isResizingDrawer = false
+        finishDrawerResize()
+        floatingDrawerState?.isResizing = false
+        backgroundDragLastFrame = panel.frame
     }
 }

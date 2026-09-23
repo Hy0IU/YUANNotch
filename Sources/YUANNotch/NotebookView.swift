@@ -13,10 +13,53 @@ struct NotebookView: View {
     @ObservedObject var editorInteractionState: EditorInteractionState
     let onOpenSettings: () -> Void
 
-    /// The drawer's geometry, read from the display's own state rather than
-    /// handed in at construction: a resize has to reach this view without the
-    /// panel building a new root view, which is what a `let layout` forced.
-    private var layout: NotchLayout { drawerState.layout }
+    var body: some View {
+        GeometryReader { geometry in
+            NotebookViewContent(
+                store: store,
+                settingsStore: settingsStore,
+                imageStore: imageStore,
+                fileShelfStore: fileShelfStore,
+                reminderStore: reminderStore,
+                dailyPlanStore: dailyPlanStore,
+                workspaceState: workspaceState,
+                drawerState: drawerState,
+                editorInteractionState: editorInteractionState,
+                layout: layout(fitting: geometry.size),
+                onOpenSettings: onOpenSettings
+            )
+        }
+    }
+
+    /// The hosting view fills the panel. Its offered size is the panel's
+    /// current content size, so layout does not depend on a separately
+    /// published size during a drag. The state still supplies the compact
+    /// notch geometry and the initial size before the view joins a window.
+    private func layout(fitting size: CGSize) -> NotchLayout {
+        let base = drawerState.layout
+        guard size.width > 0, size.height > 0 else { return base }
+        return NotchLayout(
+            notchSize: base.notchSize,
+            compactSize: base.compactSize,
+            expandedSize: size,
+            compactTopOffset: base.compactTopOffset,
+            expandedTopOffset: base.expandedTopOffset
+        )
+    }
+}
+
+private struct NotebookViewContent: View {
+    @ObservedObject var store: NoteStore
+    @ObservedObject var settingsStore: AppSettingsStore
+    let imageStore: LocalImageStore
+    @ObservedObject var fileShelfStore: FileShelfStore
+    @ObservedObject var reminderStore: ReminderStore
+    @ObservedObject var dailyPlanStore: DailyPlanStore
+    @ObservedObject var workspaceState: NotebookWorkspaceState
+    @ObservedObject var drawerState: DrawerState
+    @ObservedObject var editorInteractionState: EditorInteractionState
+    let layout: NotchLayout
+    let onOpenSettings: () -> Void
 
     /// The drawer's effective mode. A file drag temporarily borrows Notes
     /// without replacing the user's persisted choice.
@@ -32,6 +75,12 @@ struct NotebookView: View {
         // animation always converges to the panel's center even if the panel
         // frame and the layout size ever disagree
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .transaction { transaction in
+            if drawerState.isResizing {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
         // The drop action and the reveal signal both live here — this is the
         // only path AppKit actually delivers file drags to (its drag
         // destination resolution does not honour a hitTest override on the
@@ -112,16 +161,21 @@ struct NotebookView: View {
         .contentShape(Rectangle())
         .allowsHitTesting(drawerState.isExpanded)
         .overlay(alignment: .bottomTrailing) {
-            // Visual indicator only — dragging is handled at the panel level
-            // (see NotchPanelController.handleResizeMouseEvent).
+            // Visual indicator only — the controller handles attached resize;
+            // AppKit handles the floating window's native corner resize.
             // Trailing padding tracks the visible (inset) right edge of the shape,
             // so `panelSideInset` is added to the grip's own silhouette inset.
             // The same metrics give `DrawerMetrics.contentBottomPadding` the
             // gutter that keeps the inner panel clear of this grip.
             if drawerState.isExpanded {
                 ResizeGrip()
-                    .padding(.trailing, panelSideInset + ResizeGripMetrics.silhouetteInset)
-                    .padding(.bottom, ResizeGripMetrics.bottomInset)
+                    .padding(
+                        .trailing,
+                        drawerState.isDetached
+                            ? 2
+                            : panelSideInset + ResizeGripMetrics.silhouetteInset
+                    )
+                    .padding(.bottom, drawerState.isDetached ? 2 : ResizeGripMetrics.bottomInset)
             }
         }
     }

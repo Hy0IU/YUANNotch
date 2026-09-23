@@ -3,7 +3,12 @@ import SwiftUI
 
 @MainActor
 final class NotchPanel: NSPanel {
-    var onMouseEvent: ((NSEvent) -> Void)?
+    /// Returns whether the panel-level handler consumed the event.
+    ///
+    /// The controller owns attached resize and detach-handle gestures, so
+    /// their mouse sequences must not also enter AppKit. Floating resize is
+    /// native and its events are deliberately forwarded.
+    var onMouseEvent: ((NSEvent) -> Bool)?
     /// Hot (compact) panels should never take keyboard focus; if they stay
     /// in the window cycle, app activation can make the Window Server drag
     /// them onto the active display.
@@ -14,7 +19,9 @@ final class NotchPanel: NSPanel {
 
     override func sendEvent(_ event: NSEvent) {
         if event.type == .leftMouseDown || event.type == .leftMouseDragged || event.type == .leftMouseUp {
-            onMouseEvent?(event)
+            if onMouseEvent?(event) == true {
+                return
+            }
         }
 
         super.sendEvent(event)
