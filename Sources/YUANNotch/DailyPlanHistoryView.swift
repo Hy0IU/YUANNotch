@@ -1,66 +1,70 @@
 import SwiftUI
 
 struct DailyPlanHistoryView: View {
-    @ObservedObject var store: DailyPlanStore
+    let store: DailyPlanStore
+
+    @State private var snapshot: DailyPlanHistorySnapshot?
 
     var body: some View {
-        DailyPlanHistoryContent(
-            store: store,
-            updateKey: DailyPlanHistoryUpdateKey(store: store).value
-        )
-        .equatable()
+        Group {
+            if let snapshot {
+                DailyPlanHistoryContent(snapshot: snapshot)
+            }
+        }
+        .onAppear {
+            snapshot = DailyPlanHistorySnapshot(store: store)
+        }
     }
 }
 
-private struct DailyPlanHistoryUpdateKey: Equatable {
-    let value: Int
+private struct DailyPlanHistorySnapshot {
+    let now: Date
+    let focusedSecondsByDay: [PlanDayKey: TimeInterval]
 
     @MainActor init(store: DailyPlanStore) {
-        var hasher = Hasher()
-        hasher.combine(Int64(store.now.timeIntervalSince1970 / 60))
-
+        let calendar = Calendar.autoupdatingCurrent
+        now = store.now
+        var totals: [PlanDayKey: TimeInterval] = [:]
         for record in store.dayRecords {
-            hasher.combine(record.planID)
-            hasher.combine(record.day.year)
-            hasher.combine(record.day.month)
-            hasher.combine(record.day.day)
-            hasher.combine(record.focusedSeconds)
+            totals[record.day, default: 0] += record.focusedSeconds
         }
 
-        hasher.combine(store.activeSession != nil)
         if let session = store.activeSession {
-            hasher.combine(session.planID)
-            hasher.combine(session.phase.rawValue)
-            hasher.combine(session.phaseDuration)
-            hasher.combine(session.phaseElapsed)
-            hasher.combine(session.runningSince)
-            hasher.combine(session.completedFocusRounds)
+            if session.phase == .focus, let startedAt = session.runningSince {
+                let available = max(session.phaseDuration - session.phaseElapsed, 0)
+                let end = min(now, startedAt.addingTimeInterval(available))
+                for (day, seconds) in DailyPlanEngine.splitFocusInterval(
+                    from: startedAt,
+                    to: end,
+                    calendar: calendar
+                ) {
+                    totals[day, default: 0] += seconds
+                }
+            }
         }
 
-        value = hasher.finalize()
+        focusedSecondsByDay = totals
+    }
+
+    func focusedSeconds(on date: Date, calendar: Calendar) -> TimeInterval {
+        focusedSecondsByDay[PlanDayKey(date: date, calendar: calendar)] ?? 0
     }
 }
 
-@MainActor
-private struct DailyPlanHistoryContent: View, Equatable {
-    let store: DailyPlanStore
-    nonisolated let updateKey: Int
+private struct DailyPlanHistoryContent: View {
+    let snapshot: DailyPlanHistorySnapshot
 
     @State private var monthCount = 18
 
     private let calendar = Calendar.autoupdatingCurrent
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 7)
 
-    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.updateKey == rhs.updateKey
-    }
-
     private var latestMonth: Date {
-        calendar.dateInterval(of: .month, for: store.now)?.start ?? store.now
+        calendar.dateInterval(of: .month, for: snapshot.now)?.start ?? snapshot.now
     }
 
     private var latestDay: Date {
-        calendar.startOfDay(for: store.now)
+        calendar.startOfDay(for: snapshot.now)
     }
 
     private var months: [Date] {
@@ -147,7 +151,7 @@ private struct DailyPlanHistoryContent: View, Equatable {
                 ForEach(0 ..< leadingDays, id: \.self) { _ in
                     Color.clear
                         .frame(maxWidth: .infinity)
-                        .frame(height: 32)
+                        .frame(height: 48)
                 }
 
                 ForEach(dayRange, id: \.self) { day in
@@ -159,7 +163,7 @@ private struct DailyPlanHistoryContent: View, Equatable {
     }
 
     private func dayCell(_ day: Int, date: Date) -> some View {
-        let focusedSeconds = store.focusedSeconds(on: date)
+        let focusedSeconds = snapshot.focusedSeconds(on: date, calendar: calendar)
         let focusedMinutes = max(Int(focusedSeconds / 60), 0)
         let isFuture = calendar.startOfDay(for: date) > latestDay
         let isToday = calendar.isDate(date, inSameDayAs: latestDay)
@@ -167,24 +171,24 @@ private struct DailyPlanHistoryContent: View, Equatable {
 
         return VStack(spacing: 1) {
             Text("\(day)")
-                .font(.system(size: 9, weight: isToday ? .semibold : .regular))
+                .font(.system(size: 11, weight: isToday ? .semibold : .regular))
                 .foregroundStyle(isFuture ? .white.opacity(0.22) : .white.opacity(0.68))
 
             Text(duration.isEmpty ? " " : duration)
-                .font(.system(size: 7, weight: .medium, design: .rounded))
+                .font(.system(size: 9, weight: .medium, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(isFuture ? .clear : .white.opacity(0.78))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
         }
-        .frame(width: 32, height: 32)
+        .frame(width: 48, height: 48)
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isFuture ? Color.white.opacity(0.025) : heatColor(for: focusedMinutes))
         )
         .overlay {
             if isToday {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Color.orange.opacity(0.76), lineWidth: 1)
             }
         }
