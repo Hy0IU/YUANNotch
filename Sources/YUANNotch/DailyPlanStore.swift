@@ -125,9 +125,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
     func togglePause(at date: Date? = nil) {
         let date = date ?? nowProvider()
         now = date
-        if reconcile(at: date, notifies: true) {
-            return
-        }
+        _ = reconcile(at: date, notifies: true)
         guard var session = activeSession else { return }
 
         if session.isRunning {
@@ -147,7 +145,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
 
         settleRunningInterval(at: date)
         guard let settled = activeSession else { return }
-        activeSession = DailyPlanEngine.nextSession(after: settled, for: plan)
+        activeSession = DailyPlanEngine.nextSession(after: settled, for: plan, startingAt: date)
         save()
     }
 
@@ -258,19 +256,31 @@ final class DailyPlanStore: NSObject, ObservableObject {
 
     @discardableResult
     private func reconcile(at date: Date, notifies: Bool) -> Bool {
-        guard let session = activeSession,
+        var didTransition = false
+        var shouldNotify = false
+
+        while let session = activeSession,
               session.isRunning,
               session.remaining(at: date) <= 0.001,
               let plan = plans.first(where: { $0.id == session.planID }),
-              let runningSince = session.runningSince else { return false }
+              let runningSince = session.runningSince {
+            let unelapsed = max(session.phaseDuration - session.phaseElapsed, 0)
+            let exactEnd = runningSince.addingTimeInterval(unelapsed)
+            settleRunningInterval(at: exactEnd)
+            guard let completed = activeSession else { break }
 
-        let unelapsed = max(session.phaseDuration - session.phaseElapsed, 0)
-        let exactEnd = runningSince.addingTimeInterval(unelapsed)
-        settleRunningInterval(at: exactEnd)
-        guard let completed = activeSession else { return false }
-        activeSession = DailyPlanEngine.nextSession(after: completed, for: plan)
+            activeSession = DailyPlanEngine.nextSession(
+                after: completed,
+                for: plan,
+                startingAt: exactEnd
+            )
+            didTransition = true
+            shouldNotify = shouldNotify || date.timeIntervalSince(exactEnd) <= 2
+        }
+
+        guard didTransition else { return false }
         save()
-        if notifies { onPhaseCompleted() }
+        if notifies && shouldNotify { onPhaseCompleted() }
         return true
     }
 

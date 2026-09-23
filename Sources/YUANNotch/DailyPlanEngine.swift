@@ -38,7 +38,8 @@ enum DailyPlanEngine {
 
     static func nextSession(
         after completed: FocusSession,
-        for plan: DailyPlan
+        for plan: DailyPlan,
+        startingAt date: Date? = nil
     ) -> FocusSession? {
         let configuration = plan.pomodoro.normalized
         guard configuration.isEnabled else { return nil }
@@ -61,7 +62,7 @@ enum DailyPlanEngine {
             phase: nextPhase,
             phaseDuration: phaseDuration(for: plan, phase: nextPhase),
             phaseElapsed: 0,
-            runningSince: nil,
+            runningSince: date,
             completedFocusRounds: completedRounds
         )
     }

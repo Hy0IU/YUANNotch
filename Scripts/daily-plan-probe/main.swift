@@ -148,29 +148,30 @@ struct DailyPlanProbe {
         let completedFocus = phaseStore.refresh(at: phaseStart.addingTimeInterval(60))
 
         check(
-            "a completed focus round waits at the short break",
+            "a completed focus round starts the short break",
             completedFocus
                 && phaseStore.activeSession?.phase == .shortBreak
-                && phaseStore.activeSession?.isRunning == false
+                && phaseStore.activeSession?.runningSince == phaseStart.addingTimeInterval(60)
                 && phaseStore.focusedSeconds(for: shortPlan.id, on: phaseStart) == 60,
-            "focus recorded 60s; the break is ready but does not auto-start"
+            "focus recorded 60s; the break starts at the focus boundary"
         )
         let duplicateTransition = phaseStore.refresh(at: phaseStart.addingTimeInterval(60))
         check(
             "revisiting a phase boundary is idempotent",
             !duplicateTransition
                 && phaseStore.activeSession?.phase == .shortBreak
+                && phaseStore.activeSession?.isRunning == true
                 && phaseStore.focusedSeconds(for: shortPlan.id, on: phaseStart) == 60,
             "the same boundary produced no second transition or duplicate seconds"
         )
 
-        phaseStore.togglePause(at: phaseStart.addingTimeInterval(70))
         _ = phaseStore.refresh(at: phaseStart.addingTimeInterval(130))
         check(
             "break time never enters the daily total",
             phaseStore.activeSession?.phase == .focus
-                && phaseStore.focusedSeconds(for: shortPlan.id, on: phaseStart) == 60,
-            "after a 60s break the daily total is still 60s"
+                && phaseStore.activeSession?.runningSince == phaseStart.addingTimeInterval(120)
+                && phaseStore.focusedSeconds(for: shortPlan.id, on: phaseStart) == 70,
+            "the next focus has run 10s; only its focus time counts, not the 60s break"
         )
 
         if let secondFocus = phaseStore.activeSession {
