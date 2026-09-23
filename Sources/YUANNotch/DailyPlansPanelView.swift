@@ -337,10 +337,21 @@ struct DailyPlansPanelView: View {
                     }
 
                     editorField("Daily target") {
-                        Stepper(value: $store.draft.targetMinutes, in: 5 ... 1_440, step: 5) {
-                            Text(durationText(TimeInterval(store.draft.targetMinutes * 60)))
-                                .font(.system(size: 12, weight: .medium))
-                                .monospacedDigit()
+                        HStack(spacing: 10) {
+                            IntegerPlanInput(
+                                label: "Target hours",
+                                value: targetHoursBinding,
+                                range: 0 ... 24,
+                                step: 1,
+                                unit: "h"
+                            )
+                            IntegerPlanInput(
+                                label: "Target minutes",
+                                value: targetMinutesRemainderBinding,
+                                range: 0 ... 59,
+                                step: 5,
+                                unit: "min"
+                            )
                         }
                     }
 
@@ -386,11 +397,13 @@ struct DailyPlansPanelView: View {
                         HStack(spacing: 14) {
                             minuteStepper("Long break", value: $store.draft.pomodoro.longBreakMinutes, range: 1 ... 120)
                             editorField("Long break every") {
-                                Stepper(value: $store.draft.pomodoro.roundsBeforeLongBreak, in: 1 ... 12) {
-                                    Text("\(store.draft.pomodoro.roundsBeforeLongBreak) rounds")
-                                        .font(.system(size: 11))
-                                        .monospacedDigit()
-                                }
+                                IntegerPlanInput(
+                                    label: "Rounds before long break",
+                                    value: $store.draft.pomodoro.roundsBeforeLongBreak,
+                                    range: 1 ... 12,
+                                    step: 1,
+                                    unit: "rounds"
+                                )
                             }
                         }
                     }
@@ -436,12 +449,34 @@ struct DailyPlansPanelView: View {
         range: ClosedRange<Int>
     ) -> some View {
         editorField(label) {
-            Stepper(value: value, in: range) {
-                Text("\(value.wrappedValue) min")
-                    .font(.system(size: 11))
-                    .monospacedDigit()
-            }
+            IntegerPlanInput(
+                label: label,
+                value: value,
+                range: range,
+                step: 1,
+                unit: "min"
+            )
         }
+    }
+
+    private var targetHoursBinding: Binding<Int> {
+        Binding(
+            get: { store.draft.targetMinutes / 60 },
+            set: { hours in
+                let minutes = store.draft.targetMinutes % 60
+                store.draft.targetMinutes = min(max(hours, 0) * 60 + minutes, 24 * 60)
+            }
+        )
+    }
+
+    private var targetMinutesRemainderBinding: Binding<Int> {
+        Binding(
+            get: { store.draft.targetMinutes % 60 },
+            set: { minutes in
+                let hours = store.draft.targetMinutes / 60
+                store.draft.targetMinutes = min(max(hours * 60 + min(max(minutes, 0), 59), 0), 24 * 60)
+            }
+        )
     }
 
     private var editorFieldBackground: some View {
@@ -505,6 +540,57 @@ struct DailyPlansPanelView: View {
         case .thursday: return "Thursday"
         case .friday: return "Friday"
         case .saturday: return "Saturday"
+        }
+    }
+}
+
+private struct IntegerPlanInput: View {
+    let label: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    let step: Int
+    let unit: String
+
+    @FocusState private var isFieldFocused: Bool
+
+    private var clampedValue: Binding<Int> {
+        Binding(
+            get: { value },
+            set: { value = min(max($0, range.lowerBound), range.upperBound) }
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            TextField(label, value: clampedValue, format: .number.grouping(.never))
+                .textFieldStyle(.plain)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+                .multilineTextAlignment(.trailing)
+                .monospacedDigit()
+                .frame(width: 40, height: 27)
+                .padding(.horizontal, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(.white.opacity(0.055))
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(.white.opacity(isFieldFocused ? 0.22 : 0), lineWidth: 1)
+                }
+                .focused($isFieldFocused)
+                .onSubmit { isFieldFocused = false }
+                .accessibilityLabel(label)
+
+            Text(unit)
+                .font(.system(size: 10))
+                .foregroundStyle(.white.opacity(0.48))
+                .fixedSize()
+
+            Stepper("", value: clampedValue, in: range, step: step)
+                .labelsHidden()
+                .fixedSize()
+                .help("Adjust \(label.lowercased())")
         }
     }
 }
