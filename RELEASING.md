@@ -21,7 +21,7 @@ For a small trusted group, an ad-hoc-signed archive is sufficient for testing:
 
 ```bash
 RELEASE_NOTES_FILE=/path/to/notes.md \
-bash Scripts/make-release.sh 0.2.0 2
+bash Scripts/make-release.sh 0.2.0 3
 ```
 
 The script builds without installing and produces:
@@ -54,7 +54,7 @@ Then the same script can sign, notarize, staple, and package the app:
 SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 NOTARY_PROFILE=YUANNotch \
 RELEASE_NOTES_FILE=/path/to/notes.md \
-bash Scripts/make-release.sh 0.2.0 2
+bash Scripts/make-release.sh 0.2.0 3
 ```
 
 Before publishing, verify the result:
