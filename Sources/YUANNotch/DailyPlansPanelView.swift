@@ -551,7 +551,23 @@ private struct IntegerPlanInput: View {
     let step: Int
     let unit: String
 
+    @State private var textValue: String
     @FocusState private var isFieldFocused: Bool
+
+    init(
+        label: String,
+        value: Binding<Int>,
+        range: ClosedRange<Int>,
+        step: Int,
+        unit: String
+    ) {
+        self.label = label
+        self._value = value
+        self.range = range
+        self.step = step
+        self.unit = unit
+        self._textValue = State(initialValue: String(value.wrappedValue))
+    }
 
     private var clampedValue: Binding<Int> {
         Binding(
@@ -562,7 +578,7 @@ private struct IntegerPlanInput: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            TextField(label, value: clampedValue, format: .number.grouping(.never))
+            TextField(label, text: $textValue)
                 .textFieldStyle(.plain)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.9))
@@ -578,8 +594,30 @@ private struct IntegerPlanInput: View {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke(.white.opacity(isFieldFocused ? 0.22 : 0), lineWidth: 1)
                 }
+                .onChange(of: textValue) { _, typedText in
+                    let digits = String(typedText.filter { character in
+                        character.unicodeScalars.allSatisfy { $0.value >= 48 && $0.value <= 57 }
+                    })
+                    if digits != typedText {
+                        textValue = digits
+                        return
+                    }
+                    guard let typedValue = Int(digits) else { return }
+                    value = min(max(typedValue, range.lowerBound), range.upperBound)
+                }
+                .onChange(of: value) { _, newValue in
+                    textValue = String(newValue)
+                }
                 .focused($isFieldFocused)
-                .onSubmit { isFieldFocused = false }
+                .onSubmit {
+                    normalizeTextValue()
+                    isFieldFocused = false
+                }
+                .onChange(of: isFieldFocused) { wasFocused, isFocused in
+                    if wasFocused && !isFocused {
+                        normalizeTextValue()
+                    }
+                }
                 .accessibilityLabel(label)
 
             Text(unit)
@@ -592,6 +630,14 @@ private struct IntegerPlanInput: View {
                 .fixedSize()
                 .help("Adjust \(label.lowercased())")
         }
+    }
+
+    private func normalizeTextValue() {
+        let normalized = Int(textValue)
+            .map { min(max($0, range.lowerBound), range.upperBound) }
+            ?? value
+        value = normalized
+        textValue = String(normalized)
     }
 }
 
