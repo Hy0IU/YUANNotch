@@ -52,10 +52,20 @@ private struct DailyPlanHistorySnapshot {
     }
 }
 
+private struct HistoryMonthID: Hashable {
+    let year: Int
+    let month: Int
+
+    init(date: Date, calendar: Calendar) {
+        let components = calendar.dateComponents([.year, .month], from: date)
+        year = components.year ?? 1970
+        month = components.month ?? 1
+    }
+}
+
 private struct DailyPlanHistoryContent: View {
     let snapshot: DailyPlanHistorySnapshot
 
-    @State private var monthCount = 18
     @Environment(\.displayScale) private var displayScale
 
     private let calendar = Calendar.autoupdatingCurrent
@@ -72,8 +82,18 @@ private struct DailyPlanHistoryContent: View {
     }
 
     private var months: [Date] {
-        (0 ..< monthCount).compactMap {
-            calendar.date(byAdding: .month, value: -$0, to: latestMonth)
+        let baselineStart = calendar.date(byAdding: .month, value: -17, to: latestMonth) ?? latestMonth
+        let recordedStart = snapshot.focusedSecondsByDay.keys
+            .min()
+            .flatMap { key in
+                calendar.date(from: DateComponents(year: key.year, month: key.month, day: 1))
+            }
+            .flatMap { calendar.dateInterval(of: .month, for: $0)?.start }
+        let oldestMonth = min(recordedStart ?? baselineStart, baselineStart)
+        let monthCount = max(calendar.dateComponents([.month], from: oldestMonth, to: latestMonth).month ?? 0, 0)
+
+        return (0 ... monthCount).compactMap { offset in
+            calendar.date(byAdding: .month, value: offset, to: oldestMonth)
         }
     }
 
@@ -89,7 +109,7 @@ private struct DailyPlanHistoryContent: View {
             VStack(spacing: 0) {
                 historyToolbar {
                     withAnimation(.easeInOut(duration: 0.3)) {
-                        proxy.scrollTo(latestDay, anchor: .center)
+                        proxy.scrollTo(monthID(for: latestMonth), anchor: .bottom)
                     }
                 }
 
@@ -100,13 +120,16 @@ private struct DailyPlanHistoryContent: View {
                         LazyVStack(alignment: .center, spacing: 16) {
                             ForEach(months, id: \.self) { month in
                                 monthSection(month, cellSide: cellSide)
-                                    .id(month)
-                                    .onAppear { loadMoreIfNeeded(whenShowing: month) }
+                                    .id(monthID(for: month))
                             }
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
+                    }
+                    .task {
+                        await Task.yield()
+                        proxy.scrollTo(monthID(for: latestMonth), anchor: .bottom)
                     }
                 }
             }
@@ -122,7 +145,7 @@ private struct DailyPlanHistoryContent: View {
             Spacer()
 
             Button(action: scrollToLatest) {
-                Label("Today", systemImage: "arrow.up.to.line")
+                Label("Today", systemImage: "arrow.down.to.line")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.white.opacity(0.78))
                     .padding(.horizontal, 9)
@@ -143,6 +166,10 @@ private struct DailyPlanHistoryContent: View {
         let scale = max(displayScale, 1)
         let pixelAlignedSide = floor(fittingSide * scale) / scale
         return min(maximumCellSide, max(minimumCellSide, pixelAlignedSide))
+    }
+
+    private func monthID(for date: Date) -> HistoryMonthID {
+        HistoryMonthID(date: date, calendar: calendar)
     }
 
     private func monthSection(_ month: Date, cellSide: CGFloat) -> some View {
@@ -217,12 +244,6 @@ private struct DailyPlanHistoryContent: View {
         .accessibilityLabel(
             "\(date.formatted(date: .complete, time: .omitted)), \(isFuture ? "future date" : "\(compactDuration(focusedMinutes)) focused")"
         )
-    }
-
-    private func loadMoreIfNeeded(whenShowing month: Date) {
-        guard let oldestMonth = months.last,
-              calendar.isDate(month, equalTo: oldestMonth, toGranularity: .month) else { return }
-        monthCount += 12
     }
 
     private func heatColor(for focusedMinutes: Int) -> Color {
