@@ -56,9 +56,12 @@ private struct DailyPlanHistoryContent: View {
     let snapshot: DailyPlanHistorySnapshot
 
     @State private var monthCount = 18
+    @Environment(\.displayScale) private var displayScale
 
     private let calendar = Calendar.autoupdatingCurrent
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 7)
+    private let columnSpacing: CGFloat = 8
+    private let maximumCellSide: CGFloat = 52
+    private let minimumCellSide: CGFloat = 30
 
     private var latestMonth: Date {
         calendar.dateInterval(of: .month, for: snapshot.now)?.start ?? snapshot.now
@@ -90,16 +93,21 @@ private struct DailyPlanHistoryContent: View {
                     }
                 }
 
-                ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        ForEach(months, id: \.self) { month in
-                            monthSection(month)
-                                .id(month)
-                                .onAppear { loadMoreIfNeeded(whenShowing: month) }
+                GeometryReader { geometry in
+                    let cellSide = cellSide(for: geometry.size.width)
+
+                    ScrollView(.vertical) {
+                        LazyVStack(alignment: .center, spacing: 16) {
+                            ForEach(months, id: \.self) { month in
+                                monthSection(month, cellSide: cellSide)
+                                    .id(month)
+                                    .onAppear { loadMoreIfNeeded(whenShowing: month) }
+                            }
                         }
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
                 }
             }
         }
@@ -128,11 +136,22 @@ private struct DailyPlanHistoryContent: View {
         .frame(height: 34)
     }
 
-    private func monthSection(_ month: Date) -> some View {
+    private func cellSide(for availableWidth: CGFloat) -> CGFloat {
+        let availableGridWidth = max(availableWidth - 20, 0)
+        let spacingWidth = columnSpacing * 6
+        let fittingSide = max((availableGridWidth - spacingWidth) / 7, 0)
+        let scale = max(displayScale, 1)
+        let pixelAlignedSide = floor(fittingSide * scale) / scale
+        return min(maximumCellSide, max(minimumCellSide, pixelAlignedSide))
+    }
+
+    private func monthSection(_ month: Date, cellSide: CGFloat) -> some View {
         let monthStart = calendar.dateInterval(of: .month, for: month)?.start ?? month
         let dayRange = calendar.range(of: .day, in: .month, for: monthStart) ?? 1 ..< 29
         let weekday = calendar.component(.weekday, from: monthStart)
         let leadingDays = (weekday - calendar.firstWeekday + 7) % 7
+        let gridWidth = cellSide * 7 + columnSpacing * 6
+        let columns = Array(repeating: GridItem(.fixed(cellSide), spacing: columnSpacing), count: 7)
 
         return VStack(alignment: .leading, spacing: 6) {
             Text(monthStart.formatted(.dateTime.month(.wide).year()))
@@ -140,30 +159,30 @@ private struct DailyPlanHistoryContent: View {
                 .foregroundStyle(.white.opacity(0.72))
                 .padding(.leading, 2)
 
-            LazyVGrid(columns: columns, spacing: 3) {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 5) {
                 ForEach(Array(weekdayTitles.enumerated()), id: \.offset) { _, title in
                     Text(title)
                         .font(.system(size: 8, weight: .medium))
                         .foregroundStyle(.white.opacity(0.32))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 11)
+                        .frame(width: cellSide, height: 11)
                 }
 
                 ForEach(0 ..< leadingDays, id: \.self) { _ in
                     Color.clear
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
+                        .frame(width: cellSide, height: cellSide)
                 }
 
                 ForEach(dayRange, id: \.self) { day in
                     let date = calendar.date(byAdding: .day, value: day - 1, to: monthStart) ?? monthStart
-                    dayCell(day, date: date)
+                    dayCell(day, date: date, cellSide: cellSide)
                 }
             }
         }
+        .frame(width: gridWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
-    private func dayCell(_ day: Int, date: Date) -> some View {
+    private func dayCell(_ day: Int, date: Date, cellSide: CGFloat) -> some View {
         let focusedSeconds = snapshot.focusedSeconds(on: date, calendar: calendar)
         let focusedMinutes = max(Int(focusedSeconds / 60), 0)
         let isFuture = calendar.startOfDay(for: date) > latestDay
@@ -182,7 +201,7 @@ private struct DailyPlanHistoryContent: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
         }
-        .frame(width: 48, height: 48)
+        .frame(width: cellSide, height: cellSide)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isFuture ? Color.white.opacity(0.025) : heatColor(for: focusedMinutes))
@@ -193,7 +212,6 @@ private struct DailyPlanHistoryContent: View {
                     .stroke(Color.orange.opacity(0.76), lineWidth: 1)
             }
         }
-        .frame(maxWidth: .infinity)
         .id(date)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
