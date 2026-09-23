@@ -4,6 +4,15 @@ struct DailyPlansPanelView: View {
     @ObservedObject var store: DailyPlanStore
     let size: CGSize
 
+    @State private var page: Page = .today
+
+    private enum Page: String, CaseIterable, Identifiable {
+        case today = "Today"
+        case history = "History"
+
+        var id: String { rawValue }
+    }
+
     private static let panelBackground = Color(red: 0.06, green: 0.06, blue: 0.07)
     private static let cardBackground = Color.white.opacity(0.055)
     private static let accent = Color.orange
@@ -13,7 +22,7 @@ struct DailyPlansPanelView: View {
             VStack(spacing: 0) {
                 header
                 Divider().overlay(Color.white.opacity(0.08))
-                todayPage
+                pageContent
             }
 
             if store.isEditorPresented {
@@ -27,10 +36,23 @@ struct DailyPlansPanelView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Text("Today")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.88))
+        HStack(spacing: 4) {
+            ForEach(Page.allCases) { candidate in
+                Button {
+                    page = candidate
+                } label: {
+                    Text(candidate.rawValue)
+                        .font(.system(size: 11, weight: candidate == page ? .semibold : .regular))
+                        .foregroundStyle(.white.opacity(candidate == page ? 0.88 : 0.46))
+                        .padding(.horizontal, 9)
+                        .frame(height: 24)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(.white.opacity(candidate == page ? 0.085 : 0))
+                        )
+                }
+                .buttonStyle(.plain)
+            }
 
             Spacer(minLength: 8)
 
@@ -40,6 +62,16 @@ struct DailyPlansPanelView: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 34)
+    }
+
+    @ViewBuilder
+    private var pageContent: some View {
+        switch page {
+        case .today:
+            todayPage
+        case .history:
+            DailyPlanHistoryView(store: store)
+        }
     }
 
     private var todayPage: some View {

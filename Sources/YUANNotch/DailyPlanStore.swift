@@ -82,6 +82,17 @@ final class DailyPlanStore: NSObject, ObservableObject {
         return recorded + liveFocusedSeconds(for: planID, dayContaining: date)
     }
 
+    func focusedSeconds(on date: Date) -> TimeInterval {
+        let day = PlanDayKey(date: date, calendar: calendar)
+        let recorded = dayRecords
+            .filter { $0.day == day }
+            .reduce(0) { $0 + $1.focusedSeconds }
+        let live = activeSession.map {
+            liveFocusedSeconds(for: $0.planID, dayContaining: date)
+        } ?? 0
+        return recorded + live
+    }
+
     func progress(for plan: DailyPlan, on date: Date? = nil) -> Double {
         let date = date ?? now
         let target = TimeInterval(plan.targetMinutes * 60)
