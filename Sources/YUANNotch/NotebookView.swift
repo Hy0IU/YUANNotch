@@ -12,6 +12,7 @@ struct NotebookView: View {
     @ObservedObject var drawerState: DrawerState
     @ObservedObject var editorInteractionState: EditorInteractionState
     let onOpenSettings: () -> Void
+    let onShowFloatingPlan: () -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -26,7 +27,8 @@ struct NotebookView: View {
                 drawerState: drawerState,
                 editorInteractionState: editorInteractionState,
                 layout: layout(fitting: geometry.size),
-                onOpenSettings: onOpenSettings
+                onOpenSettings: onOpenSettings,
+                onShowFloatingPlan: onShowFloatingPlan
             )
         }
     }
@@ -60,6 +62,7 @@ private struct NotebookViewContent: View {
     @ObservedObject var editorInteractionState: EditorInteractionState
     let layout: NotchLayout
     let onOpenSettings: () -> Void
+    let onShowFloatingPlan: () -> Void
 
     /// The drawer's effective mode. A file drag temporarily borrows Notes
     /// without replacing the user's persisted choice.
@@ -207,7 +210,8 @@ private struct NotebookViewContent: View {
                             DailyPlansPanelView(
                                 store: dailyPlanStore,
                                 size: editorSize,
-                                isDrawerExpanded: drawerState.isExpanded
+                                isDrawerExpanded: drawerState.isExpanded,
+                                onShowFloatingPlan: onShowFloatingPlan
                             )
                         case .notes:
                             MarkdownEditorPanel(
