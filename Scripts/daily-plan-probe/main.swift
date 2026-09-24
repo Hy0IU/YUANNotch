@@ -293,6 +293,65 @@ struct DailyPlanProbe {
             "the saved plan and session both reference \(work.id.uuidString)"
         )
 
+        check(
+            "a local backup is written beside the live archive",
+            FileManager.default.fileExists(atPath: restartPersistence.backupFileURL.path),
+            "backup path = \(restartPersistence.backupFileURL.lastPathComponent)"
+        )
+
+        try! FileManager.default.removeItem(at: restartPersistence.fileURL)
+        let missingPrimaryPersistence = DailyPlanPersistence(fileURL: restartPersistence.fileURL)
+        let recoveredAfterRemoval = missingPrimaryPersistence.load()
+        check(
+            "a missing primary archive recovers from the local backup",
+            recoveredAfterRemoval.plans.first?.id == work.id
+                && recoveredAfterRemoval.activeSession?.planID == work.id
+                && FileManager.default.fileExists(atPath: restartPersistence.fileURL.path),
+            "the plan and active session returned after removing the primary file"
+        )
+
+        try! Data("not json".utf8).write(to: restartPersistence.fileURL)
+        let corruptPrimaryPersistence = DailyPlanPersistence(fileURL: restartPersistence.fileURL)
+        let recoveredAfterCorruption = corruptPrimaryPersistence.load()
+        let preservedCorruptPrimary = (try? FileManager.default.contentsOfDirectory(atPath: restartRoot.path))?
+            .contains { $0.hasPrefix("plans.unreadable-") } ?? false
+        check(
+            "a corrupt primary archive recovers without overwriting it",
+            recoveredAfterCorruption.plans.first?.id == work.id && preservedCorruptPrimary,
+            "the corrupt primary was preserved and the backup became the live archive"
+        )
+
+        let historyRoot = tempRoot.appendingPathComponent("deleted-plan-history", isDirectory: true)
+        let historyPersistence = DailyPlanPersistence(fileURL: historyRoot.appendingPathComponent("plans.json"))
+        var historyClock = date(2026, 9, 23, 9, 0)
+        let historyStore = DailyPlanStore(
+            persistence: historyPersistence,
+            calendar: calendar,
+            nowProvider: { historyClock },
+            startsTimer: false
+        )
+        historyStore.draft = DailyPlanDraft(title: "Archived plan", targetMinutes: 60)
+        historyStore.commitDraft()
+        let archivedPlan = historyStore.plans[0]
+        historyStore.start(archivedPlan, at: historyClock)
+        historyClock = historyClock.addingTimeInterval(5 * 60)
+        historyStore.stopSession(at: historyClock)
+        historyStore.deletePlan(id: archivedPlan.id, at: historyClock)
+        let reloadedHistory = DailyPlanStore(
+            persistence: DailyPlanPersistence(fileURL: historyPersistence.fileURL),
+            calendar: calendar,
+            nowProvider: { historyClock },
+            startsTimer: false
+        )
+        check(
+            "history survives deleting its plan",
+            reloadedHistory.plans.isEmpty
+                && reloadedHistory.dayRecords.contains {
+                    $0.planID == archivedPlan.id && $0.focusedSeconds == 5 * 60
+                },
+            "the archived plan is gone but its 5m daily record remains"
+        )
+
         let corruptRoot = tempRoot.appendingPathComponent("corrupt", isDirectory: true)
         try! FileManager.default.createDirectory(at: corruptRoot, withIntermediateDirectories: true)
         let corruptURL = corruptRoot.appendingPathComponent("plans.json")

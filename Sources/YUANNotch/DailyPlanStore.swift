@@ -247,7 +247,9 @@ final class DailyPlanStore: NSObject, ObservableObject {
         }
         pausedSessions.removeValue(forKey: id)
         plans.removeAll { $0.id == id }
-        dayRecords.removeAll { $0.planID == id }
+        // Daily history is an account of work already completed, not part of
+        // the plan's editable definition. Keep it even after the plan is
+        // deleted or recreated so a plan lifecycle cannot erase past days.
         save()
     }
 
@@ -406,10 +408,10 @@ final class DailyPlanStore: NSObject, ObservableObject {
             )
         }
 
-        let validIDs = Set(plans.map(\.id))
         dayRecords = dayRecords.filter {
-            validIDs.contains($0.planID) && $0.focusedSeconds.isFinite && $0.focusedSeconds >= 0
+            $0.focusedSeconds.isFinite && $0.focusedSeconds >= 0
         }
+        let validIDs = Set(plans.map(\.id))
         pausedSessions = pausedSessions.compactMapValues { session in
             guard validIDs.contains(session.planID),
                   session.runningSince == nil,
