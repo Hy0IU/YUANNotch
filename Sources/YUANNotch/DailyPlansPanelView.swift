@@ -479,7 +479,7 @@ struct FloatingPlanPanelView: View {
     var body: some View {
         DailyPlanActiveCardView(
             store: store,
-            isDrawerExpanded: true,
+            isDrawerExpanded: false,
             isFloating: true,
             onFloatingAction: onHide
         )
@@ -579,19 +579,21 @@ struct DailyPlanActiveCardView: View {
                         .buttonStyle(.plain)
                         .help(isFloating ? "Hide floating timer" : "Show floating timer")
 
-                        Menu {
-                            Button("Edit") { store.beginEditing(plan) }
-                            Divider()
-                            Button("Delete", role: .destructive) { store.deletePlan(id: plan.id) }
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.system(size: 10, weight: .semibold))
-                                .frame(width: 24, height: 24)
+                        if !isFloating {
+                            Menu {
+                                Button("Edit") { store.beginEditing(plan) }
+                                Divider()
+                                Button("Delete", role: .destructive) { store.deletePlan(id: plan.id) }
+                            } label: {
+                                Image(systemName: "ellipsis")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .frame(width: 24, height: 24)
+                            }
+                            .menuStyle(.borderlessButton)
+                            .menuIndicator(.hidden)
+                            .fixedSize()
+                            .help("Plan options")
                         }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .help("Plan options")
                     }
                 }
 
@@ -618,7 +620,7 @@ struct DailyPlanActiveCardView: View {
             // inside that same reveal transaction; the panel itself still
             // performs its normal collapse animation.
             .transaction { transaction in
-                if !isDrawerExpanded {
+                if isFloating || !isDrawerExpanded {
                     transaction.animation = nil
                     transaction.disablesAnimations = true
                 }
