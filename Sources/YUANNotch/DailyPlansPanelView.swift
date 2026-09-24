@@ -693,9 +693,11 @@ struct DailyPlanActiveCardView: View {
                     shape.fill(Self.floatingCardTint)
                 }
                 .overlay {
-                    shape.stroke(.white.opacity(0.09), lineWidth: 0.5)
+                    shape.stroke(.white.opacity(0.045), lineWidth: 0.5)
                 }
-                .shadow(color: .black.opacity(0.42), radius: 10, x: 0, y: 4)
+                // A broad, low-density shadow reads as lift instead of a hard
+                // outline around the transparent panel.
+                .shadow(color: .black.opacity(0.26), radius: 15, x: 0, y: 5)
         } else {
             shape.fill(Self.cardBackground)
         }
