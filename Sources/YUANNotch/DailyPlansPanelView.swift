@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct DailyPlansPanelView: View {
@@ -473,6 +474,45 @@ enum FloatingPlanMetrics {
     static let edgeInset: CGFloat = 6
 }
 
+private struct FloatingPlanCountdownLabel: NSViewRepresentable {
+    let store: DailyPlanStore
+    let date: Date
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(labelWithString: countdownText)
+        field.font = NSFont.monospacedDigitSystemFont(ofSize: 25, weight: .medium)
+        field.textColor = NSColor.white.withAlphaComponent(0.94)
+        field.alignment = .left
+        field.maximumNumberOfLines = 1
+        field.lineBreakMode = .byClipping
+        field.usesSingleLineMode = true
+        field.isSelectable = false
+        field.drawsBackground = false
+        field.isBordered = false
+        field.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        let text = countdownText
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+    }
+
+    private var countdownText: String {
+        let seconds = store.phaseRemaining(at: date)
+        let total = max(Int(ceil(seconds)), 0)
+        let hours = total / 3_600
+        let minutes = (total % 3_600) / 60
+        let remainder = total % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, remainder)
+        }
+        return String(format: "%02d:%02d", minutes, remainder)
+    }
+}
+
 struct FloatingPlanPanelView: View {
     @ObservedObject var store: DailyPlanStore
     let onHide: () -> Void
@@ -528,12 +568,16 @@ struct DailyPlanActiveCardView: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(phaseColor.opacity(0.9))
                             .lineLimit(1)
-                        Text(remainingText)
-                            .font(.system(size: 25, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.94))
-                            .monospacedDigit()
-                            .contentTransition(isDrawerExpanded ? .numericText() : .identity)
-                            .id(isFloating ? remainingText : "drawer-timer")
+                        if isFloating {
+                            FloatingPlanCountdownLabel(store: store, date: displayNow)
+                                .frame(height: 30, alignment: .leading)
+                        } else {
+                            Text(remainingText)
+                                .font(.system(size: 25, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.94))
+                                .monospacedDigit()
+                                .contentTransition(isDrawerExpanded ? .numericText() : .identity)
+                        }
                         Text(session.isRunning ? "Running" : nextActionLabel(for: session))
                             .font(.system(size: 10))
                             .foregroundStyle(.white.opacity(0.4))
