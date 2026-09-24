@@ -9,6 +9,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let notesLibrary: NotesLibrary
     private let noteStore: NoteStore
     private let onCheckForUpdates: () -> Void
+    private let launchAtLoginManager = LaunchAtLoginManager()
 
     init(
         settingsStore: AppSettingsStore,
@@ -47,6 +48,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 reminderStore: reminderStore,
                 notesLibrary: notesLibrary,
                 noteStore: noteStore,
+                launchAtLoginManager: launchAtLoginManager,
                 onCheckForUpdates: onCheckForUpdates
             )
         )
@@ -112,6 +114,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case appearance
+    case startup
     case trigger
     case notes
     case fileShelf
@@ -123,6 +126,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .appearance: return "Appearance"
+        case .startup: return "Startup"
         case .trigger: return "Trigger"
         case .notes: return "Notes"
         case .fileShelf: return "File Shelf"
@@ -134,6 +138,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .appearance: return "paintpalette"
+        case .startup: return "power"
         case .trigger: return "cursorarrow.rays"
         case .notes: return "doc.text"
         case .fileShelf: return "tray.full"
@@ -145,6 +150,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var tint: Color {
         switch self {
         case .appearance: return .purple
+        case .startup: return .indigo
         case .trigger: return .blue
         case .notes: return .teal
         case .fileShelf: return .orange
@@ -159,6 +165,7 @@ struct SettingsView: View {
     @ObservedObject var reminderStore: ReminderStore
     let notesLibrary: NotesLibrary
     let noteStore: NoteStore
+    @ObservedObject var launchAtLoginManager: LaunchAtLoginManager
     let onCheckForUpdates: () -> Void
     @State private var selection: SettingsTab = .appearance
 
@@ -217,6 +224,8 @@ struct SettingsView: View {
         switch tab {
         case .appearance:
             AppearanceSettingsView(settingsStore: settingsStore)
+        case .startup:
+            StartupSettingsView(manager: launchAtLoginManager)
         case .trigger:
             TriggerSettingsView(settingsStore: settingsStore)
         case .notes:
@@ -227,6 +236,63 @@ struct SettingsView: View {
             IntegrationsSettingsView(settingsStore: settingsStore, reminderStore: reminderStore)
         case .about:
             AboutSettingsView(onCheckForUpdates: onCheckForUpdates)
+        }
+    }
+}
+
+// MARK: - Startup
+
+private struct StartupSettingsView: View {
+    @ObservedObject var manager: LaunchAtLoginManager
+
+    private var launchAtLogin: Binding<Bool> {
+        Binding(
+            get: { manager.isRegistered },
+            set: { manager.setEnabled($0) }
+        )
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Launch at login", isOn: launchAtLogin)
+
+                if manager.requiresApproval {
+                    Button("Open Login Items Settings") {
+                        manager.openLoginItemsSettings()
+                    }
+                }
+
+                if let errorMessage = manager.errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            } header: {
+                Text("Startup")
+            } footer: {
+                Text(footer)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { manager.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            manager.refresh()
+        }
+    }
+
+    private var footer: String {
+        switch manager.status {
+        case .enabled:
+            return "YUANNotch will open automatically when you log in."
+        case .requiresApproval:
+            return "Allow YUANNotch in System Settings → General → Login Items to finish enabling this option."
+        case .notRegistered:
+            return "Open YUANNotch automatically when you log in."
+        case .notFound:
+            return "macOS could not find YUANNotch as a login item. Try opening the installed app from Applications."
+        @unknown default:
+            return "Manage whether YUANNotch opens automatically when you log in."
         }
     }
 }
@@ -838,7 +904,7 @@ private struct AboutSettingsView: View {
     /// `APP_VERSION` default, which is the source of truth the packaged app is
     /// stamped from; bump the two together.
     private var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.1"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.2"
     }
 
     var body: some View {
