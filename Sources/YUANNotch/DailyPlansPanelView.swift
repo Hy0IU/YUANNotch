@@ -669,6 +669,12 @@ struct DailyPlanActiveCardView: View {
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Self.cardBackground)
+                    .shadow(
+                        color: isFloating ? .black.opacity(0.42) : .clear,
+                        radius: isFloating ? 10 : 0,
+                        x: 0,
+                        y: isFloating ? 4 : 0
+                    )
             )
             // A one-second store refresh can arrive while the panel mask is
             // shrinking. Keep the timer text and progress ring from animating

@@ -191,10 +191,10 @@ final class NotchPanelController: NSObject {
         super.init()
 
         dailyPlanStore.$activeSession
-            .sink { [weak self] _ in
+            .sink { [weak self] session in
                 guard let self else { return }
-                guard self.dailyPlanStore.activeSession != nil,
-                      self.dailyPlanStore.activePlan != nil else {
+                guard let session,
+                      self.dailyPlanStore.plans.contains(where: { $0.id == session.planID }) else {
                     self.hideFloatingPlan()
                     return
                 }
@@ -278,7 +278,11 @@ final class NotchPanelController: NSObject {
         panel.allowsKeyboardFocus = false
         configurePanel(panel)
         panel.level = .floating
-        panel.hasShadow = true
+        // The content view is transparent and contains live SwiftUI/AppKit
+        // text. AppKit's window shadow is computed from that changing alpha
+        // mask, which can leave a stale offset glyph beside a refreshed timer.
+        // The card owns its own fixed-shape shadow instead.
+        panel.hasShadow = false
         panel.isMovable = true
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
