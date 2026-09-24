@@ -545,6 +545,7 @@ struct DailyPlanActiveCardView: View {
 
     private static let accent = Color.orange
     private static let cardBackground = Color.white.opacity(0.055)
+    private static let floatingCardTint = Color(red: 0.08, green: 0.08, blue: 0.10).opacity(0.68)
 
     @ViewBuilder
     var body: some View {
@@ -666,16 +667,7 @@ struct DailyPlanActiveCardView: View {
                 }
             }
             .padding(11)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Self.cardBackground)
-                    .shadow(
-                        color: isFloating ? .black.opacity(0.42) : .clear,
-                        radius: isFloating ? 10 : 0,
-                        x: 0,
-                        y: isFloating ? 4 : 0
-                    )
-            )
+            .background { cardBackgroundView }
             // A one-second store refresh can arrive while the panel mask is
             // shrinking. Keep the timer text and progress ring from animating
             // inside that same reveal transaction; the panel itself still
@@ -686,6 +678,26 @@ struct DailyPlanActiveCardView: View {
                     transaction.disablesAnimations = true
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var cardBackgroundView: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        if isFloating {
+            shape
+                // The material supplies the desktop blur; the tint makes the
+                // live card substantially more opaque than the drawer card.
+                .fill(.thickMaterial)
+                .overlay {
+                    shape.fill(Self.floatingCardTint)
+                }
+                .overlay {
+                    shape.stroke(.white.opacity(0.09), lineWidth: 0.5)
+                }
+                .shadow(color: .black.opacity(0.42), radius: 10, x: 0, y: 4)
+        } else {
+            shape.fill(Self.cardBackground)
         }
     }
 
