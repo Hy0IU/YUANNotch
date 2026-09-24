@@ -154,7 +154,8 @@ struct DailyPlansPanelView: View {
             store: store,
             isDrawerExpanded: isDrawerExpanded,
             isFloating: false,
-            onFloatingAction: onShowFloatingPlan
+            onFloatingAction: onShowFloatingPlan,
+            displayDate: nil
         )
     }
 
@@ -477,12 +478,15 @@ struct FloatingPlanPanelView: View {
     let onHide: () -> Void
 
     var body: some View {
-        DailyPlanActiveCardView(
-            store: store,
-            isDrawerExpanded: false,
-            isFloating: true,
-            onFloatingAction: onHide
-        )
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            DailyPlanActiveCardView(
+                store: store,
+                isDrawerExpanded: false,
+                isFloating: true,
+                onFloatingAction: onHide,
+                displayDate: context.date
+            )
+        }
         .padding(FloatingPlanMetrics.edgeInset)
         .frame(
             width: FloatingPlanMetrics.panelSize.width,
@@ -497,6 +501,7 @@ struct DailyPlanActiveCardView: View {
     let isDrawerExpanded: Bool
     let isFloating: Bool
     let onFloatingAction: () -> Void
+    let displayDate: Date?
 
     private static let accent = Color.orange
     private static let cardBackground = Color.white.opacity(0.055)
@@ -505,11 +510,13 @@ struct DailyPlanActiveCardView: View {
     var body: some View {
         if let session = store.activeSession, let plan = store.activePlan {
             let phaseColor: Color = session.phase == .focus ? Self.accent : .green
+            let displayNow = displayDate ?? store.now
+            let remainingText = countdownText(store.phaseRemaining(at: displayNow))
             VStack(spacing: 10) {
                 HStack(spacing: 12) {
                     CircularPlanProgress(
                         progress: session.phaseDuration > 0
-                            ? store.phaseElapsed() / session.phaseDuration
+                            ? store.phaseElapsed(at: displayNow) / session.phaseDuration
                             : 0,
                         color: phaseColor,
                         centerText: roundText(session, plan: plan),
@@ -521,11 +528,12 @@ struct DailyPlanActiveCardView: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(phaseColor.opacity(0.9))
                             .lineLimit(1)
-                        Text(countdownText(store.phaseRemaining()))
+                        Text(remainingText)
                             .font(.system(size: 25, weight: .medium, design: .rounded))
                             .foregroundStyle(.white.opacity(0.94))
                             .monospacedDigit()
                             .contentTransition(isDrawerExpanded ? .numericText() : .identity)
+                            .id(isFloating ? remainingText : "drawer-timer")
                         Text(session.isRunning ? "Running" : nextActionLabel(for: session))
                             .font(.system(size: 10))
                             .foregroundStyle(.white.opacity(0.4))
@@ -601,13 +609,16 @@ struct DailyPlanActiveCardView: View {
                     HStack {
                         Text("Daily plan progress")
                         Spacer()
-                        Text("\(durationText(store.focusedSeconds(for: plan.id, on: store.now))) / \(durationText(TimeInterval(plan.targetMinutes * 60)))")
+                        Text("\(durationText(store.focusedSeconds(for: plan.id, on: displayNow))) / \(durationText(TimeInterval(plan.targetMinutes * 60)))")
                     }
                     .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.42))
                     .monospacedDigit()
 
-                    PlanProgressBar(progress: store.progress(for: plan), color: Self.accent)
+                    PlanProgressBar(
+                        progress: store.progress(for: plan, on: displayNow),
+                        color: Self.accent
+                    )
                 }
             }
             .padding(11)
