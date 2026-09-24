@@ -377,6 +377,9 @@ struct DailyPlansPanelView: View {
                             .padding(.horizontal, 8)
                             .frame(height: 28)
                             .background(editorFieldBackground)
+                            .onSubmit {
+                                store.commitDraft()
+                            }
                     }
 
                     editorField("Daily target") {
@@ -386,14 +389,16 @@ struct DailyPlansPanelView: View {
                                 value: targetHoursBinding,
                                 range: 0 ... 24,
                                 step: 1,
-                                unit: "h"
+                                unit: "h",
+                                onSubmit: store.commitDraft
                             )
                             IntegerPlanInput(
                                 label: "Target minutes",
                                 value: targetMinutesRemainderBinding,
                                 range: 0 ... 59,
                                 step: 5,
-                                unit: "min"
+                                unit: "min",
+                                onSubmit: store.commitDraft
                             )
                         }
                     }
@@ -452,7 +457,8 @@ struct DailyPlansPanelView: View {
                                     value: $store.draft.pomodoro.roundsBeforeLongBreak,
                                     range: 1 ... 12,
                                     step: 1,
-                                    unit: "rounds"
+                                    unit: "rounds",
+                                    onSubmit: store.commitDraft
                                 )
                             }
                         }
@@ -504,7 +510,8 @@ struct DailyPlansPanelView: View {
                 value: value,
                 range: range,
                 step: 1,
-                unit: "min"
+                unit: "min",
+                onSubmit: store.commitDraft
             )
         }
     }
@@ -600,6 +607,7 @@ private struct IntegerPlanInput: View {
     let range: ClosedRange<Int>
     let step: Int
     let unit: String
+    let onSubmit: () -> Void
 
     @State private var textValue: String
     @FocusState private var isFieldFocused: Bool
@@ -609,13 +617,15 @@ private struct IntegerPlanInput: View {
         value: Binding<Int>,
         range: ClosedRange<Int>,
         step: Int,
-        unit: String
+        unit: String,
+        onSubmit: @escaping () -> Void = {}
     ) {
         self.label = label
         self._value = value
         self.range = range
         self.step = step
         self.unit = unit
+        self.onSubmit = onSubmit
         self._textValue = State(initialValue: String(value.wrappedValue))
     }
 
@@ -662,6 +672,7 @@ private struct IntegerPlanInput: View {
                 .onSubmit {
                     normalizeTextValue()
                     isFieldFocused = false
+                    onSubmit()
                 }
                 .onChange(of: isFieldFocused) { wasFocused, isFocused in
                     if wasFocused && !isFocused {

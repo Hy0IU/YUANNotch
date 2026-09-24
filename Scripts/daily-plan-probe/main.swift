@@ -165,6 +165,41 @@ struct DailyPlanProbe {
             "the same boundary produced no second transition or duplicate seconds"
         )
 
+        var manualSkipNotifications = 0
+        let manualSkipStore = DailyPlanStore(
+            persistence: DailyPlanPersistence(
+                fileURL: tempRoot.appendingPathComponent("manual-skip/plans.json")
+            ),
+            calendar: calendar,
+            nowProvider: { clock },
+            startsTimer: false,
+            onPhaseCompleted: { manualSkipNotifications += 1 }
+        )
+        manualSkipStore.draft = DailyPlanDraft(
+            title: "Manual skip",
+            targetMinutes: 60,
+            pomodoro: PomodoroConfiguration(
+                isEnabled: true,
+                focusMinutes: 1,
+                shortBreakMinutes: 1,
+                longBreakMinutes: 2,
+                roundsBeforeLongBreak: 2
+            )
+        )
+        manualSkipStore.commitDraft()
+        let manualSkipPlan = manualSkipStore.plans[0]
+        let manualSkipStart = date(2026, 9, 22, 15, 0)
+        manualSkipStore.start(manualSkipPlan, at: manualSkipStart)
+        let manualSkipAt = manualSkipStart.addingTimeInterval(12)
+        manualSkipStore.finishCurrentPhase(at: manualSkipAt)
+        check(
+            "skipping a phase emits the completion callback",
+            manualSkipNotifications == 1
+                && manualSkipStore.activeSession?.phase == .shortBreak
+                && manualSkipStore.activeSession?.runningSince == manualSkipAt,
+            "manual skip advanced to the break and emitted \(manualSkipNotifications) completion cue"
+        )
+
         _ = phaseStore.refresh(at: phaseStart.addingTimeInterval(130))
         check(
             "break time never enters the daily total",

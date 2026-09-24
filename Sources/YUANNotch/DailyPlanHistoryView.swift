@@ -80,6 +80,7 @@ private struct DailyPlanHistoryContent: View {
     private let columnSpacing: CGFloat = 8
     private let maximumCellSide: CGFloat = 52
     private let minimumCellSide: CGFloat = 30
+    private let bottomScrollTarget = "history-scroll-bottom"
 
     private var latestMonth: Date {
         calendar.dateInterval(of: .month, for: snapshot.now)?.start ?? snapshot.now
@@ -117,7 +118,7 @@ private struct DailyPlanHistoryContent: View {
             VStack(spacing: 0) {
                 historyToolbar {
                     withAnimation(.easeInOut(duration: 0.3)) {
-                        proxy.scrollTo(monthID(for: latestMonth), anchor: .bottom)
+                        proxy.scrollTo(bottomScrollTarget, anchor: .bottom)
                     }
                 }
 
@@ -134,10 +135,17 @@ private struct DailyPlanHistoryContent: View {
                         .frame(maxWidth: .infinity)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
+
+                        // Target the actual end of the scroll content rather
+                        // than the latest month, whose bounds stop above the
+                        // stack's bottom padding.
+                        Color.clear
+                            .frame(height: 1)
+                            .id(bottomScrollTarget)
                     }
                     .task {
                         await Task.yield()
-                        proxy.scrollTo(monthID(for: latestMonth), anchor: .bottom)
+                        proxy.scrollTo(bottomScrollTarget, anchor: .bottom)
                     }
                 }
             }
