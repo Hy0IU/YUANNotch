@@ -1,9 +1,11 @@
+import AppKit
 import SwiftUI
 
 struct DailyPlansPanelView: View {
     @ObservedObject var store: DailyPlanStore
     let size: CGSize
     let isDrawerExpanded: Bool
+    let onShowFloatingPlan: () -> Void
 
     @State private var page: Page = .today
 
@@ -15,7 +17,6 @@ struct DailyPlansPanelView: View {
     }
 
     private static let panelBackground = Color(red: 0.06, green: 0.06, blue: 0.07)
-    private static let cardBackground = Color.white.opacity(0.055)
     private static let accent = Color.orange
 
     var body: some View {
@@ -150,118 +151,13 @@ struct DailyPlansPanelView: View {
 
     @ViewBuilder
     private var activeCard: some View {
-        if let session = store.activeSession, let plan = store.activePlan {
-            let phaseColor: Color = session.phase == .focus ? Self.accent : .green
-            VStack(spacing: 10) {
-                HStack(spacing: 12) {
-                    CircularPlanProgress(
-                        progress: session.phaseDuration > 0
-                            ? store.phaseElapsed() / session.phaseDuration
-                            : 0,
-                        color: phaseColor,
-                        centerText: roundText(session, plan: plan),
-                        size: 58
-                    )
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(session.phase.title.uppercased()) · \(plan.title.uppercased())")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(phaseColor.opacity(0.9))
-                            .lineLimit(1)
-                        Text(countdownText(store.phaseRemaining()))
-                            .font(.system(size: 25, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.94))
-                            .monospacedDigit()
-                            .contentTransition(isDrawerExpanded ? .numericText() : .identity)
-                        Text(session.isRunning ? "Running" : nextActionLabel(for: session))
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.4))
-                    }
-
-                    Spacer(minLength: 4)
-
-                    HStack(spacing: 5) {
-                        Button {
-                            store.togglePause()
-                        } label: {
-                            Image(systemName: session.isRunning ? "pause.fill" : "play.fill")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(Color.black.opacity(0.72))
-                                .frame(width: 34, height: 34)
-                                .background(Circle().fill(phaseColor))
-                        }
-                        .buttonStyle(.plain)
-                        .help(session.isRunning ? "Pause" : nextActionLabel(for: session))
-
-                        Button {
-                            store.finishCurrentPhase()
-                        } label: {
-                            Image(systemName: session.phase == .focus ? "forward.end.fill" : "forward.fill")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.52))
-                                .frame(width: 28, height: 28)
-                                .background(Circle().fill(.white.opacity(0.055)))
-                        }
-                        .buttonStyle(.plain)
-                        .help(session.phase == .focus ? "Finish Round" : "Skip Break")
-
-                        Button {
-                            store.stopSession()
-                        } label: {
-                            Image(systemName: "arrow.counterclockwise")
-                                .font(.system(size: 8, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.52))
-                                .frame(width: 28, height: 28)
-                                .background(Circle().fill(.white.opacity(0.055)))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Reset")
-
-                        Menu {
-                            Button("Edit") { store.beginEditing(plan) }
-                            Divider()
-                            Button("Delete", role: .destructive) { store.deletePlan(id: plan.id) }
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.system(size: 10, weight: .semibold))
-                                .frame(width: 24, height: 24)
-                        }
-                        .menuStyle(.borderlessButton)
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .help("Plan options")
-                    }
-                }
-
-                VStack(spacing: 6) {
-                    HStack {
-                        Text("Daily plan progress")
-                        Spacer()
-                        Text("\(durationText(store.focusedSeconds(for: plan.id, on: store.now))) / \(durationText(TimeInterval(plan.targetMinutes * 60)))")
-                    }
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.42))
-                    .monospacedDigit()
-
-                    PlanProgressBar(progress: store.progress(for: plan), color: Self.accent)
-                }
-            }
-            .padding(11)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Self.cardBackground)
-            )
-            // A one-second store refresh can arrive while the panel mask is
-            // shrinking. Keep the timer text and progress ring from animating
-            // inside that same reveal transaction; the panel itself still
-            // performs its normal collapse animation.
-            .transaction { transaction in
-                if !isDrawerExpanded {
-                    transaction.animation = nil
-                    transaction.disablesAnimations = true
-                }
-            }
-        }
+        DailyPlanActiveCardView(
+            store: store,
+            isDrawerExpanded: isDrawerExpanded,
+            isFloating: false,
+            onFloatingAction: onShowFloatingPlan,
+            displayDate: nil
+        )
     }
 
     private func planRow(_ plan: DailyPlan) -> some View {
@@ -541,6 +437,276 @@ struct DailyPlansPanelView: View {
             .fill(.white.opacity(0.055))
     }
 
+    private func durationText(_ seconds: TimeInterval) -> String {
+        let totalMinutes = max(Int(seconds) / 60, 0)
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        if hours > 0, minutes > 0 { return "\(hours)h \(minutes)m" }
+        if hours > 0 { return "\(hours)h" }
+        return "\(minutes)m"
+    }
+
+    private func planDaysText(_ plan: DailyPlan) -> String {
+        if plan.activeWeekdays.count == DailyPlanWeekday.allCases.count {
+            return "Daily"
+        }
+        return DailyPlanWeekday.allCases
+            .filter(plan.activeWeekdays.contains)
+            .map(\.shortTitle)
+            .joined(separator: " ")
+    }
+
+    private func dayName(_ day: DailyPlanWeekday) -> String {
+        switch day {
+        case .sunday: return "Sunday"
+        case .monday: return "Monday"
+        case .tuesday: return "Tuesday"
+        case .wednesday: return "Wednesday"
+        case .thursday: return "Thursday"
+        case .friday: return "Friday"
+        case .saturday: return "Saturday"
+        }
+    }
+}
+
+enum FloatingPlanMetrics {
+    static let panelSize = CGSize(width: 360, height: 125)
+    static let edgeInset: CGFloat = 6
+}
+
+private struct FloatingPlanCountdownLabel: NSViewRepresentable {
+    let store: DailyPlanStore
+    let date: Date
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(labelWithString: countdownText)
+        field.font = NSFont.monospacedDigitSystemFont(ofSize: 25, weight: .medium)
+        field.textColor = NSColor.white.withAlphaComponent(0.94)
+        field.alignment = .left
+        field.maximumNumberOfLines = 1
+        field.lineBreakMode = .byClipping
+        field.usesSingleLineMode = true
+        field.isSelectable = false
+        field.drawsBackground = false
+        field.isBordered = false
+        field.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        let text = countdownText
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+    }
+
+    private var countdownText: String {
+        let seconds = store.phaseRemaining(at: date)
+        let total = max(Int(ceil(seconds)), 0)
+        let hours = total / 3_600
+        let minutes = (total % 3_600) / 60
+        let remainder = total % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, remainder)
+        }
+        return String(format: "%02d:%02d", minutes, remainder)
+    }
+}
+
+struct FloatingPlanPanelView: View {
+    @ObservedObject var store: DailyPlanStore
+    let onHide: () -> Void
+
+    var body: some View {
+        ZStack {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                DailyPlanActiveCardView(
+                    store: store,
+                    isDrawerExpanded: false,
+                    isFloating: true,
+                    onFloatingAction: onHide,
+                    displayDate: context.date
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+        .padding(FloatingPlanMetrics.edgeInset)
+        .frame(
+            width: FloatingPlanMetrics.panelSize.width,
+            height: FloatingPlanMetrics.panelSize.height
+        )
+        .preferredColorScheme(.dark)
+    }
+}
+
+struct DailyPlanActiveCardView: View {
+    @ObservedObject var store: DailyPlanStore
+    let isDrawerExpanded: Bool
+    let isFloating: Bool
+    let onFloatingAction: () -> Void
+    let displayDate: Date?
+
+    private static let accent = Color.orange
+    private static let cardBackground = Color.white.opacity(0.055)
+    private static let floatingCardTint = Color(red: 0.08, green: 0.08, blue: 0.10).opacity(0.68)
+    private static let floatingCardCornerRadius: CGFloat = 14
+
+    @ViewBuilder
+    var body: some View {
+        if let session = store.activeSession, let plan = store.activePlan {
+            let phaseColor: Color = session.phase == .focus ? Self.accent : .green
+            let displayNow = displayDate ?? store.now
+            let remainingText = countdownText(store.phaseRemaining(at: displayNow))
+            VStack(spacing: 10) {
+                HStack(spacing: 12) {
+                    CircularPlanProgress(
+                        progress: session.phaseDuration > 0
+                            ? store.phaseElapsed(at: displayNow) / session.phaseDuration
+                            : 0,
+                        color: phaseColor,
+                        centerText: roundText(session, plan: plan),
+                        size: 58
+                    )
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(session.phase.title.uppercased()) · \(plan.title.uppercased())")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(phaseColor.opacity(0.9))
+                            .lineLimit(1)
+                        if isFloating {
+                            FloatingPlanCountdownLabel(store: store, date: displayNow)
+                                .frame(height: 30, alignment: .leading)
+                        } else {
+                            Text(remainingText)
+                                .font(.system(size: 25, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.94))
+                                .monospacedDigit()
+                                .contentTransition(isDrawerExpanded ? .numericText() : .identity)
+                        }
+                        Text(session.isRunning ? "Running" : nextActionLabel(for: session))
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+
+                    Spacer(minLength: 4)
+
+                    HStack(spacing: 5) {
+                        Button {
+                            store.togglePause()
+                        } label: {
+                            Image(systemName: session.isRunning ? "pause.fill" : "play.fill")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(Color.black.opacity(0.72))
+                                .frame(width: 34, height: 34)
+                                .background(Circle().fill(phaseColor))
+                        }
+                        .buttonStyle(.plain)
+                        .help(session.isRunning ? "Pause" : nextActionLabel(for: session))
+
+                        Button {
+                            store.finishCurrentPhase()
+                        } label: {
+                            Image(systemName: session.phase == .focus ? "forward.end.fill" : "forward.fill")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.52))
+                                .frame(width: 28, height: 28)
+                                .background(Circle().fill(.white.opacity(0.055)))
+                        }
+                        .buttonStyle(.plain)
+                        .help(session.phase == .focus ? "Finish Round" : "Skip Break")
+
+                        Button {
+                            store.stopSession()
+                        } label: {
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.52))
+                                .frame(width: 28, height: 28)
+                                .background(Circle().fill(.white.opacity(0.055)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Reset")
+
+                        Button(action: onFloatingAction) {
+                            Image(systemName: isFloating ? "pin.slash.fill" : "pin.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.52))
+                                .frame(width: 24, height: 24)
+                        }
+                        .buttonStyle(.plain)
+                        .help(isFloating ? "Hide floating timer" : "Show floating timer")
+
+                        if !isFloating {
+                            Menu {
+                                Button("Edit") { store.beginEditing(plan) }
+                                Divider()
+                                Button("Delete", role: .destructive) { store.deletePlan(id: plan.id) }
+                            } label: {
+                                Image(systemName: "ellipsis")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .frame(width: 24, height: 24)
+                            }
+                            .menuStyle(.borderlessButton)
+                            .menuIndicator(.hidden)
+                            .fixedSize()
+                            .help("Plan options")
+                        }
+                    }
+                }
+
+                VStack(spacing: 6) {
+                    HStack {
+                        Text("Daily plan progress")
+                        Spacer()
+                        Text("\(durationText(store.focusedSeconds(for: plan.id, on: displayNow))) / \(durationText(TimeInterval(plan.targetMinutes * 60)))")
+                    }
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.42))
+                    .monospacedDigit()
+
+                    PlanProgressBar(
+                        progress: store.progress(for: plan, on: displayNow),
+                        color: Self.accent
+                    )
+                }
+            }
+            .padding(11)
+            .background { cardBackgroundView }
+            // A one-second store refresh can arrive while the panel mask is
+            // shrinking. Keep the timer text and progress ring from animating
+            // inside that same reveal transaction; the panel itself still
+            // performs its normal collapse animation.
+            .transaction { transaction in
+                if isFloating || !isDrawerExpanded {
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var cardBackgroundView: some View {
+        let shape = RoundedRectangle(
+            cornerRadius: isFloating ? Self.floatingCardCornerRadius : 10,
+            style: .continuous
+        )
+        if isFloating {
+            shape
+                // The material supplies the desktop blur; the tint makes the
+                // live card substantially more opaque than the drawer card.
+                .fill(.thickMaterial)
+                .overlay {
+                    shape.fill(Self.floatingCardTint)
+                }
+                .overlay {
+                    shape.stroke(.white.opacity(0.045), lineWidth: 0.5)
+                }
+        } else {
+            shape.fill(Self.cardBackground)
+        }
+    }
+
     private func nextActionLabel(for session: FocusSession) -> String {
         switch session.phase {
         case .focus: return "Resume Focus"
@@ -576,28 +742,6 @@ struct DailyPlansPanelView: View {
             return String(format: "%d:%02d:%02d", hours, minutes, remainder)
         }
         return String(format: "%02d:%02d", minutes, remainder)
-    }
-
-    private func planDaysText(_ plan: DailyPlan) -> String {
-        if plan.activeWeekdays.count == DailyPlanWeekday.allCases.count {
-            return "Daily"
-        }
-        return DailyPlanWeekday.allCases
-            .filter(plan.activeWeekdays.contains)
-            .map(\.shortTitle)
-            .joined(separator: " ")
-    }
-
-    private func dayName(_ day: DailyPlanWeekday) -> String {
-        switch day {
-        case .sunday: return "Sunday"
-        case .monday: return "Monday"
-        case .tuesday: return "Tuesday"
-        case .wednesday: return "Wednesday"
-        case .thursday: return "Thursday"
-        case .friday: return "Friday"
-        case .saturday: return "Saturday"
-        }
     }
 }
 
