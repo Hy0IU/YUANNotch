@@ -13,7 +13,7 @@ CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
 
 if [[ -z "$VERSION" || -z "$BUILD" ]]; then
   echo "usage: $0 <semantic-version> <positive-build-number>" >&2
-  echo "example: SIGN_IDENTITY='Developer ID Application: …' $0 0.3.4 9" >&2
+  echo "example: SIGN_IDENTITY='Developer ID Application: …' $0 0.3.5 10" >&2
   exit 1
 fi
 
