@@ -471,7 +471,16 @@ struct DailyPlansPanelView: View {
 
 enum FloatingPlanMetrics {
     static let panelSize = CGSize(width: 430, height: 145)
+    static let minimumPanelSize = CGSize(width: 360, height: 125)
+    static let maximumPanelSize = CGSize(width: 560, height: 210)
     static let edgeInset: CGFloat = 6
+
+    static func clampedPanelSize(_ size: CGSize) -> CGSize {
+        CGSize(
+            width: min(max(size.width, minimumPanelSize.width), maximumPanelSize.width),
+            height: min(max(size.height, minimumPanelSize.height), maximumPanelSize.height)
+        )
+    }
 }
 
 private struct FloatingPlanCountdownLabel: NSViewRepresentable {
@@ -518,20 +527,27 @@ struct FloatingPlanPanelView: View {
     let onHide: () -> Void
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            DailyPlanActiveCardView(
-                store: store,
-                isDrawerExpanded: false,
-                isFloating: true,
-                onFloatingAction: onHide,
-                displayDate: context.date
-            )
+        ZStack(alignment: .bottomTrailing) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                DailyPlanActiveCardView(
+                    store: store,
+                    isDrawerExpanded: false,
+                    isFloating: true,
+                    onFloatingAction: onHide,
+                    displayDate: context.date
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+
+            // AppKit performs the native corner resize; this is only a subtle
+            // affordance so the otherwise borderless panel communicates that
+            // its size can be adjusted.
+            ResizeGrip()
+                .padding(2)
+                .allowsHitTesting(false)
         }
         .padding(FloatingPlanMetrics.edgeInset)
-        .frame(
-            width: FloatingPlanMetrics.panelSize.width,
-            height: FloatingPlanMetrics.panelSize.height
-        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .preferredColorScheme(.dark)
     }
 }
