@@ -63,6 +63,14 @@ private struct HistoryMonthID: Hashable {
     }
 }
 
+// All cells share one identity namespace so LazyVGrid cannot reuse a weekday
+// label or a leading placeholder for a date cell while scrolling.
+private enum HistoryGridCell: Hashable {
+    case weekday(Int)
+    case placeholder(Int)
+    case day(Int, Date)
+}
+
 private struct DailyPlanHistoryContent: View {
     let snapshot: DailyPlanHistorySnapshot
 
@@ -187,26 +195,38 @@ private struct DailyPlanHistoryContent: View {
                 .padding(.leading, 2)
 
             LazyVGrid(columns: columns, alignment: .leading, spacing: 5) {
-                ForEach(Array(weekdayTitles.enumerated()), id: \.offset) { _, title in
-                    Text(title)
-                        .font(.system(size: 8, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.32))
-                        .frame(width: cellSide, height: 11)
-                }
-
-                ForEach(0 ..< leadingDays, id: \.self) { _ in
-                    Color.clear
-                        .frame(width: cellSide, height: cellSide)
-                }
-
-                ForEach(dayRange, id: \.self) { day in
-                    let date = calendar.date(byAdding: .day, value: day - 1, to: monthStart) ?? monthStart
-                    dayCell(day, date: date, cellSide: cellSide)
+                ForEach(gridCells(monthStart: monthStart, dayRange: dayRange, leadingDays: leadingDays), id: \.self) { cell in
+                    switch cell {
+                    case let .weekday(index):
+                        Text(weekdayTitles[index])
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.32))
+                            .frame(width: cellSide, height: 11)
+                    case .placeholder:
+                        Color.clear
+                            .frame(width: cellSide, height: cellSide)
+                    case let .day(day, date):
+                        dayCell(day, date: date, cellSide: cellSide)
+                    }
                 }
             }
         }
         .frame(width: gridWidth, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private func gridCells(
+        monthStart: Date,
+        dayRange: Range<Int>,
+        leadingDays: Int
+    ) -> [HistoryGridCell] {
+        var cells = (0 ..< weekdayTitles.count).map(HistoryGridCell.weekday)
+        cells += (0 ..< leadingDays).map(HistoryGridCell.placeholder)
+        cells += dayRange.map { day in
+            let date = calendar.date(byAdding: .day, value: day - 1, to: monthStart) ?? monthStart
+            return .day(day, date)
+        }
+        return cells
     }
 
     private func dayCell(_ day: Int, date: Date, cellSide: CGFloat) -> some View {
@@ -239,7 +259,6 @@ private struct DailyPlanHistoryContent: View {
                     .stroke(Color.orange.opacity(0.76), lineWidth: 1)
             }
         }
-        .id(date)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             "\(date.formatted(date: .complete, time: .omitted)), \(isFuture ? "future date" : "\(compactDuration(focusedMinutes)) focused")"
