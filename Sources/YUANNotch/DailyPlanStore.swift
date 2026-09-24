@@ -158,6 +158,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
         guard let settled = activeSession else { return }
         activeSession = DailyPlanEngine.nextSession(after: settled, for: plan, startingAt: date)
         save()
+        onPhaseCompleted()
     }
 
     func stopSession(at date: Date? = nil) {
