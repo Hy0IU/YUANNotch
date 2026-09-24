@@ -6,7 +6,7 @@ the app never downloads or installs an update itself.
 
 ## Versioning
 
-Use a semantic Git tag such as `v0.3.0`. Drafts and prereleases are not returned
+Use a semantic Git tag such as `v0.3.1`. Drafts and prereleases are not returned
 by GitHub's `releases/latest` endpoint, so publish a normal Release when it
 should become visible to the app.
 
@@ -21,14 +21,14 @@ For a small trusted group, an ad-hoc-signed archive is sufficient for testing:
 
 ```bash
 RELEASE_NOTES_FILE=/path/to/notes.md \
-bash Scripts/make-release.sh 0.3.0 5
+bash Scripts/make-release.sh 0.3.1 6
 ```
 
 The script builds without installing and produces:
 
-- `.release/YUANNotch-0.3.0.zip`
-- `.release/YUANNotch-0.3.0.zip.sha256`
-- `.release/YUANNotch-0.3.0.md` when release notes were supplied
+- `.release/YUANNotch-0.3.1.zip`
+- `.release/YUANNotch-0.3.1.zip.sha256`
+- `.release/YUANNotch-0.3.1.md` when release notes were supplied
 
 Create a GitHub Release whose tag exactly matches `v<version>`, paste the release
 notes, upload the ZIP and checksum, then publish it. Existing packaged builds
@@ -54,7 +54,7 @@ Then the same script can sign, notarize, staple, and package the app:
 SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 NOTARY_PROFILE=YUANNotch \
 RELEASE_NOTES_FILE=/path/to/notes.md \
-bash Scripts/make-release.sh 0.3.0 5
+bash Scripts/make-release.sh 0.3.1 6
 ```
 
 Before publishing, verify the result:
