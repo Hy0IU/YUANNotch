@@ -95,10 +95,9 @@ enum DrawerMetrics {
     /// Inset the attached drawer leaves below the compact block.
     static let attachedTopPaddingInset: CGFloat = 6
     /// The compact block's height on a screen with a real notch. Used only to
-    /// bound `minimumHeight`: `NotchGeometry` clamps the block to 32...38, and
-    /// this takes the common value rather than the tall end — the four points
-    /// that buys are not worth raising the floor on every screen for.
-    static let referenceCompactHeight: CGFloat = 34
+    /// bound `minimumHeight`: a common 37pt system notch leaves a 33pt block
+    /// after `NotchGeometry` tucks it inside the notch.
+    static let referenceCompactHeight: CGFloat = 33
     /// Top padding once the drawer has detached and may start at the very top.
     static let detachedTopPadding: CGFloat = 34
 
@@ -338,10 +337,10 @@ enum NotchGeometry {
     /// external display, or a Mac whose built-in screen has none.
     ///
     /// The two cases are not the same problem. A real notch is measured from the
-    /// system and the panel has to hug it, so its height is whatever the screen
-    /// reports and the `32...38` clamp only guards against a wild value. A
-    /// stand-in has nothing to hug: it only has to hold the icon and read as a
-    /// notch, so it is deliberately shorter than one.
+    /// system, so the compact block is inset from its measured width and height
+    /// to stay within the physical notch. A stand-in has nothing to hug: it only
+    /// has to hold the icon and read as a notch, so it is deliberately shorter
+    /// than one.
     private static let simulatedCompactHeight: CGFloat = 28
 
     static func targetScreen() -> NSScreen? {
@@ -359,9 +358,11 @@ enum NotchGeometry {
         let hasRealNotch = measured != .zero
         let notch = hasRealNotch ? measured : fallbackNotch
 
-        let compactWidth = min(max(notch.width - 6, 182), 238)
+        let compactWidth = hasRealNotch
+            ? max(notch.width - 12, 1)
+            : min(max(notch.width - 6, 182), 238)
         let compactHeight = hasRealNotch
-            ? min(max(notch.height + 2, 32), 38)
+            ? max(notch.height - 4, 1)
             : Self.simulatedCompactHeight
 
         let defaultExpandedWidth = min(max(notch.width + 220, 480), 540, screenFrame.width - 36)
