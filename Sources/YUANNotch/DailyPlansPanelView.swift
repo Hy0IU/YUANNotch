@@ -470,17 +470,8 @@ struct DailyPlansPanelView: View {
 }
 
 enum FloatingPlanMetrics {
-    static let panelSize = CGSize(width: 430, height: 145)
-    static let minimumPanelSize = CGSize(width: 360, height: 125)
-    static let maximumPanelSize = CGSize(width: 560, height: 210)
+    static let panelSize = CGSize(width: 360, height: 125)
     static let edgeInset: CGFloat = 6
-
-    static func clampedPanelSize(_ size: CGSize) -> CGSize {
-        CGSize(
-            width: min(max(size.width, minimumPanelSize.width), maximumPanelSize.width),
-            height: min(max(size.height, minimumPanelSize.height), maximumPanelSize.height)
-        )
-    }
 }
 
 private struct FloatingPlanCountdownLabel: NSViewRepresentable {
@@ -527,7 +518,7 @@ struct FloatingPlanPanelView: View {
     let onHide: () -> Void
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 DailyPlanActiveCardView(
                     store: store,
@@ -538,16 +529,12 @@ struct FloatingPlanPanelView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-
-            // AppKit performs the native corner resize; this is only a subtle
-            // affordance so the otherwise borderless panel communicates that
-            // its size can be adjusted.
-            ResizeGrip()
-                .padding(2)
-                .allowsHitTesting(false)
         }
         .padding(FloatingPlanMetrics.edgeInset)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(
+            width: FloatingPlanMetrics.panelSize.width,
+            height: FloatingPlanMetrics.panelSize.height
+        )
         .preferredColorScheme(.dark)
     }
 }
@@ -562,6 +549,7 @@ struct DailyPlanActiveCardView: View {
     private static let accent = Color.orange
     private static let cardBackground = Color.white.opacity(0.055)
     private static let floatingCardTint = Color(red: 0.08, green: 0.08, blue: 0.10).opacity(0.68)
+    private static let floatingCardCornerRadius: CGFloat = 14
 
     @ViewBuilder
     var body: some View {
@@ -699,7 +687,10 @@ struct DailyPlanActiveCardView: View {
 
     @ViewBuilder
     private var cardBackgroundView: some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        let shape = RoundedRectangle(
+            cornerRadius: isFloating ? Self.floatingCardCornerRadius : 10,
+            style: .continuous
+        )
         if isFloating {
             shape
                 // The material supplies the desktop blur; the tint makes the
@@ -711,9 +702,6 @@ struct DailyPlanActiveCardView: View {
                 .overlay {
                     shape.stroke(.white.opacity(0.045), lineWidth: 0.5)
                 }
-                // A broad, low-density shadow reads as lift instead of a hard
-                // outline around the transparent panel.
-                .shadow(color: .black.opacity(0.26), radius: 15, x: 0, y: 5)
         } else {
             shape.fill(Self.cardBackground)
         }

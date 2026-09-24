@@ -271,21 +271,18 @@ final class NotchPanelController: NSObject {
     private func makeFloatingPlanPanel() -> NotchPanel {
         let panel = NotchPanel(
             contentRect: .zero,
-            styleMask: [.borderless, .nonactivatingPanel, .resizable],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         panel.allowsKeyboardFocus = false
         configurePanel(panel)
-        panel.delegate = self
         panel.level = .floating
         // The content view is transparent and contains live SwiftUI/AppKit
         // text. AppKit's window shadow is computed from that changing alpha
         // mask, which can leave a stale offset glyph beside a refreshed timer.
         // The card owns its own fixed-shape shadow instead.
         panel.hasShadow = false
-        panel.minSize = FloatingPlanMetrics.minimumPanelSize
-        panel.maxSize = FloatingPlanMetrics.maximumPanelSize
         panel.isMovable = true
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
@@ -1737,9 +1734,6 @@ final class NotchPanelController: NSObject {
 
 extension NotchPanelController: NSWindowDelegate {
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        if let panel = sender as? NotchPanel, panel === floatingPlanPanel {
-            return FloatingPlanMetrics.clampedPanelSize(frameSize)
-        }
         guard let panel = sender as? NotchPanel, panel === floatingPanel else { return frameSize }
         return drawerLayout(for: sender.screen, size: frameSize).expandedSize
     }
@@ -1755,12 +1749,8 @@ extension NotchPanelController: NSWindowDelegate {
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {
-        guard let panel = notification.object as? NotchPanel else { return }
-        if panel === floatingPlanPanel {
-            floatingPlanLastFrame = panel.frame
-            return
-        }
-        guard panel === floatingPanel else { return }
+        guard let panel = notification.object as? NotchPanel,
+              panel === floatingPanel else { return }
         isResizingDrawer = false
         finishDrawerResize()
         floatingDrawerState?.isResizing = false
