@@ -208,14 +208,14 @@ struct DailyPlansPanelView: View {
                         Button {
                             store.stopSession()
                         } label: {
-                            Image(systemName: "stop.fill")
+                            Image(systemName: "arrow.counterclockwise")
                                 .font(.system(size: 8, weight: .semibold))
                                 .foregroundStyle(.white.opacity(0.52))
                                 .frame(width: 28, height: 28)
                                 .background(Circle().fill(.white.opacity(0.055)))
                         }
                         .buttonStyle(.plain)
-                        .help("Stop")
+                        .help("Reset")
 
                         Menu {
                             Button("Edit") { store.beginEditing(plan) }

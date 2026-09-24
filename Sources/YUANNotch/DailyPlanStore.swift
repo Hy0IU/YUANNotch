@@ -17,6 +17,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
     private var calendar: Calendar
     private let nowProvider: () -> Date
     private let onPhaseCompleted: () -> Void
+    private var pausedSessions: [UUID: FocusSession]
     private var timer: Timer?
 
     init(
@@ -34,6 +35,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
         plans = archive.plans
         dayRecords = archive.dayRecords
         activeSession = archive.activeSession
+        pausedSessions = archive.pausedSessions
         now = nowProvider()
         lastError = persistence.loadErrorDescription
         super.init()
@@ -121,15 +123,21 @@ final class DailyPlanStore: NSObject, ObservableObject {
             return
         }
 
-        settleRunningInterval(at: date)
-        activeSession = FocusSession(
-            planID: plan.id,
-            phase: .focus,
-            phaseDuration: startingFocusDuration(for: plan, on: date),
-            phaseElapsed: 0,
-            runningSince: date,
-            completedFocusRounds: 0
-        )
+        pauseActiveSession(at: date)
+
+        if var session = pausedSessions.removeValue(forKey: plan.id) {
+            session.runningSince = date
+            activeSession = session
+        } else {
+            activeSession = FocusSession(
+                planID: plan.id,
+                phase: .focus,
+                phaseDuration: startingFocusDuration(for: plan, on: date),
+                phaseElapsed: 0,
+                runningSince: date,
+                completedFocusRounds: 0
+            )
+        }
         save()
     }
 
@@ -165,6 +173,9 @@ final class DailyPlanStore: NSObject, ObservableObject {
         let date = date ?? nowProvider()
         now = date
         settleRunningInterval(at: date)
+        if let planID = activeSession?.planID {
+            pausedSessions.removeValue(forKey: planID)
+        }
         activeSession = nil
         save()
     }
@@ -208,6 +219,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
                 createdAt: existing.createdAt
             )
             refreshActiveSessionConfiguration(for: plans[index])
+            refreshPausedSessionConfiguration(for: plans[index])
         } else {
             plans.append(
                 DailyPlan(
@@ -233,6 +245,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
         if activeSession?.planID == id {
             stopSession(at: date)
         }
+        pausedSessions.removeValue(forKey: id)
         plans.removeAll { $0.id == id }
         dayRecords.removeAll { $0.planID == id }
         save()
@@ -312,6 +325,13 @@ final class DailyPlanStore: NSObject, ObservableObject {
         activeSession = session
     }
 
+    private func pauseActiveSession(at date: Date) {
+        settleRunningInterval(at: date)
+        guard let session = activeSession else { return }
+        pausedSessions[session.planID] = session
+        activeSession = nil
+    }
+
     private func addFocusedInterval(planID: UUID, from start: Date, to end: Date) {
         for (day, seconds) in DailyPlanEngine.splitFocusInterval(from: start, to: end, calendar: calendar) {
             if let index = dayRecords.firstIndex(where: { $0.planID == planID && $0.day == day }) {
@@ -351,6 +371,15 @@ final class DailyPlanStore: NSObject, ObservableObject {
         activeSession = session
     }
 
+    private func refreshPausedSessionConfiguration(for plan: DailyPlan) {
+        guard var session = pausedSessions[plan.id] else { return }
+        session.phaseDuration = max(
+            DailyPlanEngine.phaseDuration(for: plan, phase: session.phase),
+            session.phaseElapsed
+        )
+        pausedSessions[plan.id] = session
+    }
+
     private func startingFocusDuration(for plan: DailyPlan, on date: Date) -> TimeInterval {
         guard !plan.pomodoro.isEnabled else {
             return DailyPlanEngine.phaseDuration(for: plan, phase: .focus)
@@ -381,6 +410,16 @@ final class DailyPlanStore: NSObject, ObservableObject {
         dayRecords = dayRecords.filter {
             validIDs.contains($0.planID) && $0.focusedSeconds.isFinite && $0.focusedSeconds >= 0
         }
+        pausedSessions = pausedSessions.compactMapValues { session in
+            guard validIDs.contains(session.planID),
+                  session.runningSince == nil,
+                  session.phaseDuration.isFinite,
+                  session.phaseDuration > 0,
+                  session.phaseElapsed.isFinite,
+                  session.phaseElapsed >= 0,
+                  session.phaseElapsed <= session.phaseDuration else { return nil }
+            return session
+        }
         if let session = activeSession,
            !validIDs.contains(session.planID)
             || !session.phaseDuration.isFinite
@@ -388,6 +427,9 @@ final class DailyPlanStore: NSObject, ObservableObject {
             || !session.phaseElapsed.isFinite
             || session.phaseElapsed < 0 {
             activeSession = nil
+        }
+        if let activePlanID = activeSession?.planID {
+            pausedSessions.removeValue(forKey: activePlanID)
         }
     }
 
@@ -397,7 +439,8 @@ final class DailyPlanStore: NSObject, ObservableObject {
                 DailyPlanArchive(
                     plans: plans,
                     dayRecords: dayRecords,
-                    activeSession: activeSession
+                    activeSession: activeSession,
+                    pausedSessions: pausedSessions
                 )
             )
             lastError = nil

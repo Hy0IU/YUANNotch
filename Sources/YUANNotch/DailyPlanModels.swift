@@ -158,4 +158,36 @@ struct DailyPlanArchive: Codable, Equatable {
     var plans: [DailyPlan] = []
     var dayRecords: [DailyPlanDayRecord] = []
     var activeSession: FocusSession?
+    var pausedSessions: [UUID: FocusSession] = [:]
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case plans
+        case dayRecords
+        case activeSession
+        case pausedSessions
+    }
+
+    init(
+        version: Int = 1,
+        plans: [DailyPlan] = [],
+        dayRecords: [DailyPlanDayRecord] = [],
+        activeSession: FocusSession? = nil,
+        pausedSessions: [UUID: FocusSession] = [:]
+    ) {
+        self.version = version
+        self.plans = plans
+        self.dayRecords = dayRecords
+        self.activeSession = activeSession
+        self.pausedSessions = pausedSessions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        plans = try container.decodeIfPresent([DailyPlan].self, forKey: .plans) ?? []
+        dayRecords = try container.decodeIfPresent([DailyPlanDayRecord].self, forKey: .dayRecords) ?? []
+        activeSession = try container.decodeIfPresent(FocusSession.self, forKey: .activeSession)
+        pausedSessions = try container.decodeIfPresent([UUID: FocusSession].self, forKey: .pausedSessions) ?? [:]
+    }
 }

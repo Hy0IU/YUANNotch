@@ -94,13 +94,32 @@ struct DailyPlanProbe {
         store.commitDraft()
         let study = store.plans[1]
         store.start(reading, at: clock)
-        let switchTime = clock.addingTimeInterval(5 * 60)
+        let switchTime = clock.addingTimeInterval(3 * 60)
         store.start(study, at: switchTime)
         check(
-            "starting another plan closes the first live interval",
+            "switching plans pauses the first live interval",
             store.activeSession?.planID == study.id
-                && store.focusedSeconds(for: reading.id, on: switchTime) == 25 * 60,
-            "Reading stopped at 25m and Study became the only active plan"
+                && store.activeSession?.isRunning == true
+                && store.focusedSeconds(for: reading.id, on: switchTime) == 23 * 60,
+            "Reading stopped at 23m and Study became the only active plan"
+        )
+        let switchedArchive = persistence.load()
+        check(
+            "a paused phase is persisted per plan",
+            switchedArchive.pausedSessions[reading.id]?.phaseElapsed == 23 * 60
+                && switchedArchive.pausedSessions[reading.id]?.runningSince == nil,
+            "Reading's paused 23m phase survived the archive write"
+        )
+
+        let resumeReadingAt = switchTime.addingTimeInterval(5 * 60)
+        store.start(reading, at: resumeReadingAt)
+        check(
+            "switching back resumes the saved phase",
+            store.activeSession?.planID == reading.id
+                && store.activeSession?.phase == .focus
+                && store.activeSession?.phaseElapsed == 23 * 60
+                && store.phaseRemaining(at: resumeReadingAt) == 2 * 60,
+            "Reading resumed with 23m elapsed and 2m remaining"
         )
 
         store.draft = DailyPlanDraft(
@@ -110,7 +129,7 @@ struct DailyPlanProbe {
         )
         store.commitDraft()
         let continuous = store.plans[2]
-        let continuousStart = switchTime.addingTimeInterval(5 * 60)
+        let continuousStart = resumeReadingAt
         store.start(continuous, at: continuousStart)
         store.stopSession(at: continuousStart.addingTimeInterval(20 * 60))
         store.start(continuous, at: continuousStart.addingTimeInterval(30 * 60))
@@ -118,6 +137,19 @@ struct DailyPlanProbe {
             "continuous mode counts down the remaining daily target",
             store.activeSession?.phaseDuration == 40 * 60,
             "after 20m of a 1h plan, the next countdown is 40m"
+        )
+
+        let resetReadingAt = continuousStart.addingTimeInterval(40 * 60)
+        store.start(reading, at: resetReadingAt)
+        let savedReadingElapsed = store.activeSession?.phaseElapsed
+        store.stopSession(at: resetReadingAt)
+        store.start(reading, at: resetReadingAt.addingTimeInterval(1))
+        check(
+            "manual reset clears only the selected plan's phase",
+            savedReadingElapsed == 23 * 60
+                && store.activeSession?.planID == reading.id
+                && store.activeSession?.phaseElapsed == 0,
+            "Reading reset to a fresh focus phase after its saved phase was resumed"
         )
 
         print("")
