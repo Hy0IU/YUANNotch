@@ -188,10 +188,12 @@ struct RemindersPanelView: View {
                                     draggingListViewID = list.id
                                 }
                                 guard draggingListViewID == list.id else { return }
-                                store.moveListView(
-                                    id: list.id,
-                                    toIndex: listViewInsertionIndex(for: list.id, at: value.location.x)
-                                )
+                                withAnimation(.interactiveSpring(response: 0.32, dampingFraction: 0.86)) {
+                                    store.moveListView(
+                                        id: list.id,
+                                        toIndex: listViewInsertionIndex(for: list.id, at: value.location.x)
+                                    )
+                                }
                             }
                             .onEnded { _ in
                                 draggingListViewID = nil
@@ -213,10 +215,6 @@ struct RemindersPanelView: View {
             .fixedSize(horizontal: true, vertical: false)
             .coordinateSpace(name: "reminderListStrip")
             .onPreferenceChange(ReminderListFramePreferenceKey.self) { listViewFrames = $0 }
-            .animation(
-                .interactiveSpring(response: 0.32, dampingFraction: 0.86),
-                value: listViews.map(\.id)
-            )
         }
         .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)

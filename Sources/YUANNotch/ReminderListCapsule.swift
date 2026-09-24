@@ -149,19 +149,25 @@ struct ReminderListStripScroll<Content: View>: NSViewRepresentable {
         hostingView.sizingOptions = [.intrinsicContentSize]
         scrollView.documentView = hostingView
         context.coordinator.hostingView = hostingView
-        resize(hostingView, in: scrollView)
+        resize(hostingView, in: scrollView, preservingX: 0)
         return scrollView
     }
 
     func updateNSView(_ scrollView: ReminderListStripScrollView, context: Context) {
         guard let hostingView = context.coordinator.hostingView else { return }
+        // Capture before changing the hosted tree. AppKit may adjust the clip
+        // view as soon as the document's intrinsic width changes.
+        let previousX = scrollView.contentView.bounds.origin.x
         hostingView.rootView = content
         hostingView.invalidateIntrinsicContentSize()
-        resize(hostingView, in: scrollView)
+        resize(hostingView, in: scrollView, preservingX: previousX)
     }
 
-    private func resize(_ hostingView: NSHostingView<Content>, in scrollView: NSScrollView) {
-        let previousX = scrollView.contentView.bounds.origin.x
+    private func resize(
+        _ hostingView: NSHostingView<Content>,
+        in scrollView: NSScrollView,
+        preservingX previousX: CGFloat
+    ) {
         hostingView.layoutSubtreeIfNeeded()
         let fittingWidth = max(hostingView.fittingSize.width, 1)
         hostingView.frame = NSRect(x: 0, y: 0, width: fittingWidth, height: height)
