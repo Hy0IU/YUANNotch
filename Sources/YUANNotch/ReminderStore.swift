@@ -573,6 +573,21 @@ final class ReminderStore: ObservableObject {
         }
     }
 
+    /// Moves one local list view to an insertion index in the order with that
+    /// item removed. The identifiers are the persisted order, so this changes
+    /// only the drawer's strip and never touches the underlying Reminders lists.
+    func moveListView(id: String, toIndex: Int) {
+        var reordered = settingsStore.reminderListViewIdentifiers
+        guard let sourceIndex = reordered.firstIndex(of: id) else { return }
+
+        let movingID = reordered.remove(at: sourceIndex)
+        reordered.insert(movingID, at: max(0, min(toIndex, reordered.count)))
+        guard reordered != settingsStore.reminderListViewIdentifiers else { return }
+
+        settingsStore.reminderListViewIdentifiers = reordered
+        objectWillChange.send()
+    }
+
     /// Removes the view whose reminders are currently shown. This is the
     /// shortcut used by the minus button beside the strip; the per-capsule menu
     /// still calls `removeListView(at:)` for an explicit target.

@@ -2,8 +2,8 @@ import AppKit
 import QuartzCore
 import SwiftUI
 
-/// One local view onto a real Reminders list. An inactive capsule is a direct
-/// switch; only the active capsule opens the list chooser and remove action.
+/// One local view onto a real Reminders list. Activating a capsule switches
+/// views; clicking the selected capsule opens its list chooser and actions.
 struct ReminderListCapsule: View {
     let list: ReminderList
     let availableLists: [ReminderList]
@@ -15,12 +15,12 @@ struct ReminderListCapsule: View {
     let onDelete: () -> Void
 
     @State private var isHovered = false
+    @State private var isListChooserPresented = false
 
     var body: some View {
         control
-        // The padding and dimensions belong outside Menu. A borderless macOS
-        // menu compresses its label to the control's native compact metrics,
-        // so sizing the Text itself does not reliably size the visible shell.
+        // Keep the capsule shell outside its controls so the menu cannot
+        // compress the visible dimensions.
         .padding(.horizontal, 12)
         .frame(minWidth: 56)
         .frame(height: 24)
@@ -43,50 +43,73 @@ struct ReminderListCapsule: View {
         .onHover { isHovered = $0 }
         .animation(.easeOut(duration: 0.14), value: isHovered)
         .fixedSize()
-        .help(isSelected ? "Choose another list for this view" : "Switch to this list view")
+        .help(isSelected
+            ? "Click to choose another list or remove this view; drag to reorder"
+            : "Drag to reorder; switch to this list view")
     }
 
     @ViewBuilder
     private var control: some View {
-        if isSelected {
-            Menu {
-                listMenuContent
-            } label: {
-                capsuleLabel
+        Button {
+            if isSelected {
+                isListChooserPresented = true
+            } else {
+                onActivate()
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-        } else {
-            Button(action: onActivate) {
-                capsuleLabel
-            }
-            .buttonStyle(.plain)
+        }
+        label: { capsuleLabel.contentShape(Rectangle()) }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isListChooserPresented, arrowEdge: .bottom) {
+            listChooser
         }
     }
 
-    @ViewBuilder
-    private var listMenuContent: some View {
-        ForEach(availableLists) { candidate in
-            Button {
-                onSelect(candidate.id)
-            } label: {
-                if candidate.id == list.id {
-                    Label(menuTitle(candidate), systemImage: "checkmark")
-                } else {
-                    Text(menuTitle(candidate))
+    private var listChooser: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(availableLists) { candidate in
+                Button {
+                    isListChooserPresented = false
+                    onSelect(candidate.id)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(menuTitle(candidate))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 8)
+                        if candidate.id == list.id {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                    }
+                    .font(.system(size: 12))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 28)
+                    .contentShape(RoundedRectangle(cornerRadius: 5))
                 }
+                .buttonStyle(.plain)
+                .disabled(candidate.id != list.id && occupiedListIDs.contains(candidate.id))
             }
-            .disabled(candidate.id != list.id && occupiedListIDs.contains(candidate.id))
-        }
 
-        Divider()
+            Divider()
 
-        Button(role: .destructive) {
-            onDelete()
-        } label: {
-            Label("Remove View", systemImage: "trash")
+            Button(role: .destructive) {
+                isListChooserPresented = false
+                onDelete()
+            } label: {
+                Label("Remove View", systemImage: "trash")
+                    .font(.system(size: 12))
+                    .padding(.horizontal, 8)
+                    .frame(height: 28)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(RoundedRectangle(cornerRadius: 5))
+            }
+            .buttonStyle(.plain)
+            .disabled(!canDelete)
         }
-        .disabled(!canDelete)
+        .padding(8)
+        .frame(minWidth: 190, maxWidth: 280)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private var capsuleLabel: some View {
@@ -138,10 +161,12 @@ struct ReminderListStripScroll<Content: View>: NSViewRepresentable {
     }
 
     private func resize(_ hostingView: NSHostingView<Content>, in scrollView: NSScrollView) {
+        let previousX = scrollView.contentView.bounds.origin.x
         hostingView.layoutSubtreeIfNeeded()
         let fittingWidth = max(hostingView.fittingSize.width, 1)
         hostingView.frame = NSRect(x: 0, y: 0, width: fittingWidth, height: height)
-        scrollView.contentView.scroll(to: scrollView.contentView.bounds.origin)
+        let maxX = max(fittingWidth - scrollView.contentView.bounds.width, 0)
+        scrollView.contentView.scroll(to: NSPoint(x: min(previousX, maxX), y: 0))
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 

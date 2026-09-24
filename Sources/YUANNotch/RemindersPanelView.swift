@@ -25,6 +25,10 @@ struct RemindersPanelView: View {
 
     @State private var hoveredItemID: String?
 
+    /// The local list view being dragged across the capsule strip.
+    @State private var draggingListViewID: String?
+    @State private var listViewFrames: [String: CGRect] = [:]
+
     /// Rows currently playing the completion animation, keyed by item id.
     /// Pure presentation state: it drives the tick and the strikethrough until
     /// the row is handed to the store, which removes it from the list.
@@ -148,9 +152,11 @@ struct RemindersPanelView: View {
     }
 
     private var listViewStrip: some View {
-        ReminderListStripScroll(height: 24) {
+        let listViews = store.listViews
+        return ReminderListStripScroll(height: 24) {
             HStack(spacing: 6) {
-                ForEach(Array(store.listViews.enumerated()), id: \.offset) { index, list in
+                ForEach(listViews) { list in
+                    let index = listViews.firstIndex(where: { $0.id == list.id }) ?? 0
                     ReminderListCapsule(
                         list: list,
                         availableLists: store.lists,
@@ -167,13 +173,65 @@ struct RemindersPanelView: View {
                             store.removeListView(at: index)
                         }
                     )
+                    .background {
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: ReminderListFramePreferenceKey.self,
+                                value: [list.id: proxy.frame(in: .named("reminderListStrip"))]
+                            )
+                        }
+                    }
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 5, coordinateSpace: .named("reminderListStrip"))
+                            .onChanged { value in
+                                if draggingListViewID == nil {
+                                    draggingListViewID = list.id
+                                }
+                                guard draggingListViewID == list.id else { return }
+                                store.moveListView(
+                                    id: list.id,
+                                    toIndex: listViewInsertionIndex(for: list.id, at: value.location.x)
+                                )
+                            }
+                            .onEnded { _ in
+                                draggingListViewID = nil
+                            }
+                    )
+                    .scaleEffect(draggingListViewID == list.id ? 1.045 : 1)
+                    .shadow(
+                        color: .black.opacity(draggingListViewID == list.id ? 0.28 : 0),
+                        radius: draggingListViewID == list.id ? 7 : 0,
+                        y: draggingListViewID == list.id ? 3 : 0
+                    )
+                    .zIndex(draggingListViewID == list.id ? 1 : 0)
+                    .animation(
+                        .interactiveSpring(response: 0.30, dampingFraction: 0.84),
+                        value: draggingListViewID
+                    )
                 }
             }
             .fixedSize(horizontal: true, vertical: false)
+            .coordinateSpace(name: "reminderListStrip")
+            .onPreferenceChange(ReminderListFramePreferenceKey.self) { listViewFrames = $0 }
+            .animation(
+                .interactiveSpring(response: 0.32, dampingFraction: 0.86),
+                value: listViews.map(\.id)
+            )
         }
         .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)
         .layoutPriority(1)
+    }
+
+    /// Finds the insertion slot among the other tabs using their current
+    /// capsule centers. The dragged capsule itself is excluded, so the slot is
+    /// already an index into the array after removing the moving item.
+    private func listViewInsertionIndex(for movingID: String, at x: CGFloat) -> Int {
+        let remaining = store.listViews.filter { $0.id != movingID }
+        return remaining.firstIndex { list in
+            guard let frame = listViewFrames[list.id] else { return false }
+            return x < frame.midX
+        } ?? remaining.count
     }
 
     /// Chooses how rows are ordered inside each group. The groups themselves
@@ -959,6 +1017,14 @@ struct RemindersPanelView: View {
         Rectangle()
             .fill(.white.opacity(0.055))
             .frame(height: 0.5)
+    }
+}
+
+private struct ReminderListFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
 
