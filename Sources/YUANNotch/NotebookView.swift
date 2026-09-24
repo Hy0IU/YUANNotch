@@ -409,15 +409,17 @@ private struct NotebookViewContent: View {
 
     /// The content's inset from the drawer's *frame*.
     ///
-    /// The shape draws its side edges inside the frame, so the padding has to be
-    /// measured from where the panel actually starts — `panelSideInset` is
-    /// exactly the shape's own `sideInset`, which cannot drift from it. Adding a
-    /// fixed margin to the frame instead is right only at the default radius: at
-    /// a radius of 25 it left the shelf's drop outline 1pt from the panel's
-    /// sides, which is the bug this measures from the shape instead. At the
-    /// default radius of 10 the sum is 26 attached / 18 detached, as before.
+    /// Keep this tied to the expanded silhouette rather than `topCornerRadius`,
+    /// which follows the reveal animation. If content padding followed that
+    /// animated radius, collapse would immediately widen the editor and shift
+    /// every mode's controls left while the mask was still animating. Detachment
+    /// remains part of the inset because the floating silhouette really does
+    /// return that space to its content.
     private var contentHorizontalPadding: CGFloat {
-        panelSideInset + contentSideMargin
+        DrawerMetrics.panelSideInset(
+            topCornerRadius: CGFloat(settingsStore.expandedTopCornerRadius),
+            detachmentProgress: drawerState.detachmentProgress
+        ) + contentSideMargin
     }
 
     private var contentBottomPadding: CGFloat { DrawerMetrics.contentBottomPadding }
