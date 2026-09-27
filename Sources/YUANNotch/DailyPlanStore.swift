@@ -135,7 +135,8 @@ final class DailyPlanStore: NSObject, ObservableObject {
                 phaseDuration: startingFocusDuration(for: plan, on: date),
                 phaseElapsed: 0,
                 runningSince: date,
-                completedFocusRounds: 0
+                completedFocusRounds: 0,
+                sessionDay: PlanDayKey(date: date, calendar: calendar)
             )
         }
         save()
@@ -159,6 +160,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
     func finishCurrentPhase(at date: Date? = nil) {
         let date = date ?? nowProvider()
         now = date
+        _ = resetSessionsForNewDay(at: date)
         guard let session = activeSession,
               let plan = plans.first(where: { $0.id == session.planID }) else { return }
 
@@ -172,6 +174,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
     func stopSession(at date: Date? = nil) {
         let date = date ?? nowProvider()
         now = date
+        _ = resetSessionsForNewDay(at: date)
         settleRunningInterval(at: date)
         if let planID = activeSession?.planID {
             pausedSessions.removeValue(forKey: planID)
@@ -283,6 +286,60 @@ final class DailyPlanStore: NSObject, ObservableObject {
 
     @discardableResult
     private func reconcile(at date: Date, notifies: Bool) -> Bool {
+        let didReset = resetSessionsForNewDay(at: date)
+        let didTransition = reconcilePhases(at: date, notifies: notifies)
+        return didReset || didTransition
+    }
+
+    private func resetSessionsForNewDay(at date: Date) -> Bool {
+        let today = PlanDayKey(date: date, calendar: calendar)
+        let activeNeedsReset = activeSession.map { $0.sessionDay != today } ?? false
+        let pausedNeedsReset = pausedSessions.values.contains { $0.sessionDay != today }
+        guard activeNeedsReset || pausedNeedsReset else { return false }
+
+        // Settle any running work up to midnight first, so yesterday's focus
+        // remains in yesterday's history even if the app was asleep at rollover.
+        _ = reconcilePhases(at: calendar.startOfDay(for: date), notifies: false)
+
+        if let session = activeSession, session.sessionDay != today {
+            let wasRunning = session.isRunning
+            if wasRunning {
+                settleRunningInterval(at: calendar.startOfDay(for: date))
+            }
+
+            if var reset = activeSession,
+               let plan = plans.first(where: { $0.id == reset.planID }) {
+                reset.phase = .focus
+                reset.phaseDuration = startingFocusDuration(for: plan, on: date)
+                reset.phaseElapsed = 0
+                reset.runningSince = wasRunning ? date : nil
+                reset.completedFocusRounds = 0
+                reset.sessionDay = today
+                activeSession = reset
+            } else {
+                activeSession = nil
+            }
+        }
+
+        for planID in Array(pausedSessions.keys) {
+            guard var reset = pausedSessions[planID],
+                  reset.sessionDay != today,
+                  let plan = plans.first(where: { $0.id == planID }) else { continue }
+            reset.phase = .focus
+            reset.phaseDuration = startingFocusDuration(for: plan, on: date)
+            reset.phaseElapsed = 0
+            reset.runningSince = nil
+            reset.completedFocusRounds = 0
+            reset.sessionDay = today
+            pausedSessions[planID] = reset
+        }
+
+        save()
+        return true
+    }
+
+    @discardableResult
+    private func reconcilePhases(at date: Date, notifies: Bool) -> Bool {
         var didTransition = false
         var shouldNotify = false
 
@@ -429,6 +486,12 @@ final class DailyPlanStore: NSObject, ObservableObject {
             || !session.phaseElapsed.isFinite
             || session.phaseElapsed < 0 {
             activeSession = nil
+        }
+        if var session = activeSession,
+           session.sessionDay == nil,
+           let runningSince = session.runningSince {
+            session.sessionDay = PlanDayKey(date: runningSince, calendar: calendar)
+            activeSession = session
         }
         if let activePlanID = activeSession?.planID {
             pausedSessions.removeValue(forKey: activePlanID)

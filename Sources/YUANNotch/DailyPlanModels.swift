@@ -104,6 +104,7 @@ struct FocusSession: Codable, Equatable {
     var phaseElapsed: TimeInterval
     var runningSince: Date?
     var completedFocusRounds: Int
+    var sessionDay: PlanDayKey? = nil
 
     var isRunning: Bool { runningSince != nil }
 

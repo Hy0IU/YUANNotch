@@ -63,7 +63,8 @@ enum DailyPlanEngine {
             phaseDuration: phaseDuration(for: plan, phase: nextPhase),
             phaseElapsed: 0,
             runningSince: date,
-            completedFocusRounds: completedRounds
+            completedFocusRounds: completedRounds,
+            sessionDay: completed.sessionDay
         )
     }
 }
