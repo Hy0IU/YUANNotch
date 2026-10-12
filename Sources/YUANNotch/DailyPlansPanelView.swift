@@ -616,7 +616,7 @@ struct DailyPlanActiveCardView: View {
                         .help(session.phase == .focus ? "Finish Round" : "Skip Break")
 
                         Button {
-                            store.stopSession()
+                            store.resetSession()
                         } label: {
                             Image(systemName: "arrow.counterclockwise")
                                 .font(.system(size: 8, weight: .semibold))

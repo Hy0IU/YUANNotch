@@ -171,6 +171,29 @@ final class DailyPlanStore: NSObject, ObservableObject {
         onPhaseCompleted()
     }
 
+    func resetSession(at date: Date? = nil) {
+        let date = date ?? nowProvider()
+        now = date
+        _ = resetSessionsForNewDay(at: date)
+        guard let session = activeSession,
+              let plan = plans.first(where: { $0.id == session.planID }) else { return }
+
+        settleRunningInterval(at: date)
+        pausedSessions.removeValue(forKey: plan.id)
+        // Keep a selected, paused session so resetting the countdown also
+        // keeps its card and any floating panel available to resume.
+        activeSession = FocusSession(
+            planID: plan.id,
+            phase: .focus,
+            phaseDuration: startingFocusDuration(for: plan, on: date),
+            phaseElapsed: 0,
+            runningSince: nil,
+            completedFocusRounds: 0,
+            sessionDay: PlanDayKey(date: date, calendar: calendar)
+        )
+        save()
+    }
+
     func stopSession(at date: Date? = nil) {
         let date = date ?? nowProvider()
         now = date

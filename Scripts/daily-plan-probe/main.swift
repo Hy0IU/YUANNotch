@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 @main
@@ -131,7 +132,14 @@ struct DailyPlanProbe {
         let continuous = store.plans[2]
         let continuousStart = resumeReadingAt
         store.start(continuous, at: continuousStart)
-        store.stopSession(at: continuousStart.addingTimeInterval(20 * 60))
+        store.resetSession(at: continuousStart.addingTimeInterval(20 * 60))
+        check(
+            "continuous reset keeps a paused countdown for the remaining target",
+            store.activeSession?.planID == continuous.id
+                && store.activeSession?.isRunning == false
+                && store.phaseRemaining() == 40 * 60,
+            "after 20m of focus, the selected timer remains available at 40:00"
+        )
         store.start(continuous, at: continuousStart.addingTimeInterval(30 * 60))
         check(
             "continuous mode counts down the remaining daily target",
@@ -142,7 +150,30 @@ struct DailyPlanProbe {
         let resetReadingAt = continuousStart.addingTimeInterval(40 * 60)
         store.start(reading, at: resetReadingAt)
         let savedReadingElapsed = store.activeSession?.phaseElapsed
-        store.stopSession(at: resetReadingAt)
+        var resetClearedSession = false
+        let resetObservation = store.$activeSession.sink { session in
+            if session == nil { resetClearedSession = true }
+        }
+        store.resetSession(at: resetReadingAt)
+        resetObservation.cancel()
+        check(
+            "reset keeps the selected timer available to the floating panel",
+            !resetClearedSession
+                && store.activeSession?.planID == reading.id
+                && store.activeSession?.phase == .focus
+                && store.activeSession?.phaseElapsed == 0
+                && store.activeSession?.completedFocusRounds == 0
+                && store.activeSession?.isRunning == false
+                && store.phaseRemaining() == 25 * 60,
+            "the countdown returns to 25:00 paused without publishing an empty session"
+        )
+        check(
+            "reset persists the paused timer and preserves daily work",
+            persistence.load().activeSession == store.activeSession
+                && store.focusedSeconds(for: reading.id, on: resetReadingAt) == 23 * 60
+                && persistence.load().pausedSessions[continuous.id]?.phaseElapsed == 10 * 60,
+            "Reading's 23m history and Continuous's saved phase remain intact"
+        )
         store.start(reading, at: resetReadingAt.addingTimeInterval(1))
         check(
             "manual reset clears only the selected plan's phase",
@@ -230,6 +261,41 @@ struct DailyPlanProbe {
                 && manualSkipStore.activeSession?.phase == .shortBreak
                 && manualSkipStore.activeSession?.runningSince == manualSkipAt,
             "manual skip advanced to the break and emitted \(manualSkipNotifications) completion cue"
+        )
+
+        let resetBreakAt = manualSkipAt.addingTimeInterval(10)
+        manualSkipStore.resetSession(at: resetBreakAt)
+        check(
+            "reset during a break returns to paused focus without a completion cue",
+            manualSkipStore.activeSession?.phase == .focus
+                && manualSkipStore.activeSession?.completedFocusRounds == 0
+                && manualSkipStore.activeSession?.isRunning == false
+                && manualSkipStore.phaseRemaining() == 60
+                && manualSkipStore.focusedSeconds(for: manualSkipPlan.id, on: resetBreakAt) == 12
+                && manualSkipNotifications == 1,
+            "break reset preserves the 12s of focus and returns to the first round"
+        )
+        manualSkipStore.togglePause(at: resetBreakAt)
+        let resetFocusAt = resetBreakAt.addingTimeInterval(15)
+        manualSkipStore.resetSession(at: resetFocusAt)
+        check(
+            "reset settles running focus exactly once and stays paused",
+            manualSkipStore.focusedSeconds(for: manualSkipPlan.id, on: resetFocusAt) == 27
+                && manualSkipStore.activeSession?.isRunning == false
+                && manualSkipStore.phaseRemaining() == 60,
+            "the resumed 15s is recorded and the fresh countdown is paused"
+        )
+        manualSkipStore.resetSession(at: resetFocusAt.addingTimeInterval(30))
+        check(
+            "repeated reset does not duplicate recorded focus",
+            manualSkipStore.focusedSeconds(for: manualSkipPlan.id, on: resetFocusAt) == 27,
+            "the paused timer adds no more focus time"
+        )
+        manualSkipStore.deletePlan(id: manualSkipPlan.id, at: resetFocusAt.addingTimeInterval(30))
+        check(
+            "deleting the selected plan still clears its timer",
+            manualSkipStore.activeSession == nil && manualSkipStore.plans.isEmpty,
+            "only reset retains the selected session; deleting the plan ends it"
         )
 
         _ = phaseStore.refresh(at: phaseStart.addingTimeInterval(130))
