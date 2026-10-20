@@ -213,7 +213,24 @@ struct DueSelection {
 /// never through a settable property.
 @MainActor
 final class ReminderComposer: ObservableObject {
-    @Published var draft = ""
+    @Published var draft = "" {
+        didSet {
+            inputResult = ReminderInputParser.parse(draft, now: nowProvider(), calendar: calendar)
+            submissionIssue = nil
+        }
+    }
+    @Published private(set) var inputResult: ReminderInputResult = .none
+    @Published private(set) var usesLiteralInput = false
+    @Published private(set) var hasManualDueSelection = false
+    @Published private(set) var submissionIssue: String?
+
+    private let nowProvider: () -> Date
+    private let calendar: Calendar
+
+    init(nowProvider: @escaping () -> Date = Date.init, calendar: Calendar = .autoupdatingCurrent) {
+        self.nowProvider = nowProvider
+        self.calendar = calendar
+    }
 
     @Published private(set) var dateOption: DueDateOption = .none
     @Published private(set) var timeOption: DueTimeOption = .none
@@ -244,14 +261,47 @@ final class ReminderComposer: ObservableObject {
     // MARK: - Derivation
 
     var canCommit: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !resolvedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && inputIssue == nil
+    }
+
+    var inputMatch: ReminderInputMatch? {
+        guard !usesLiteralInput, case .matched(let match) = inputResult else { return nil }
+        return match
+    }
+
+    var inputIssue: String? {
+        guard !usesLiteralInput else { return nil }
+        if let submissionIssue { return submissionIssue }
+        switch inputResult {
+        case .needsAttention(let issue): return issue
+        case .matched(let match):
+            if match.title.isEmpty { return "请补充提醒内容。" }
+            return hasManualDueSelection ? nil : match.issue
+        case .none: return nil
+        }
+    }
+
+    private var resolvedTitle: String { inputMatch?.title ?? draft }
+
+    var displayedDateOption: DueDateOption {
+        inputMatch != nil && !hasManualDueSelection ? .custom : dateOption
+    }
+
+    var displayedTimeOption: DueTimeOption {
+        guard let match = inputMatch, !hasManualDueSelection else { return timeOption }
+        return match.due.isAllDay ? .none : .custom
+    }
+
+    func setLiteralInput(_ literal: Bool) {
+        usesLiteralInput = literal
+        submissionIssue = nil
     }
 
     /// The custom inputs appear only when a half has actually been set to custom.
     /// A control that is on screen while its value is being ignored is worse than
     /// no control at all.
     var showsCustomRow: Bool {
-        dateOption == .custom || timeOption == .custom
+        hasManualDueSelection && (dateOption == .custom || timeOption == .custom)
     }
 
     /// The two choices as one value. Held as a value so the rule that combines
@@ -259,20 +309,26 @@ final class ReminderComposer: ObservableObject {
     /// makes the roll past a given time of day checkable against a fixed clock
     /// instead of only against the wall clock.
     func resolution(now: Date = Date()) -> DueResolution {
-        DueSelection(
+        if let match = inputMatch, !hasManualDueSelection {
+            return DueResolution(
+                day: calendar.startOfDay(for: match.due.date),
+                instant: match.due.isAllDay ? nil : match.due.date
+            )
+        }
+        return DueSelection(
             date: dateOption,
             time: timeOption,
             customDate: customDate,
             customTime: customTime
         )
-        .resolution(now: now)
+        .resolution(now: now, calendar: calendar)
     }
 
     /// Today and tomorrow are named, anything further out is written as its date
     /// — the same reading the list rows give a day-level due date.
     func dateButtonTitle(now: Date = Date()) -> String {
         guard let day = resolution(now: now).day else { return DueDateOption.none.title }
-        return Self.dayLabel(day)
+        return Self.dayLabel(day, now: now, calendar: calendar)
     }
 
     func timeButtonTitle(now: Date = Date()) -> String {
@@ -280,15 +336,21 @@ final class ReminderComposer: ObservableObject {
         return Self.clockText(instant)
     }
 
-    private static func dayLabel(_ day: Date, calendar: Calendar = .current) -> String {
-        if calendar.isDateInToday(day) { return "Today" }
-        if calendar.isDateInTomorrow(day) { return "Tomorrow" }
+    private static func dayLabel(_ day: Date, now: Date, calendar: Calendar) -> String {
+        if calendar.isDate(day, inSameDayAs: now) { return "Today" }
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(day, inSameDayAs: tomorrow) { return "Tomorrow" }
+        if calendar.component(.year, from: day) != calendar.component(.year, from: now) {
+            return day.formatted(.dateTime.year().month(.abbreviated).day())
+        }
         return day.formatted(.dateTime.month(.abbreviated).day())
     }
 
     // MARK: - Choosing
 
     func select(dateOption option: DueDateOption) {
+        let wasAutomatic = inputMatch != nil && !hasManualDueSelection
+        prepareForManualDueSelection()
+        if option == .none && wasAutomatic { timeOption = .none }
         // Entering Custom starts from today rather than from whatever was left
         // over last time; picking Custom again keeps the day already chosen.
         if option == .custom, dateOption != .custom {
@@ -298,6 +360,7 @@ final class ReminderComposer: ObservableObject {
     }
 
     func select(timeOption option: DueTimeOption) {
+        prepareForManualDueSelection()
         // The wheel belongs to the custom field and does not survive leaving it.
         isTimeWheelShown = false
         if option == .custom, timeOption != .custom {
@@ -311,7 +374,8 @@ final class ReminderComposer: ObservableObject {
     /// lays its result onto the row. Both buttons then read the concrete day and
     /// time, and either half can still be adjusted.
     func applyRelative(minutes: Int, now: Date = Date()) {
-        let shortcut = DueSelection.relative(minutes: minutes, now: now)
+        prepareForManualDueSelection()
+        let shortcut = DueSelection.relative(minutes: minutes, now: now, calendar: calendar)
         setCustomTime(shortcut.customTime)
         withAnimation(Self.rowAnimation) {
             dateOption = shortcut.date
@@ -321,6 +385,7 @@ final class ReminderComposer: ObservableObject {
     }
 
     func setCustomDate(_ date: Date) {
+        prepareForManualDueSelection()
         customDate = date
     }
 
@@ -328,6 +393,11 @@ final class ReminderComposer: ObservableObject {
     /// wheel, by the shortcuts and by the reset — every writer goes through here
     /// so the two inputs cannot drift apart.
     func setCustomTime(_ date: Date) {
+        prepareForManualDueSelection()
+        writeCustomTime(date)
+    }
+
+    private func writeCustomTime(_ date: Date) {
         customTime = date
         customTimeText = Self.clockText(date)
         customTimeParseFailed = false
@@ -335,6 +405,7 @@ final class ReminderComposer: ObservableObject {
 
     /// The field's only path into the value.
     func setCustomTimeText(_ text: String) {
+        prepareForManualDueSelection()
         customTimeText = text
         guard let clock = Self.parseClockTime(text) else {
             // Deliberately not a rejection: the last value that parsed stays in
@@ -354,8 +425,9 @@ final class ReminderComposer: ObservableObject {
     /// The chip row this replaced carried the previous choice into the next
     /// reminder.
     func resetDueSelection() {
-        customDate = Date()
-        setCustomTime(Date())
+        customDate = nowProvider()
+        writeCustomTime(nowProvider())
+        hasManualDueSelection = false
         withAnimation(Self.rowAnimation) {
             dateOption = .none
             timeOption = .none
@@ -363,16 +435,42 @@ final class ReminderComposer: ObservableObject {
         }
     }
 
+    /// Materialize a recognized value once before a manual change. Changing
+    /// just its day retains the recognized clock, and later typing never
+    /// overwrites the user's explicit choice (including No Date/No Time).
+    private func prepareForManualDueSelection() {
+        submissionIssue = nil
+        guard !hasManualDueSelection else { return }
+        if let match = inputMatch {
+            dateOption = .custom
+            customDate = match.due.date
+            timeOption = match.due.isAllDay ? .none : .custom
+            writeCustomTime(match.due.date)
+        }
+        hasManualDueSelection = true
+    }
+
     /// Empties the row and hands back what to write, so the panel's commit does
     /// not have to spell the order out — reading the title, reading the due date,
     /// clearing the draft and resetting the row is one sequence, and a second
     /// caller that got it wrong would leave a stale due date on the next
     /// reminder.
-    func consume(now: Date = Date()) -> PendingReminder? {
+    func consume(now: Date? = nil) -> PendingReminder? {
         guard canCommit else { return nil }
-        let pending = PendingReminder(title: draft, due: resolution(now: now).due)
+        let now = now ?? nowProvider()
+        if let match = inputMatch, !hasManualDueSelection {
+            let isPast = match.due.isAllDay
+                ? calendar.startOfDay(for: match.due.date) < calendar.startOfDay(for: now)
+                : match.due.date <= now
+            if isPast {
+                submissionIssue = "这个时间已经过去，请调整日期或时间。"
+                return nil
+            }
+        }
+        let pending = PendingReminder(title: resolvedTitle, due: resolution(now: now).due)
         draft = ""
         resetDueSelection()
+        usesLiteralInput = false
         return pending
     }
 

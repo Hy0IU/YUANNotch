@@ -77,7 +77,7 @@ private actor StubRemindersService: RemindersServing {
             dueDate: due?.date,
             isDueDateAllDay: due?.isAllDay ?? false,
             isCompleted: false,
-            hasAlarm: false,
+            hasAlarm: due.map { !$0.isAllDay } ?? false,
             listID: listID,
             createdDate: Date(),
             lastModified: nil
@@ -549,6 +549,76 @@ private func checkDueEditorLayout(store: ReminderStore) {
     print("Offscreen date editor previews: \(output.path)")
 }
 
+@MainActor
+private func checkNaturalLanguageCreate() async {
+    let saved = defaultsKeysToRestore.map { ($0, UserDefaults.standard.object(forKey: $0)) }
+    let queueURL = FileManager.default.temporaryDirectory.appendingPathComponent("probe-input-queue-\(UUID().uuidString).json")
+    defer {
+        for (key, value) in saved {
+            if let value { UserDefaults.standard.set(value, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        try? FileManager.default.removeItem(at: queueURL)
+    }
+    let service = StubRemindersService(reminders: [])
+    let (store, settings) = makeStore(service: service, queueURL: queueURL)
+    store.requestRefresh(reloadLists: true)
+    guard await waitUntil({ store.selectedList != nil }) else {
+        check(false, "input create list exists", "no list was loaded")
+        return
+    }
+    if CommandLine.arguments.contains("--render-input-ui") {
+        checkInputLayout(store: store, settings: settings)
+    }
+    store.composer.draft = "半小时后取快递"
+    let preview = store.composer.resolution().due
+    guard let payload = store.composer.consume() else {
+        check(false, "natural input produces a payload", "the composer rejected a supported phrase")
+        return
+    }
+    await store.create(title: payload.title, due: payload.due)
+    let created = try! await service.snapshot(in: "list-1")
+    check(created.count == 1 && created[0].title == "取快递" && created[0].dueDate == preview?.date && created[0].hasAlarm,
+          "recognized input reaches the creation service with the previewed date",
+          "one timed reminder, one alarm, and the extracted title")
+    let queued = PendingOperation.create(localID: UUID(), title: payload.title, due: payload.due, listID: "list-1")
+    let roundTrip = try! JSONDecoder().decode(PendingOperation.self, from: JSONEncoder().encode(queued))
+    check(roundTrip == queued, "retry queue preserves the absolute recognized due time", "the persisted payload never reparses relative text")
+}
+
+@MainActor
+private func checkInputLayout(store: ReminderStore, settings: AppSettingsStore) {
+    let output = FileManager.default.temporaryDirectory.appendingPathComponent("yuannotch-reminder-input-previews", isDirectory: true)
+    try! FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+    for width: CGFloat in [300, 360, 520] {
+        for (name, input) in [("recognized", "28号晚上10点买药"), ("invalid", "2月30号买药"), ("repeated", "每天晚上10点买药")] {
+            store.composer.draft = input
+            let size = CGSize(width: width, height: 420)
+            let host = NSHostingView(rootView: RemindersPanelView(
+                store: store, settingsStore: settings, composer: store.composer, size: size, onOpenSettings: {}
+            ))
+            host.frame = CGRect(origin: .zero, size: size)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            for _ in 0 ..< 5 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+            }
+            if let inputField = field(in: host, placeholder: "New reminder") {
+                let frame = inputField.convert(inputField.bounds, to: host)
+                check(frame.width >= 100 && frame.minX >= 0 && frame.maxX <= width && inputField.stringValue == input,
+                      "\(name) input fits at \(Int(width))pt", "raw input is unchanged; the native field fits the panel")
+            } else { check(false, "input field rendered", "the shipping panel did not produce its compose field") }
+            let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try! bitmap.representation(using: .png, properties: [:])!.write(to: output.appendingPathComponent("\(name)-\(Int(width)).png"))
+            store.setPanelVisible(false)
+        }
+    }
+    print("Offscreen input previews: \(output.path)")
+    store.composer.draft = ""
+}
+
 // MARK: - 6 · ending the editing session saves
 
 /// The panel's edit row, reduced to the part this check is about.
@@ -722,6 +792,7 @@ MainActor.assumeIsolated {
     Task { @MainActor in
         await runFlowChecks()
         await checkDueEditing()
+        await checkNaturalLanguageCreate()
         if !CommandLine.arguments.contains("--model-only") {
             await checkEndOfEditingSaves()
         }

@@ -30,6 +30,7 @@ xcrun swiftc -swift-version 5 \
   -o "$EXECUTABLE" \
   "$ROOT_DIR/Scripts/reminder-composer-probe/main.swift" \
   "$SOURCE_DIR/ReminderComposer.swift" \
+  "$SOURCE_DIR/ReminderInputParser.swift" \
   "$SOURCE_DIR/FieldCaretFocus.swift"
 
 echo ""

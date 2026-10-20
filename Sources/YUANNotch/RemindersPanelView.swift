@@ -287,6 +287,8 @@ struct RemindersPanelView: View {
             if composer.showsCustomRow {
                 customRow
             }
+
+            ReminderInputPreview(composer: composer)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
@@ -299,6 +301,7 @@ struct RemindersPanelView: View {
             .foregroundStyle(.white.opacity(0.9))
             .fieldCaretFocus(request: draftFocusRequest, placeholder: Self.draftPlaceholder)
             .onSubmit(commit)
+            .help("例如：28号晚上10点买药、半小时后取快递")
             .padding(.horizontal, 9)
             .frame(maxWidth: .infinity)
             .frame(height: 28)
@@ -328,24 +331,24 @@ struct RemindersPanelView: View {
     /// on instead of claiming there is none.
     private var dateMenu: some View {
         Menu {
-            menuEntry(DueDateOption.none.title, isSelected: composer.dateOption == .none) {
+            menuEntry(DueDateOption.none.title, isSelected: composer.displayedDateOption == .none) {
                 composer.select(dateOption: .none)
             }
             Divider()
-            menuEntry(DueDateOption.today.title, isSelected: composer.dateOption == .today) {
+            menuEntry(DueDateOption.today.title, isSelected: composer.displayedDateOption == .today) {
                 composer.select(dateOption: .today)
             }
-            menuEntry(DueDateOption.tomorrow.title, isSelected: composer.dateOption == .tomorrow) {
+            menuEntry(DueDateOption.tomorrow.title, isSelected: composer.displayedDateOption == .tomorrow) {
                 composer.select(dateOption: .tomorrow)
             }
-            menuEntry(DueDateOption.thisWeekend.title, isSelected: composer.dateOption == .thisWeekend) {
+            menuEntry(DueDateOption.thisWeekend.title, isSelected: composer.displayedDateOption == .thisWeekend) {
                 composer.select(dateOption: .thisWeekend)
             }
-            menuEntry(DueDateOption.nextWeek.title, isSelected: composer.dateOption == .nextWeek) {
+            menuEntry(DueDateOption.nextWeek.title, isSelected: composer.displayedDateOption == .nextWeek) {
                 composer.select(dateOption: .nextWeek)
             }
             Divider()
-            menuEntry(DueDateOption.custom.title, isSelected: composer.dateOption == .custom) {
+            menuEntry(DueDateOption.custom.title, isSelected: composer.displayedDateOption == .custom) {
                 composer.select(dateOption: .custom)
             }
         } label: {
@@ -362,12 +365,12 @@ struct RemindersPanelView: View {
     /// half naming the day the offset lands on.
     private var timeMenu: some View {
         Menu {
-            menuEntry(DueTimeOption.none.title, isSelected: composer.timeOption == .none) {
+            menuEntry(DueTimeOption.none.title, isSelected: composer.displayedTimeOption == .none) {
                 composer.select(timeOption: .none)
             }
             Divider()
             ForEach(DueTimeOption.presets, id: \.self) { option in
-                menuEntry(option.title, isSelected: composer.timeOption == option) {
+                menuEntry(option.title, isSelected: composer.displayedTimeOption == option) {
                     composer.select(timeOption: option)
                 }
             }
@@ -375,7 +378,7 @@ struct RemindersPanelView: View {
             menuEntry("In 15 Minutes", isSelected: false) { composer.applyRelative(minutes: 15) }
             menuEntry("In 1 Hour", isSelected: false) { composer.applyRelative(minutes: 60) }
             Divider()
-            menuEntry(DueTimeOption.custom.title, isSelected: composer.timeOption == .custom) {
+            menuEntry(DueTimeOption.custom.title, isSelected: composer.displayedTimeOption == .custom) {
                 composer.select(timeOption: .custom)
             }
         } label: {
@@ -408,7 +411,7 @@ struct RemindersPanelView: View {
                 .foregroundStyle(.white.opacity(0.5))
             Text(title)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.82))
+                .foregroundStyle(composer.inputMatch != nil && !composer.hasManualDueSelection ? .orange.opacity(0.9) : .white.opacity(0.82))
                 .lineLimit(1)
             Image(systemName: "chevron.down")
                 .font(.system(size: 7, weight: .semibold))

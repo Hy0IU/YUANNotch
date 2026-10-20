@@ -34,6 +34,7 @@ xcrun swiftc -swift-version 5 \
   "$SOURCE_DIR/ReminderOrdering.swift" \
   "$SOURCE_DIR/ReminderStore.swift" \
   "$SOURCE_DIR/ReminderComposer.swift" \
+  "$SOURCE_DIR/ReminderInputParser.swift" \
   "$SOURCE_DIR/FieldCaretFocus.swift" \
   "$SOURCE_DIR/PanelWindowTypes.swift" \
   "$SOURCE_DIR/AppleRemindersService.swift" \
@@ -41,6 +42,9 @@ xcrun swiftc -swift-version 5 \
   "$SOURCE_DIR/DrawerMode.swift" \
   "$SOURCE_DIR/NotchGeometry.swift" \
   "$SOURCE_DIR/ReminderDueEditor.swift" \
+  "$SOURCE_DIR/RemindersPanelView.swift" \
+  "$SOURCE_DIR/ReminderInputPreview.swift" \
+  "$SOURCE_DIR/ReminderListCapsule.swift" \
   "$SOURCE_DIR/NotebookButtonStyles.swift"
 
 echo ""
