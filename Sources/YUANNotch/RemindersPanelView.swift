@@ -78,6 +78,13 @@ struct RemindersPanelView: View {
         }
         .frame(width: size.width, height: size.height, alignment: .top)
         .background(Self.panelBackground)
+        .overlay {
+            if store.editingDueDraft != nil {
+                ReminderDueEditor(store: store)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: store.editingDueDraft != nil)
         // The view reports only its visible lifetime. The refresh schedule,
         // interval and trigger set live in ReminderStore, so there is one place
         // to reason about staleness rather than one per surface.
@@ -548,7 +555,7 @@ struct RemindersPanelView: View {
     /// the caret is this view's, and a draft the user cannot continue typing is
     /// only half returned.
     private func restoreDraftFocus() {
-        guard composer.canCommit else { return }
+        guard composer.canCommit, store.editingDueDraft == nil else { return }
         draftFocusRequest += 1
     }
 
@@ -682,12 +689,7 @@ struct RemindersPanelView: View {
 
             Spacer(minLength: 8)
 
-            if let dueDate = item.dueDate {
-                Text(Self.dueText(for: dueDate, isAllDay: item.isDueDateAllDay))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.45))
-                    .monospacedDigit()
-            }
+            dueButton(for: item)
 
             if case .failed = item.syncState {
                 Text("not written")
@@ -780,12 +782,7 @@ struct RemindersPanelView: View {
 
             Spacer(minLength: 8)
 
-            if let dueDate = item.dueDate {
-                Text(Self.dueText(for: dueDate, isAllDay: item.isDueDateAllDay))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.45))
-                    .monospacedDigit()
-            }
+            dueButton(for: item)
 
             Button {
                 Task { await store.commitEditing() }
@@ -811,6 +808,41 @@ struct RemindersPanelView: View {
                 .padding(.horizontal, 4)
         )
         .onExitCommand { store.cancelEditing() }
+    }
+
+    @ViewBuilder
+    private func dueButton(for item: ReminderPanelItem) -> some View {
+        if item.isEditable {
+            Button {
+                Task {
+                    await store.commitEditing()
+                    store.beginEditingDue(item)
+                }
+            } label: {
+                if let dueDate = item.dueDate {
+                    Text(Self.dueText(for: dueDate, isAllDay: item.isDueDateAllDay))
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundStyle(.white.opacity(0.45))
+                } else {
+                    Image(systemName: "calendar.badge.plus")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(
+                            hoveredItemID == item.id || store.editingID == item.id ? 0.6 : 0
+                        ))
+                        .frame(width: 20, height: 20)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(completingItemIDs.contains(item.id))
+            .help("Edit due date")
+            .accessibilityLabel("Edit due date for \(item.title)")
+        } else if let dueDate = item.dueDate {
+            Text(Self.dueText(for: dueDate, isAllDay: item.isDueDateAllDay))
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.45))
+                .monospacedDigit()
+        }
     }
 
     /// The edit draft's binding goes through the store's method rather than

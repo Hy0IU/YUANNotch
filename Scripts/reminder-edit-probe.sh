@@ -8,12 +8,10 @@
 # ReminderStore was designed around, so the editing flow is exercised without
 # EventKit, without permissions and without touching the user's reminders.
 #
-# It checks what a commit is willing to write, the begin → draft → commit flow
-# (the service receives update(id:title:due:) with the title only, the row shows
-# the new title at once, the edit closes), that a restated or cleared draft writes
-# nothing, that a failed write reverts the optimistic title by re-reading, that a
-# refresh which loses the row ends the edit, and that a pending local row offers
-# no edit.
+# Checks title and date edits, exact timestamp preservation, clearing dates and
+# alerts, repeat saves, date grouping, cancellation, and failure/retry behavior.
+# --model-only skips the foreground text-focus check; --render-ui additionally
+# renders the real date editor offscreen at three widths in all three states.
 #
 # Hermetic: the write queue lives in a scratch file, and the two UserDefaults keys
 # the store touches are saved and restored around the run. Exit status 0 means
@@ -41,12 +39,14 @@ xcrun swiftc -swift-version 5 \
   "$SOURCE_DIR/AppleRemindersService.swift" \
   "$SOURCE_DIR/AppSettingsStore.swift" \
   "$SOURCE_DIR/DrawerMode.swift" \
-  "$SOURCE_DIR/NotchGeometry.swift"
+  "$SOURCE_DIR/NotchGeometry.swift" \
+  "$SOURCE_DIR/ReminderDueEditor.swift" \
+  "$SOURCE_DIR/NotebookButtonStyles.swift"
 
 echo ""
 
 set +e
-"$EXECUTABLE"
+"$EXECUTABLE" "$@"
 status=$?
 set -e
 

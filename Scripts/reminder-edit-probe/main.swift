@@ -45,6 +45,7 @@ private actor StubRemindersService: RemindersServing {
 
     private var reminders: [ReminderSnapshot]
     private(set) var updates: [(id: String, title: String?, due: ReminderDue?)] = []
+    private(set) var dueUpdates: [(id: String, due: ReminderDue?)] = []
     private(set) var failNextUpdate = false
 
     init(reminders: [ReminderSnapshot]) {
@@ -108,6 +109,24 @@ private actor StubRemindersService: RemindersServing {
     }
 
     func setCompleted(id: String, isCompleted: Bool) async throws {}
+    func setDue(id: String, due: ReminderDue?) async throws {
+        if failNextUpdate {
+            throw NSError(domain: "probe", code: 1, userInfo: [NSLocalizedDescriptionKey: "probe asked the date write to fail"])
+        }
+        // Yield so repeated Save presses exercise the store's in-flight guard.
+        try await Task.sleep(for: .milliseconds(40))
+        dueUpdates.append((id, due))
+        guard let index = reminders.firstIndex(where: { $0.id == id }) else {
+            throw RemindersServiceError.reminderNotFound
+        }
+        let old = reminders[index]
+        reminders[index] = ReminderSnapshot(
+            id: old.id, externalID: old.externalID, title: old.title,
+            dueDate: due?.date, isDueDateAllDay: due?.isAllDay ?? false,
+            isCompleted: old.isCompleted, hasAlarm: due.map { !$0.isAllDay } ?? false,
+            listID: old.listID, createdDate: old.createdDate, lastModified: old.lastModified
+        )
+    }
     func resolve(id: String, externalID: String?, in listID: String) async -> ReminderSnapshot? {
         reminders.first { $0.id == id }
     }
@@ -156,15 +175,15 @@ private func makeStore(service: StubRemindersService, queueURL: URL) -> (Reminde
 }
 
 @MainActor
-private func reminder(id: String, title: String) -> ReminderSnapshot {
+private func reminder(id: String, title: String, due: ReminderDue? = nil) -> ReminderSnapshot {
     ReminderSnapshot(
         id: id,
         externalID: nil,
         title: title,
-        dueDate: nil,
-        isDueDateAllDay: false,
+        dueDate: due?.date,
+        isDueDateAllDay: due?.isAllDay ?? false,
         isCompleted: false,
-        hasAlarm: false,
+        hasAlarm: due.map { !$0.isAllDay } ?? false,
         listID: "list-1",
         createdDate: nil,
         lastModified: nil
@@ -346,6 +365,190 @@ private func runFlowChecks() async {
     )
 }
 
+// MARK: - Date edits through the real store, without EventKit writes
+
+@MainActor
+private func checkDueEditing() async {
+    print("")
+    print("— date editing · preserving time, clearing, grouping and retry —")
+    let defaults = UserDefaults.standard
+    let saved = defaultsKeysToRestore.map { ($0, defaults.object(forKey: $0)) }
+    let queueURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("probe-due-queue-\(UUID().uuidString).json")
+    defer {
+        for (key, value) in saved {
+            if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+        try? FileManager.default.removeItem(at: queueURL)
+    }
+    let calendar = Calendar.current
+    let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 19, hour: 12))!
+    let original = calendar.date(from: DateComponents(year: 2026, month: 10, day: 18, hour: 9, minute: 30, second: 17))!
+    let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))!
+    let service = StubRemindersService(reminders: [
+        reminder(id: "dated", title: "论文修改", due: ReminderDue(date: original, isAllDay: false)),
+        reminder(id: "other", title: "Untouched")
+    ])
+    let (store, _) = makeStore(service: service, queueURL: queueURL)
+    store.requestRefresh(reloadLists: true)
+    guard await waitUntil({ store.items.contains { $0.id == "dated" } }),
+          let item = store.items.first(where: { $0.id == "dated" }) else {
+        check(false, "date fixture loaded", "the fixture did not reach the store")
+        return
+    }
+    store.beginEditingDue(item, now: now)
+    if CommandLine.arguments.contains("--render-ui") {
+        checkDueEditorLayout(store: store)
+    }
+    check(
+        store.editingDueDraft?.hasChanges() == false
+            && store.editingDueDraft?.due()?.date == original,
+        "opening a timed reminder preserves its exact timestamp",
+        "no default time or date replaces the original, including its seconds"
+    )
+    await store.commitEditingDue()
+    check(await service.dueUpdates.isEmpty, "an unchanged date does not write", "no service update")
+
+    store.editingDueDraft?.date = tomorrow
+    async let firstSave: Void = store.commitEditingDue()
+    async let repeatedSave: Void = store.commitEditingDue()
+    _ = await (firstSave, repeatedSave)
+    let moved = store.items.first { $0.id == "dated" }
+    let expectedTimed = calendar.date(bySettingHour: 9, minute: 30, second: 0, of: tomorrow)!
+    let remoteMoved = (try! await service.snapshot(in: "list-1")).first { $0.id == "dated" }
+    check(
+        await service.dueUpdates.count == 1
+            && moved?.dueDate == expectedTimed && moved?.isDueDateAllDay == false
+            && moved?.title == "论文修改" && remoteMoved?.hasAlarm == true
+            && store.editingDueDraft == nil
+            && ReminderGroup.group(for: moved?.dueDate, isAllDay: false, now: now, calendar: calendar) == .tomorrow,
+        "a date-only move preserves the time and updates its date group once",
+        "the reminder moved to tomorrow at 09:30 with its title and alert preserved"
+    )
+
+    store.beginEditingDue(moved!, now: now)
+    store.editingDueDraft?.hasDate = false
+    await store.commitEditingDue()
+    store.requestRefresh()
+    _ = await waitUntil { store.items.first { $0.id == "dated" }?.dueDate == nil }
+    let cleared = (try! await service.snapshot(in: "list-1")).first { $0.id == "dated" }
+    check(
+        cleared?.dueDate == nil && cleared?.hasAlarm == false
+            && cleared?.title == "论文修改"
+            && ReminderGroup.group(for: cleared?.dueDate, now: now, calendar: calendar) == .undated,
+        "No Date explicitly clears the date and alert",
+        "nil is a clear operation here, while title-only updates still leave dates alone"
+    )
+
+    store.beginEditingDue(store.items.first { $0.id == "dated" }!, now: now)
+    store.editingDueDraft?.hasDate = true
+    store.editingDueDraft?.hasTime = false
+    store.editingDueDraft?.date = tomorrow
+    await store.commitEditingDue()
+    let allDay = store.items.first { $0.id == "dated" }!
+    check(
+        allDay.dueDate == tomorrow && allDay.isDueDateAllDay,
+        "an undated reminder can become an all-day reminder",
+        "the chosen date carries no time or alert"
+    )
+    store.beginEditing(allDay)
+    store.updateEditingDraft("论文修改 · final")
+    await store.commitEditing()
+    check(
+        store.items.first { $0.id == "dated" }?.dueDate == tomorrow
+            && store.items.first { $0.id == "dated" }?.isDueDateAllDay == true,
+        "title edits preserve the due date",
+        "the existing title-edit pipeline still sends no date change"
+    )
+
+    store.beginEditingDue(store.items.first { $0.id == "dated" }!, now: now)
+    store.editingDueDraft?.hasTime = true
+    store.editingDueDraft?.time = calendar.date(bySettingHour: 16, minute: 45, second: 0, of: now)!
+    let chosen = store.editingDueDraft?.due()
+    store.requestRefresh()
+    try? await Task.sleep(for: .milliseconds(200))
+    check(
+        store.editingDueDraft?.due() == chosen,
+        "a refresh preserves a pending date draft",
+        "the selected date and time belong to the store rather than the view"
+    )
+    await service.setFailNextUpdate(true)
+    await store.commitEditingDue()
+    check(
+        store.editingDueDraft?.due() == chosen && store.dueEditingError != nil
+            && store.items.first { $0.id == "dated" }?.isDueDateAllDay == true,
+        "a failed date write keeps the draft and the original row",
+        "the row is not shown as rescheduled, and Save can be retried"
+    )
+    await service.setFailNextUpdate(false)
+    await store.commitEditingDue()
+    let retried = (try! await service.snapshot(in: "list-1")).first { $0.id == "dated" }
+    check(
+        retried?.dueDate == chosen?.date && retried?.hasAlarm == true
+            && retried?.isDueDateAllDay == false && retried?.title == "论文修改 · final"
+            && store.editingDueDraft == nil,
+        "retry saves the selected time without changing the title",
+        "the all-day reminder became a timed reminder with its alert"
+    )
+    let writeCount = await service.dueUpdates.count
+    store.beginEditingDue(store.items.first { $0.id == "dated" }!, now: now)
+    store.editingDueDraft?.hasDate = false
+    store.cancelEditingDue()
+    await store.commitEditingDue()
+    check(
+        await service.dueUpdates.count == writeCount && store.editingDueDraft == nil,
+        "cancelling a date edit writes nothing", "the saved date remains intact"
+    )
+    let other = (try! await service.snapshot(in: "list-1")).first { $0.id == "other" }
+    check(other == reminder(id: "other", title: "Untouched"), "other reminders are untouched", "the second row kept every field")
+    store.beginEditingDue(store.items.first { $0.id == "dated" }!, now: now)
+    await service.setReminders([])
+    store.requestRefresh()
+    _ = await waitUntil { store.items.isEmpty }
+    check(store.editingDueDraft == nil, "losing a row closes its date editor", "no ghost edit remains after deletion elsewhere")
+}
+
+@MainActor
+private func checkDueEditorLayout(store: ReminderStore) {
+    let originalDraft = store.editingDueDraft
+    defer { store.editingDueDraft = originalDraft }
+    let output = FileManager.default.temporaryDirectory
+        .appendingPathComponent("yuannotch-reminder-date-previews", isDirectory: true)
+    try! FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+
+    func datePickers(in view: NSView) -> [NSDatePicker] {
+        if let picker = view as? NSDatePicker { return [picker] }
+        return view.subviews.flatMap { datePickers(in: $0) }
+    }
+
+    for width: CGFloat in [300, 360, 520] {
+        for (name, hasDate, hasTime, count) in [("timed", true, true, 2), ("all-day", true, false, 1), ("no-date", false, false, 0)] {
+            store.editingDueDraft?.hasDate = hasDate
+            store.editingDueDraft?.hasTime = hasTime
+            let host = NSHostingView(rootView: ReminderDueEditor(store: store).frame(width: width, height: 360))
+            host.frame = CGRect(x: 0, y: 0, width: width, height: 360)
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            for _ in 0 ..< 5 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+            }
+            let pickers = datePickers(in: host)
+            let frames = pickers.map { $0.convert($0.bounds, to: host) }
+            let fits = frames.allSatisfy { $0.minX >= 0 && $0.maxX <= width && $0.width > 30 }
+            let separate = frames.count < 2 || !frames[0].intersects(frames[1])
+            check(pickers.count == count && fits && separate,
+                  "\(name) editor fits at \(Int(width))pt",
+                  "\(pickers.count) native date/time pickers; no horizontal clipping or overlap")
+            let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try! bitmap.representation(using: .png, properties: [:])!
+                .write(to: output.appendingPathComponent("\(name)-\(Int(width)).png"))
+        }
+    }
+    print("Offscreen date editor previews: \(output.path)")
+}
+
 // MARK: - 6 · ending the editing session saves
 
 /// The panel's edit row, reduced to the part this check is about.
@@ -518,7 +721,10 @@ MainActor.assumeIsolated {
     var done = false
     Task { @MainActor in
         await runFlowChecks()
-        await checkEndOfEditingSaves()
+        await checkDueEditing()
+        if !CommandLine.arguments.contains("--model-only") {
+            await checkEndOfEditingSaves()
+        }
         done = true
     }
     // The flow's awaits need the main actor to run; pumping the run loop is what

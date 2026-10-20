@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct DailyPlanHistoryView: View {
-    let store: DailyPlanStore
+    @ObservedObject var store: DailyPlanStore
 
     @State private var snapshot: DailyPlanHistorySnapshot
 
@@ -11,8 +11,19 @@ struct DailyPlanHistoryView: View {
     }
 
     var body: some View {
-        DailyPlanHistoryContent(snapshot: snapshot)
+        DailyPlanHistoryContent(snapshot: snapshot) { date in
+            store.beginEditingTime(on: date)
+        }
         .onAppear {
+            snapshot = DailyPlanHistorySnapshot(store: store)
+        }
+        .onChange(of: store.dayRecords) { _, _ in
+            snapshot = DailyPlanHistorySnapshot(store: store)
+        }
+        .onChange(of: store.activeSession) { _, _ in
+            snapshot = DailyPlanHistorySnapshot(store: store)
+        }
+        .onChange(of: Int(store.now.timeIntervalSince1970 / 60)) { _, _ in
             snapshot = DailyPlanHistorySnapshot(store: store)
         }
     }
@@ -73,6 +84,7 @@ private enum HistoryGridCell: Hashable {
 
 private struct DailyPlanHistoryContent: View {
     let snapshot: DailyPlanHistorySnapshot
+    let onEditTime: (Date) -> Void
 
     @Environment(\.displayScale) private var displayScale
 
@@ -154,9 +166,11 @@ private struct DailyPlanHistoryContent: View {
 
     private func historyToolbar(scrollToLatest: @escaping () -> Void) -> some View {
         HStack {
-            Text("Daily focus time")
+            Text("Daily focus time · Click to edit")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.58))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
 
             Spacer()
 
@@ -263,33 +277,41 @@ private struct DailyPlanHistoryContent: View {
         let isToday = calendar.isDate(date, inSameDayAs: latestDay)
         let duration = isFuture ? "" : compactDuration(focusedMinutes)
 
-        return VStack(spacing: 1) {
-            Text("\(day)")
-                .font(.system(size: 11, weight: isToday ? .semibold : .regular))
-                .foregroundStyle(isFuture ? .white.opacity(0.22) : .white.opacity(0.68))
+        return Button {
+            onEditTime(date)
+        } label: {
+            VStack(spacing: 1) {
+                Text("\(day)")
+                    .font(.system(size: 11, weight: isToday ? .semibold : .regular))
+                    .foregroundStyle(isFuture ? .white.opacity(0.22) : .white.opacity(0.68))
 
-            Text(duration.isEmpty ? " " : duration)
-                .font(.system(size: 9, weight: .medium, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(isFuture ? .clear : .white.opacity(0.78))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-        }
-        .frame(width: cellSide, height: cellSide)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isFuture ? Color.white.opacity(0.025) : heatColor(for: focusedMinutes))
-        )
-        .overlay {
-            if isToday {
+                Text(duration.isEmpty ? " " : duration)
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(isFuture ? .clear : .white.opacity(0.78))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .frame(width: cellSide, height: cellSide)
+            .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.orange.opacity(0.76), lineWidth: 1)
+                    .fill(isFuture ? Color.white.opacity(0.025) : heatColor(for: focusedMinutes))
+            )
+            .overlay {
+                if isToday {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.orange.opacity(0.76), lineWidth: 1)
+                }
             }
         }
+        .buttonStyle(.plain)
+        .disabled(isFuture)
+        .help(isFuture ? "Future date" : "Edit focus time for \(date.formatted(date: .abbreviated, time: .omitted))")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             "\(date.formatted(date: .complete, time: .omitted)), \(isFuture ? "future date" : "\(compactDuration(focusedMinutes)) focused")"
         )
+        .accessibilityHint(isFuture ? "" : "Edit this day's focus time")
     }
 
     private func heatColor(for focusedMinutes: Int) -> Color {

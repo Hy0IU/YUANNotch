@@ -31,10 +31,16 @@ struct DailyPlansPanelView: View {
                 editor
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
+
+            if store.timeDraft != nil {
+                DailyPlanTimeEditor(store: store)
+                    .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
         }
         .frame(width: size.width, height: size.height, alignment: .top)
         .background(Self.panelBackground)
         .animation(.easeOut(duration: 0.16), value: store.isEditorPresented)
+        .animation(.easeOut(duration: 0.16), value: store.timeDraft != nil)
     }
 
     private var header: some View {
@@ -135,6 +141,18 @@ struct DailyPlansPanelView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.44))
                     .monospacedDigit()
+                Button {
+                    store.beginEditingTime(on: store.now)
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(.white.opacity(0.055)))
+                }
+                .buttonStyle(.plain)
+                .help("Edit today's focus time")
+                .accessibilityLabel("Edit today's focus time")
             }
 
             PlanProgressBar(
@@ -191,6 +209,7 @@ struct DailyPlansPanelView: View {
 
                 Menu {
                     Button("Edit") { store.beginEditing(plan) }
+                    Button("Edit Focus Time…") { store.beginEditingTime(on: store.now) }
                     Divider()
                     Button("Delete", role: .destructive) { store.deletePlan(id: plan.id) }
                 } label: {
@@ -639,6 +658,7 @@ struct DailyPlanActiveCardView: View {
                         if !isFloating {
                             Menu {
                                 Button("Edit") { store.beginEditing(plan) }
+                                Button("Edit Focus Time…") { store.beginEditingTime(on: store.now) }
                                 Divider()
                                 Button("Delete", role: .destructive) { store.deletePlan(id: plan.id) }
                             } label: {
@@ -888,7 +908,7 @@ private struct CircularPlanProgress: View {
     }
 }
 
-private struct FocusActionButtonStyle: ButtonStyle {
+struct FocusActionButtonStyle: ButtonStyle {
     let isPrimary: Bool
     let color: Color
 

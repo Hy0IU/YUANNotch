@@ -154,6 +154,34 @@ struct DailyPlanDayRecord: Codable, Equatable {
     var focusedSeconds: TimeInterval
 }
 
+struct DailyPlanTimeEntry: Identifiable, Equatable {
+    let id: UUID
+    let title: String
+    let originalSeconds: TimeInterval
+    var minutes: Int {
+        didSet { wasEdited = true }
+    }
+    private(set) var wasEdited = false
+
+    var isChanged: Bool { wasEdited && TimeInterval(minutes) * 60 != originalSeconds }
+    var seconds: TimeInterval { wasEdited ? TimeInterval(minutes) * 60 : originalSeconds }
+}
+
+struct DailyPlanTimeDraft: Equatable {
+    // A stable identity for manually logged time that has no recurring plan.
+    static let unassignedPlanID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+
+    let date: Date
+    var entries: [DailyPlanTimeEntry]
+
+    var totalSeconds: TimeInterval { entries.reduce(0) { $0 + $1.seconds } }
+    var canCommit: Bool {
+        entries.contains(where: \.isChanged)
+            && entries.allSatisfy { (0 ... 24 * 60).contains($0.minutes) }
+            && totalSeconds <= 24 * 60 * 60
+    }
+}
+
 struct DailyPlanArchive: Codable, Equatable {
     var version = 1
     var plans: [DailyPlan] = []

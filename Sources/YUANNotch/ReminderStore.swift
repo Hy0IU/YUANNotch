@@ -749,6 +749,9 @@ final class ReminderStore: ObservableObject {
     /// the row ends the edit rather than writing into nothing.
     @Published private(set) var editingID: String?
     @Published private(set) var editingDraft = ""
+    @Published var editingDueDraft: ReminderDueDraft?
+    @Published private(set) var isSavingDue = false
+    @Published private(set) var dueEditingError: String?
 
     /// Starts editing a row. A row that has not reached the system has nothing
     /// to update, so it offers no pencil and this refuses it.
@@ -756,7 +759,8 @@ final class ReminderStore: ObservableObject {
     /// Starting a second edit ends the first without writing: a click on another
     /// row is not a request to save.
     func beginEditing(_ item: ReminderPanelItem) {
-        guard item.remoteID != nil else { return }
+        guard item.remoteID != nil, !isSavingDue else { return }
+        cancelEditingDue()
         editingID = item.id
         editingDraft = item.title
     }
@@ -778,10 +782,13 @@ final class ReminderStore: ObservableObject {
     /// pretending it did.
     func commitEditing() async {
         guard let id = editingID else { return }
-        defer { cancelEditing() }
+        let draft = editingDraft
+        // End the edit before awaiting, so focus loss and a date-button click
+        // cannot submit the same title twice or cancel a newer edit on return.
+        cancelEditing()
         guard let item = items.first(where: { $0.id == id }),
               let remoteID = item.remoteID,
-              let title = Self.rewrite(original: item.title, draft: editingDraft) else { return }
+              let title = Self.rewrite(original: item.title, draft: draft) else { return }
 
         snapshot = Self.applyingTitle(title, to: id, in: snapshot)
         rebuildItems()
@@ -791,6 +798,58 @@ final class ReminderStore: ObservableObject {
         } catch {
             lastError = error.localizedDescription
             requestRefresh()
+        }
+    }
+
+    func beginEditingDue(_ item: ReminderPanelItem, now: Date = Date()) {
+        guard !isSavingDue, item.isEditable,
+              let current = items.first(where: { $0.id == item.id }), current.isEditable else { return }
+        editingDueDraft = ReminderDueDraft(item: current, now: now)
+        dueEditingError = nil
+    }
+
+    func cancelEditingDue() {
+        guard !isSavingDue else { return }
+        editingDueDraft = nil
+        dueEditingError = nil
+    }
+
+    func commitEditingDue() async {
+        guard !isSavingDue, let draft = editingDueDraft, draft.hasChanges(),
+              let item = items.first(where: { $0.id == draft.itemID }),
+              let remoteID = item.remoteID else { return }
+        let due = draft.due()
+        isSavingDue = true
+        dueEditingError = nil
+        defer { isSavingDue = false }
+        do {
+            try await service.setDue(id: remoteID, due: due)
+            snapshot = Self.applyingDue(due, to: remoteID, in: snapshot)
+            editingDueDraft = nil
+            rebuildItems()
+            requestRefresh()
+        } catch {
+            dueEditingError = error.localizedDescription
+            lastError = error.localizedDescription
+            requestRefresh()
+        }
+    }
+
+    static func applyingDue(_ due: ReminderDue?, to id: String, in snapshots: [ReminderSnapshot]) -> [ReminderSnapshot] {
+        snapshots.map { snapshot in
+            guard snapshot.id == id else { return snapshot }
+            return ReminderSnapshot(
+                id: snapshot.id,
+                externalID: snapshot.externalID,
+                title: snapshot.title,
+                dueDate: due?.date,
+                isDueDateAllDay: due?.isAllDay ?? false,
+                isCompleted: snapshot.isCompleted,
+                hasAlarm: due.map { !$0.isAllDay } ?? false,
+                listID: snapshot.listID,
+                createdDate: snapshot.createdDate,
+                lastModified: snapshot.lastModified
+            )
         }
     }
 
@@ -1087,6 +1146,10 @@ final class ReminderStore: ObservableObject {
         // write into, and keeping the draft would be keeping a ghost.
         if let editingID, !items.contains(where: { $0.id == editingID }) {
             cancelEditing()
+        }
+        if let draft = editingDueDraft, !items.contains(where: { $0.id == draft.itemID }) {
+            editingDueDraft = nil
+            dueEditingError = nil
         }
     }
 

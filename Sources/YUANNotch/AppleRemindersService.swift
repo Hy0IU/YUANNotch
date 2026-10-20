@@ -178,6 +178,8 @@ protocol RemindersServing: Sendable {
     func snapshot(in listID: String) async throws -> [ReminderSnapshot]
     func create(title: String, due: ReminderDue?, in listID: String, marker: UUID) async throws -> ReminderSnapshot
     func update(id: String, title: String?, due: ReminderDue?) async throws
+    /// Replaces the due date; nil explicitly removes both the date and alarms.
+    func setDue(id: String, due: ReminderDue?) async throws
     func setCompleted(id: String, isCompleted: Bool) async throws
     func resolve(id: String, externalID: String?, in listID: String) async -> ReminderSnapshot?
     func delete(id: String) async throws
@@ -365,6 +367,15 @@ actor AppleRemindersService: RemindersServing {
         if let title { reminder.title = title }
         if let due { applyDue(due, to: reminder) }
 
+        try save(reminder)
+    }
+
+    func setDue(id: String, due: ReminderDue?) async throws {
+        try requireReadAccess()
+        guard let reminder = reminder(withIdentifier: id) else {
+            throw RemindersServiceError.reminderNotFound
+        }
+        applyDue(due, to: reminder)
         try save(reminder)
     }
 

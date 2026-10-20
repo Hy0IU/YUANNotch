@@ -12,6 +12,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
     @Published var isEditorPresented = false
     @Published var editingPlanID: UUID?
     @Published var draft = DailyPlanDraft()
+    @Published var timeDraft: DailyPlanTimeDraft?
 
     private let persistence: DailyPlanPersistence
     private var calendar: Calendar
@@ -67,7 +68,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
     }
 
     var todayFocusedSeconds: TimeInterval {
-        plans.reduce(0) { $0 + focusedSeconds(for: $1.id, on: now) }
+        focusedSeconds(on: now)
     }
 
     func isScheduledToday(_ plan: DailyPlan) -> Bool {
@@ -78,9 +79,9 @@ final class DailyPlanStore: NSObject, ObservableObject {
 
     func focusedSeconds(for planID: UUID, on date: Date) -> TimeInterval {
         let day = PlanDayKey(date: date, calendar: calendar)
-        let recorded = dayRecords.first {
+        let recorded = dayRecords.filter {
             $0.planID == planID && $0.day == day
-        }?.focusedSeconds ?? 0
+        }.reduce(0) { $0 + $1.focusedSeconds }
         return recorded + liveFocusedSeconds(for: planID, dayContaining: date)
     }
 
@@ -207,12 +208,14 @@ final class DailyPlanStore: NSObject, ObservableObject {
     }
 
     func beginCreatingPlan() {
+        timeDraft = nil
         editingPlanID = nil
         draft = DailyPlanDraft()
         isEditorPresented = true
     }
 
     func beginEditing(_ plan: DailyPlan) {
+        timeDraft = nil
         editingPlanID = plan.id
         draft = DailyPlanDraft(
             title: plan.title,
@@ -281,6 +284,96 @@ final class DailyPlanStore: NSObject, ObservableObject {
 
     func flushPendingSave() {
         save()
+    }
+
+    func beginEditingTime(on date: Date, at currentDate: Date? = nil) {
+        let currentDate = currentDate ?? nowProvider()
+        guard calendar.startOfDay(for: date) <= calendar.startOfDay(for: currentDate) else { return }
+        now = currentDate
+        _ = reconcile(at: currentDate, notifies: true)
+        cancelEditing()
+
+        let day = PlanDayKey(date: date, calendar: calendar)
+        let knownIDs = Set(plans.map(\.id) + [DailyPlanTimeDraft.unassignedPlanID])
+        let archivedIDs = Set(dayRecords.filter { $0.day == day }.map(\.planID))
+            .subtracting(knownIDs).sorted { $0.uuidString < $1.uuidString }
+        let titles = plans.map { ($0.id, $0.title) }
+            + archivedIDs.enumerated().map { index, id in
+                (id, archivedIDs.count == 1 ? "Archived plan" : "Archived plan \(index + 1)")
+            }
+            + [(DailyPlanTimeDraft.unassignedPlanID, "Other focus")]
+        timeDraft = DailyPlanTimeDraft(
+            date: calendar.startOfDay(for: date),
+            entries: titles.map { id, title in
+                let seconds = focusedSeconds(for: id, on: date)
+                return DailyPlanTimeEntry(id: id, title: title, originalSeconds: seconds, minutes: Int(seconds / 60))
+            }
+        )
+    }
+
+    func cancelEditingTime() {
+        timeDraft = nil
+    }
+
+    func commitTimeDraft(at date: Date? = nil) {
+        guard let draft = timeDraft, draft.canCommit else { return }
+        let date = date ?? nowProvider()
+        guard calendar.startOfDay(for: draft.date) <= calendar.startOfDay(for: date) else { return }
+        now = date
+        _ = reconcile(at: date, notifies: true)
+
+        // Settle before replacing records, then resume from this exact instant.
+        // A Pomodoro round is independent of corrected daily totals.
+        let wasRunning = activeSession?.isRunning == true
+        settleRunningInterval(at: date)
+        if wasRunning, var session = activeSession {
+            session.runningSince = date
+            activeSession = session
+        }
+
+        let previousRecords = dayRecords
+        let previousActiveSession = activeSession
+        let previousPausedSessions = pausedSessions
+        let day = PlanDayKey(date: draft.date, calendar: calendar)
+        for entry in draft.entries where entry.isChanged {
+            dayRecords.removeAll { $0.planID == entry.id && $0.day == day }
+            if entry.seconds > 0 {
+                dayRecords.append(DailyPlanDayRecord(planID: entry.id, day: day, focusedSeconds: entry.seconds))
+            }
+        }
+        if day == PlanDayKey(date: date, calendar: calendar) {
+            for entry in draft.entries where entry.isChanged {
+                refreshContinuousSessionAfterTimeEdit(for: entry.id, on: date)
+            }
+        }
+        if save() {
+            timeDraft = nil
+        } else {
+            dayRecords = previousRecords
+            activeSession = previousActiveSession
+            pausedSessions = previousPausedSessions
+        }
+    }
+
+    private func refreshContinuousSessionAfterTimeEdit(for planID: UUID, on date: Date) {
+        guard let plan = plans.first(where: { $0.id == planID }), !plan.pomodoro.isEnabled else { return }
+        let remaining = max(TimeInterval(plan.targetMinutes * 60) - focusedSeconds(for: planID, on: date), 0)
+        if var session = activeSession, session.planID == planID {
+            if remaining > 0 {
+                session.phaseDuration = session.phaseElapsed + remaining
+                activeSession = session
+            } else {
+                activeSession = nil
+            }
+        }
+        if var session = pausedSessions[planID] {
+            if remaining > 0 {
+                session.phaseDuration = session.phaseElapsed + remaining
+                pausedSessions[planID] = session
+            } else {
+                pausedSessions.removeValue(forKey: planID)
+            }
+        }
     }
 
     /// Public to the standalone probe: production calls it from the one-second timer.
@@ -521,7 +614,8 @@ final class DailyPlanStore: NSObject, ObservableObject {
         }
     }
 
-    private func save() {
+    @discardableResult
+    private func save() -> Bool {
         do {
             try persistence.save(
                 DailyPlanArchive(
@@ -532,8 +626,10 @@ final class DailyPlanStore: NSObject, ObservableObject {
                 )
             )
             lastError = nil
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
 }

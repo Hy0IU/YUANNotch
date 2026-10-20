@@ -57,6 +57,49 @@ struct ReminderPanelItem: Identifiable, Equatable {
     }
 }
 
+/// A concrete date draft for an existing reminder. Editing an overdue reminder
+/// keeps its chosen day rather than rolling it forward like a compose shortcut.
+struct ReminderDueDraft {
+    let itemID: String
+    let title: String
+    let originalDue: ReminderDue?
+    var hasDate: Bool
+    var hasTime: Bool
+    var date: Date
+    var time: Date
+
+    init(item: ReminderPanelItem, now: Date = Date()) {
+        itemID = item.id
+        title = item.title
+        originalDue = item.dueDate.map { ReminderDue(date: $0, isAllDay: item.isDueDateAllDay) }
+        hasDate = item.dueDate != nil
+        hasTime = item.dueDate != nil && !item.isDueDateAllDay
+        date = item.dueDate ?? now
+        time = item.dueDate ?? now
+    }
+
+    func hasChanges(calendar: Calendar = .current) -> Bool {
+        guard let originalDue else { return hasDate }
+        guard hasDate else { return true }
+        let originallyHadTime = !originalDue.isAllDay
+        if hasTime != originallyHadTime { return true }
+        if !calendar.isDate(date, inSameDayAs: originalDue.date) { return true }
+        return hasTime && calendar.dateComponents([.hour, .minute], from: time)
+            != calendar.dateComponents([.hour, .minute], from: originalDue.date)
+    }
+
+    func due(calendar: Calendar = .current) -> ReminderDue? {
+        guard hasDate else { return nil }
+        // Preserve exact seconds when the controls were left unchanged.
+        guard hasChanges(calendar: calendar) else { return originalDue }
+        let day = calendar.startOfDay(for: date)
+        guard hasTime else { return ReminderDue(date: day, isAllDay: true) }
+        let clock = calendar.dateComponents([.hour, .minute], from: time)
+        let instant = calendar.date(bySettingHour: clock.hour ?? 0, minute: clock.minute ?? 0, second: 0, of: day) ?? day
+        return ReminderDue(date: instant, isAllDay: false)
+    }
+}
+
 enum ReminderGroup: String, CaseIterable, Identifiable {
     case overdue
     case today
