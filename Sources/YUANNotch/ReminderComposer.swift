@@ -421,6 +421,13 @@ final class ReminderComposer: ObservableObject {
         withAnimation(Self.rowAnimation) { isTimeWheelShown.toggle() }
     }
 
+    /// Cancelling is an explicit choice of no date or time, even when the draft
+    /// contains a recognized date. Keep the text and its extracted title intact.
+    func cancelDueSelection() {
+        resetDueSelection()
+        hasManualDueSelection = true
+    }
+
     /// Every reminder starts from a blank due row, the way Reminders.app does.
     /// The chip row this replaced carried the previous choice into the next
     /// reminder.

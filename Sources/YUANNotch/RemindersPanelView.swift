@@ -292,6 +292,16 @@ struct RemindersPanelView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
+        .background {
+            ReminderDueEscapeHandler {
+                guard composer.hasManualDueSelection,
+                      composer.dateOption != .none || composer.timeOption != .none,
+                      store.editingID == nil, store.editingDueDraft == nil else { return false }
+                composer.cancelDueSelection()
+                draftFocusRequest += 1
+                return true
+            }
+        }
     }
 
     private var draftField: some View {
@@ -451,39 +461,26 @@ struct RemindersPanelView: View {
             if composer.timeOption == .custom {
                 HStack(spacing: 6) {
                     rowLabel("Time")
-                    timeField
-                    wheelToggle
-                    Spacer(minLength: 0)
-                }
-
-                if composer.isTimeWheelShown {
-                    DatePicker("", selection: customTimeBinding, displayedComponents: [.hourAndMinute])
+                    DatePicker("Due time", selection: customTimeBinding, displayedComponents: [.hourAndMinute])
                         .labelsHidden()
-                        .datePickerStyle(.compact)
+                        .datePickerStyle(.stepperField)
                         .font(.system(size: 12))
                         .environment(\.colorScheme, .dark)
                         .fixedSize()
-                        .padding(.leading, Self.rowLabelWidth + 6)
+                    Spacer(minLength: 0)
                 }
             }
         }
     }
 
-    /// The custom inputs' bindings go through the composer's own methods rather
-    /// than straight at the value: the typed text and the wheel are two views
-    /// onto one time, and the rule that keeps them agreeing lives with the value.
-    /// A binding that wrote the value directly would be the drift the rule exists
-    /// to prevent.
+    /// Keep custom selections in the composer so they survive a drawer switch
+    /// and update the menu labels and the reminder's due date together.
     private var customDateBinding: Binding<Date> {
         Binding(get: { composer.customDate }, set: { composer.setCustomDate($0) })
     }
 
     private var customTimeBinding: Binding<Date> {
         Binding(get: { composer.customTime }, set: { composer.setCustomTime($0) })
-    }
-
-    private var customTimeTextBinding: Binding<String> {
-        Binding(get: { composer.customTimeText }, set: { composer.setCustomTimeText($0) })
     }
 
     private static let rowLabelWidth: CGFloat = 34
@@ -493,44 +490,6 @@ struct RemindersPanelView: View {
             .font(.system(size: 11))
             .foregroundStyle(.white.opacity(0.45))
             .frame(width: Self.rowLabelWidth, alignment: .leading)
-    }
-
-    private var timeField: some View {
-        TextField(TimeOfDay(hour: 21, minute: 0).formatted(), text: customTimeTextBinding)
-            .textFieldStyle(.plain)
-            .font(.system(size: 12))
-            .foregroundStyle(.white.opacity(0.9))
-            .onSubmit(commit)
-            .padding(.horizontal, 7)
-            .frame(width: 78, height: 22)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(.white.opacity(0.05))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(.orange.opacity(0.8), lineWidth: 1)
-                    .opacity(composer.customTimeParseFailed ? 1 : 0)
-            )
-            .help("Type a time such as 21:00, 9pm or 2130")
-    }
-
-    private var wheelToggle: some View {
-        Button {
-            composer.toggleTimeWheel()
-        } label: {
-            Image(systemName: "clock")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(composer.isTimeWheelShown ? 0.85 : 0.55))
-                .frame(width: 24, height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(.white.opacity(composer.isTimeWheelShown ? 0.12 : 0.05))
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Pick the time with the system picker instead")
     }
 
     // MARK: - Committing
@@ -1050,6 +1009,45 @@ struct RemindersPanelView: View {
         Rectangle()
             .fill(.white.opacity(0.055))
             .frame(height: 0.5)
+    }
+}
+
+/// Native date fields consume Escape before SwiftUI's exit command reaches the
+/// compose row. Handle it first, scoped to this surface's window and lifetime.
+private struct ReminderDueEscapeHandler: NSViewRepresentable {
+    let onEscape: () -> Bool
+
+    func makeNSView(context: Context) -> EscapeView { EscapeView() }
+
+    func updateNSView(_ view: EscapeView, context: Context) {
+        view.onEscape = onEscape
+    }
+
+    static func dismantleNSView(_ view: EscapeView, coordinator: ()) {
+        view.stopMonitoring()
+    }
+
+    final class EscapeView: NSView {
+        var onEscape: (() -> Bool)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopMonitoring()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let window = self.window, event.window === window,
+                      event.keyCode == 53,
+                      event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+                      self.onEscape?() == true else { return event }
+                return nil
+            }
+        }
+
+        func stopMonitoring() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
     }
 }
 
