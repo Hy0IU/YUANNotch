@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct DailyPlanHistoryView: View {
@@ -35,7 +36,7 @@ private struct DailyPlanHistorySnapshot {
 
     @MainActor init(store: DailyPlanStore) {
         let calendar = Calendar.autoupdatingCurrent
-        now = store.now
+        now = store.today
         var totals: [PlanDayKey: TimeInterval] = [:]
         for record in store.dayRecords {
             totals[record.day, default: 0] += record.focusedSeconds
@@ -44,7 +45,7 @@ private struct DailyPlanHistorySnapshot {
         if let session = store.activeSession {
             if session.phase == .focus, let startedAt = session.runningSince {
                 let available = max(session.phaseDuration - session.phaseElapsed, 0)
-                let end = min(now, startedAt.addingTimeInterval(available))
+                let end = min(store.now, startedAt.addingTimeInterval(available))
                 for (day, seconds) in DailyPlanEngine.splitFocusInterval(
                     from: startedAt,
                     to: end,
@@ -87,6 +88,7 @@ private struct DailyPlanHistoryContent: View {
     let onEditTime: (Date) -> Void
 
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.appTypography) private var typography
 
     private let calendar = Calendar.autoupdatingCurrent
     private let columnSpacing: CGFloat = 8
@@ -167,16 +169,15 @@ private struct DailyPlanHistoryContent: View {
     private func historyToolbar(scrollToLatest: @escaping () -> Void) -> some View {
         HStack {
             Text("Daily focus time · Click to edit")
-                .font(.system(size: 11, weight: .medium))
+                .appText(.secondary, weight: .medium)
                 .foregroundStyle(.white.opacity(0.58))
                 .lineLimit(1)
-                .minimumScaleFactor(0.85)
 
             Spacer()
 
             Button(action: scrollToLatest) {
                 Label("Today", systemImage: "arrow.down.to.line")
-                    .font(.system(size: 10, weight: .medium))
+                    .appText(.control)
                     .foregroundStyle(.white.opacity(0.78))
                     .padding(.horizontal, 9)
                     .frame(height: 25)
@@ -195,7 +196,9 @@ private struct DailyPlanHistoryContent: View {
         let fittingSide = max((availableGridWidth - spacingWidth) / 7, 0)
         let scale = max(displayScale, 1)
         let pixelAlignedSide = floor(fittingSide * scale) / scale
-        return min(maximumCellSide, max(minimumCellSide, pixelAlignedSide))
+        let textHeight = typography.lineHeight(.secondary) + typography.lineHeight(.compact) + 2
+        let readableCellSide = max(minimumCellSide, ceil(textHeight))
+        return min(maximumCellSide, max(readableCellSide, pixelAlignedSide))
     }
 
     private func monthID(for date: Date) -> HistoryMonthID {
@@ -211,7 +214,7 @@ private struct DailyPlanHistoryContent: View {
 
         return VStack(alignment: .leading, spacing: 6) {
             Text(monthStart.formatted(.dateTime.month(.wide).year()))
-                .font(.system(size: 11, weight: .semibold))
+                .appText(.sectionTitle)
                 .foregroundStyle(.white.opacity(0.72))
                 .padding(.leading, 2)
 
@@ -259,9 +262,9 @@ private struct DailyPlanHistoryContent: View {
         switch cell {
         case let .weekday(index):
             Text(weekdayTitles[index])
-                .font(.system(size: 8, weight: .medium))
+                .appText(.compact)
                 .foregroundStyle(.white.opacity(0.32))
-                .frame(width: cellSide, height: 11)
+                .frame(width: cellSide, height: max(14, typography.lineHeight(.compact) + 2))
         case .placeholder:
             Color.clear
                 .frame(width: cellSide, height: cellSide)
@@ -275,22 +278,22 @@ private struct DailyPlanHistoryContent: View {
         let focusedMinutes = max(Int(focusedSeconds / 60), 0)
         let isFuture = calendar.startOfDay(for: date) > latestDay
         let isToday = calendar.isDate(date, inSameDayAs: latestDay)
-        let duration = isFuture ? "" : compactDuration(focusedMinutes)
+        let duration = isFuture ? "" : durationLabel(focusedMinutes, cellSide: cellSide)
 
         return Button {
             onEditTime(date)
         } label: {
             VStack(spacing: 1) {
                 Text("\(day)")
-                    .font(.system(size: 11, weight: isToday ? .semibold : .regular))
+                    .appText(.secondary, weight: isToday ? .semibold : .regular)
                     .foregroundStyle(isFuture ? .white.opacity(0.22) : .white.opacity(0.68))
 
                 Text(duration.isEmpty ? " " : duration)
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .appText(.compact)
                     .monospacedDigit()
                     .foregroundStyle(isFuture ? .clear : .white.opacity(0.78))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(width: cellSide, height: cellSide)
             .background(
@@ -306,10 +309,12 @@ private struct DailyPlanHistoryContent: View {
         }
         .buttonStyle(.plain)
         .disabled(isFuture)
-        .help(isFuture ? "Future date" : "Edit focus time for \(date.formatted(date: .abbreviated, time: .omitted))")
+        .help(isFuture
+            ? "Future date"
+            : "\(date.formatted(date: .complete, time: .omitted)) · \(durationText(focusedMinutes)) focused. Click to edit.")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            "\(date.formatted(date: .complete, time: .omitted)), \(isFuture ? "future date" : "\(compactDuration(focusedMinutes)) focused")"
+            "\(date.formatted(date: .complete, time: .omitted)), \(isFuture ? "future date" : "\(durationText(focusedMinutes)) focused")"
         )
         .accessibilityHint(isFuture ? "" : "Edit this day's focus time")
     }
@@ -324,6 +329,30 @@ private struct DailyPlanHistoryContent: View {
         let hours = minutes / 60
         let remainder = minutes % 60
         if hours > 0, remainder > 0 { return "\(hours)h\(remainder)" }
+        if hours > 0 { return "\(hours)h" }
+        return "\(remainder)m"
+    }
+
+    private func durationLabel(_ minutes: Int, cellSide: CGFloat) -> String {
+        let full = compactDuration(minutes)
+        let font = NSFont.monospacedDigitSystemFont(
+            ofSize: typography.size(.compact),
+            weight: .medium
+        )
+        let textWidth = ceil((full as NSString).size(withAttributes: [.font: font]).width)
+        guard textWidth > cellSide - 4 else { return full }
+
+        let hours = minutes / 60
+        if hours > 0 {
+            return hours >= 100 ? "99h+" : (minutes % 60 > 0 ? "\(hours)h+" : "\(hours)h")
+        }
+        return "\(minutes)m"
+    }
+
+    private func durationText(_ minutes: Int) -> String {
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        if hours > 0, remainder > 0 { return "\(hours)h \(remainder)m" }
         if hours > 0 { return "\(hours)h" }
         return "\(remainder)m"
     }

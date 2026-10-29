@@ -10,6 +10,7 @@ mkdir -p "$BUILD_ROOT"
 xcrun swiftc -swift-version 6 -parse-as-library \
   -o "$BUILD_ROOT/layout-probe" \
   "$ROOT_DIR/Scripts/daily-plan-layout-probe/main.swift" \
+  "$SOURCE_DIR/AppTypography.swift" \
   "$SOURCE_DIR/DailyPlanModels.swift" \
   "$SOURCE_DIR/DailyPlanEngine.swift" \
   "$SOURCE_DIR/DailyPlanPersistence.swift" \

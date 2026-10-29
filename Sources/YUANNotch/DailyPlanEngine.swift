@@ -1,6 +1,18 @@
 import Foundation
 
 enum DailyPlanEngine {
+    /// A plan day is labelled by the date on which its local 04:00 boundary falls.
+    static func dayStart(on date: Date, calendar: Calendar) -> Date {
+        calendar.date(bySettingHour: 4, minute: 0, second: 0, of: date)!
+    }
+
+    static func dayStart(containing date: Date, calendar: Calendar) -> Date {
+        let boundary = dayStart(on: date, calendar: calendar)
+        if date >= boundary { return boundary }
+        let previousDate = calendar.date(byAdding: .day, value: -1, to: date)!
+        return dayStart(on: previousDate, calendar: calendar)
+    }
+
     static func splitFocusInterval(
         from start: Date,
         to end: Date,
@@ -12,10 +24,11 @@ enum DailyPlanEngine {
         var cursor = start
 
         while cursor < end {
-            let dayStart = calendar.startOfDay(for: cursor)
-            guard let nextDay = calendar.date(byAdding: .day, value: 1, to: dayStart) else { break }
+            let dayStart = dayStart(containing: cursor, calendar: calendar)
+            guard let nextDate = calendar.date(byAdding: .day, value: 1, to: dayStart) else { break }
+            let nextDay = self.dayStart(on: nextDate, calendar: calendar)
             let sliceEnd = min(end, nextDay)
-            let key = PlanDayKey(date: cursor, calendar: calendar)
+            let key = PlanDayKey(date: dayStart, calendar: calendar)
             result[key, default: 0] += sliceEnd.timeIntervalSince(cursor)
             cursor = sliceEnd
         }

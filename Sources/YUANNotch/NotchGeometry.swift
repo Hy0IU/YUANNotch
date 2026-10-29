@@ -180,27 +180,20 @@ struct NotebookToolbarLayout: Equatable {
     /// The width the toolbar row is given: the drawer less its side padding.
     let width: CGFloat
     let mode: DrawerMode
+    let typography: AppTypography
+
+    init(width: CGFloat, mode: DrawerMode, typography: AppTypography = AppTypography()) {
+        self.width = width
+        self.mode = mode
+        self.typography = typography
+    }
 
     static let iconButton: CGFloat = 28
     static let itemSpacing: CGFloat = 10
-    /// The width the three-segment mode toggle needs with labels and icons only,
-    /// at the fonts `DrawerModeToggle` uses.
-    ///
-    /// Both figures are measured rather than derived — `Scripts/toolbar-layout-probe.sh`
-    /// hosts the real toggle and fails if either stops covering it — and what
-    /// they have to cover is the *widest* state, not the typical one. Two things
-    /// move that width, and the figures are the worst of both:
-    ///
-    /// - which segment is selected, because the selected label is semibold and
-    ///   the labels differ in length ("Reminders" selected is the wide case);
-    /// - the display's backing scale, because at 1x the font metrics round up to
-    ///   whole points. Measured 2026-09-22 on the same build: the widest labelled
-    ///   state is 218.5pt and icons-only is 82.5pt on a 2x screen.
-    ///
-    /// The widest measured 1x state is 221pt. Reserve it exactly so the
-    /// minimum-width drawer can still show one full pager dot.
-    static let modeToggleLabelledWidth: CGFloat = 221
-    /// Icons-only has no text. The measured 1x state is 84pt.
+    /// The standard-size labelled width, kept for callers that need the
+    /// standard typography. Layout decisions use the dynamic helper below.
+    static let modeToggleLabelledWidth: CGFloat = labelledModeToggleWidth(for: AppTypography())
+    /// Icons-only has no text, so this budget does not vary with typography.
     static let modeToggleIconWidth: CGFloat = 84
     /// The pager's own chrome: minus, plus, the two gaps around the strip and
     /// the pill's horizontal padding.
@@ -217,6 +210,29 @@ struct NotebookToolbarLayout: Equatable {
     /// Below this many dots the toggle's labels are not worth their extra width.
     static let minimumDotsWithLabels = 3
 
+    /// Computes the widest labelled state from the same role fonts used by the
+    /// control. The selected title is semibold; every other title is regular.
+    /// The fixed portion accounts for each 10pt symbol, label gap, button
+    /// padding, segment gaps and the control's outer padding. A 10pt allowance
+    /// covers the SF symbols' intrinsic widths beyond their nominal font size.
+    /// Text widths are rounded up with a point of slack for backing-scale rounding.
+    static func labelledModeToggleWidth(for typography: AppTypography) -> CGFloat {
+        let widestTitles = DrawerMode.allCases.map { selectedMode in
+            DrawerMode.allCases.reduce(CGFloat.zero) { width, candidate in
+                let weight: NSFont.Weight = candidate == selectedMode ? .semibold : .regular
+                let font = typography.nsFont(.control, weight: weight)
+                let titleWidth = (candidate.title as NSString).size(withAttributes: [.font: font]).width
+                return width + titleWidth
+            }
+        }.max() ?? 0
+
+        let segmentCount = CGFloat(DrawerMode.allCases.count)
+        let fixedWidth = segmentCount * (14 + 10 + 4)
+            + CGFloat(max(DrawerMode.allCases.count - 1, 0)) * 2
+            + 14
+        return ceil(widestTitles) + fixedWidth + 1
+    }
+
     static var dotStride: CGFloat { dotSlot + dotSpacing }
 
     var isNotesMode: Bool { mode == .notes }
@@ -228,28 +244,38 @@ struct NotebookToolbarLayout: Equatable {
     /// a drawer could keep labels the row could not pay for.
     var showsModeToggleLabels: Bool {
         if isNotesMode {
-            return width >= Self.widthNeededForNotesLabels
+            return width >= Self.widthNeededForNotesLabels(typography: typography)
         }
-        return width >= Self.standaloneWidthWithLabels
+        return width >= Self.standaloneWidthWithLabels(typography: typography)
     }
 
     /// Everything the toolbar puts to the right of the pager.
-    static func trailingReserve(showsClearButton: Bool, showsModeToggleLabels: Bool) -> CGFloat {
-        let toggle = showsModeToggleLabels ? modeToggleLabelledWidth : modeToggleIconWidth
+    static func trailingReserve(
+        showsClearButton: Bool,
+        showsModeToggleLabels: Bool,
+        typography: AppTypography = AppTypography()
+    ) -> CGFloat {
+        let toggle = showsModeToggleLabels
+            ? labelledModeToggleWidth(for: typography)
+            : modeToggleIconWidth
         var reserve = itemSpacing + toggle
         if showsClearButton { reserve += itemSpacing + iconButton }
         reserve += itemSpacing + iconButton
         return reserve + pagerTrailingGap
     }
 
-    private static var widthNeededForNotesLabels: CGFloat {
+    private static func widthNeededForNotesLabels(typography: AppTypography) -> CGFloat {
         pagerChrome
-            + trailingReserve(showsClearButton: true, showsModeToggleLabels: true)
+            + trailingReserve(
+                showsClearButton: true,
+                showsModeToggleLabels: true,
+                typography: typography
+            )
             + CGFloat(minimumDotsWithLabels) * dotStride
     }
 
-    private static var standaloneWidthWithLabels: CGFloat {
-        itemSpacing + modeToggleLabelledWidth + itemSpacing + iconButton
+    private static func standaloneWidthWithLabels(typography: AppTypography) -> CGFloat {
+        itemSpacing + labelledModeToggleWidth(for: typography) + itemSpacing + iconButton
     }
 
     /// Width of the dot row when nothing constrains it.
@@ -265,7 +291,8 @@ struct NotebookToolbarLayout: Equatable {
             - Self.pagerChrome
             - Self.trailingReserve(
                 showsClearButton: showsClearButton,
-                showsModeToggleLabels: showsModeToggleLabels
+                showsModeToggleLabels: showsModeToggleLabels,
+                typography: typography
             )
         return min(Self.stripContentWidth(tabCount: tabCount), max(budget, 0))
     }

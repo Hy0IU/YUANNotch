@@ -2,16 +2,19 @@ import SwiftUI
 
 struct ReminderDueEditor: View {
     @ObservedObject var store: ReminderStore
+    @Environment(\.appTypography) private var typography
 
     var body: some View {
         if let draft = store.editingDueDraft {
             VStack(spacing: 0) {
                 HStack {
                     Text("Edit Due Date")
-                        .font(.system(size: 13, weight: .semibold))
+                        .appText(.sectionTitle)
                         .foregroundStyle(.white.opacity(0.9))
                     Spacer()
-                    Button("Cancel") { store.cancelEditingDue() }
+                    Button { store.cancelEditingDue() } label: {
+                        Text("Cancel").appText(.control)
+                    }
                         .buttonStyle(MarkdownToolbarButtonStyle())
                 }
                 .padding(.horizontal, 12)
@@ -22,14 +25,14 @@ struct ReminderDueEditor: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         Text(draft.title)
-                            .font(.system(size: 13, weight: .medium))
+                            .appText(.body, weight: .medium)
                             .foregroundStyle(.white.opacity(0.75))
                             .fixedSize(horizontal: false, vertical: true)
 
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
                                 Text("Due date")
-                                    .font(.system(size: 12, weight: .medium))
+                                    .appText(.control)
                                 Spacer()
                                 Toggle("Due date", isOn: binding(\.hasDate, fallback: false))
                                     .labelsHidden()
@@ -38,7 +41,7 @@ struct ReminderDueEditor: View {
                             if draft.hasDate {
                                 HStack {
                                     Text("Date")
-                                        .font(.system(size: 11))
+                                        .appText(.secondary)
                                         .foregroundStyle(.white.opacity(0.5))
                                     Spacer(minLength: 8)
                                     DatePicker("Due date", selection: binding(\.date, fallback: Date()), displayedComponents: [.date])
@@ -59,7 +62,7 @@ struct ReminderDueEditor: View {
                             VStack(alignment: .leading, spacing: 12) {
                                 HStack {
                                     Text("Include time")
-                                        .font(.system(size: 12, weight: .medium))
+                                        .appText(.control)
                                     Spacer()
                                     Toggle("Include time", isOn: binding(\.hasTime, fallback: false))
                                         .labelsHidden()
@@ -67,7 +70,7 @@ struct ReminderDueEditor: View {
                                 if draft.hasTime {
                                     HStack {
                                         Text("Time")
-                                            .font(.system(size: 11))
+                                            .appText(.secondary)
                                             .foregroundStyle(.white.opacity(0.5))
                                         Spacer(minLength: 8)
                                         DatePicker("Due time", selection: binding(\.time, fallback: Date()), displayedComponents: [.hourAndMinute])
@@ -84,13 +87,13 @@ struct ReminderDueEditor: View {
                         Text(draft.hasDate
                              ? "Dates without a time are all-day reminders."
                              : "Saving removes the due date and its alerts.")
-                            .font(.system(size: 10))
+                            .appText(.secondary)
                             .foregroundStyle(.white.opacity(0.38))
                             .fixedSize(horizontal: false, vertical: true)
 
                         if let error = store.dueEditingError {
                             Text(error)
-                                .font(.system(size: 10))
+                                .appText(.secondary)
                                 .foregroundStyle(.orange.opacity(0.85))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -104,7 +107,7 @@ struct ReminderDueEditor: View {
                     if store.isSavingDue {
                         ProgressView().controlSize(.small)
                         Text("Saving…")
-                            .font(.system(size: 10))
+                            .appText(.secondary)
                             .foregroundStyle(.white.opacity(0.45))
                     }
                     Spacer()
@@ -112,10 +115,10 @@ struct ReminderDueEditor: View {
                         Task { await store.commitEditingDue() }
                     } label: {
                         Text("Save")
-                            .font(.system(size: 11, weight: .medium))
+                            .appText(.control)
                             .foregroundStyle(.black.opacity(0.76))
                             .padding(.horizontal, 14)
-                            .frame(height: 29)
+                            .frame(minHeight: typography.controlHeight(base: 29))
                             .background(RoundedRectangle(cornerRadius: 7).fill(.orange.opacity(0.92)))
                     }
                     .buttonStyle(.plain)
@@ -126,7 +129,7 @@ struct ReminderDueEditor: View {
                 .frame(height: 44)
             }
             .toggleStyle(.switch)
-            .controlSize(.small)
+            .controlSize(typography.interfaceSize == .large ? .regular : .small)
             .background(Color(red: 0.06, green: 0.06, blue: 0.07))
             .environment(\.colorScheme, .dark)
             .disabled(store.isSavingDue)
@@ -147,10 +150,10 @@ struct ReminderDueEditor: View {
             store.editingDueDraft?.date = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: Date())) ?? Date()
         } label: {
             Text(title)
-                .font(.system(size: 10, weight: .medium))
+                .appText(.control)
                 .foregroundStyle(.orange.opacity(0.85))
                 .padding(.horizontal, 10)
-                .frame(height: 25)
+                .frame(minHeight: typography.controlHeight(base: 25))
                 .background(Capsule().fill(.orange.opacity(0.10)))
         }
         .buttonStyle(.plain)

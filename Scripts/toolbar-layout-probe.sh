@@ -29,6 +29,7 @@ echo "Compiling probe ..."
 xcrun swiftc -swift-version 5 \
   -o "$EXECUTABLE" \
   "$ROOT_DIR/Scripts/toolbar-layout-probe/main.swift" \
+  "$SOURCE_DIR/AppTypography.swift" \
   "$SOURCE_DIR/NotchGeometry.swift" \
   "$SOURCE_DIR/DrawerMode.swift" \
   "$SOURCE_DIR/DrawerModeToggle.swift" \

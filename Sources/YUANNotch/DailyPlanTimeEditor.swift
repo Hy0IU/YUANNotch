@@ -1,7 +1,9 @@
+import AppKit
 import SwiftUI
 
 struct DailyPlanTimeEditor: View {
     @ObservedObject var store: DailyPlanStore
+    @Environment(\.appTypography) private var typography
     @FocusState private var focusedField: DurationField?
 
     private struct DurationField: Hashable {
@@ -17,18 +19,18 @@ struct DailyPlanTimeEditor: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Edit Focus Time")
-                            .font(.system(size: 13, weight: .semibold))
+                            .appText(.sectionTitle)
                             .foregroundStyle(.white.opacity(0.9))
                         Text(draft.date.formatted(.dateTime.year().month(.abbreviated).day().weekday(.abbreviated)))
-                            .font(.system(size: 10))
+                            .appText(.secondary)
                             .foregroundStyle(.white.opacity(0.42))
                     }
                     Spacer(minLength: 8)
                     Button("Cancel") { store.cancelEditingTime() }
-                        .buttonStyle(MarkdownToolbarButtonStyle())
+                        .buttonStyle(DailyPlanToolbarButtonStyle())
                 }
                 .padding(.horizontal, 12)
-                .frame(height: 52)
+                .frame(height: max(52, typography.lineHeight(.sectionTitle) + typography.lineHeight(.secondary) + 16))
 
                 Divider().overlay(.white.opacity(0.08))
 
@@ -36,11 +38,11 @@ struct DailyPlanTimeEditor: View {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(alignment: .firstTextBaseline) {
                             Label("Daily total", systemImage: "clock")
-                                .font(.system(size: 11, weight: .medium))
+                                .appText(.control)
                                 .foregroundStyle(.white.opacity(0.55))
                             Spacer()
                             Text(durationText(draft.totalSeconds))
-                                .font(.system(size: 21, weight: .medium, design: .rounded))
+                                .appText(.timeInput)
                                 .monospacedDigit()
                                 .foregroundStyle(.orange.opacity(0.95))
                         }
@@ -51,19 +53,19 @@ struct DailyPlanTimeEditor: View {
                         }
 
                         Text("Adjust time by plan, or log extra time under Other focus. Pomodoro rounds stay unchanged; continuous timers follow the remaining daily target.")
-                            .font(.system(size: 10))
+                            .appText(.compact, weight: .regular)
                             .foregroundStyle(.white.opacity(0.38))
                             .fixedSize(horizontal: false, vertical: true)
 
                         if draft.totalSeconds > 24 * 60 * 60 {
                             Text("Daily focus time cannot exceed 24 hours.")
-                                .font(.system(size: 10))
+                                .appText(.compact, weight: .regular)
                                 .foregroundStyle(.orange)
                         }
 
                         if let error = store.lastError {
                             Text(error)
-                                .font(.system(size: 10))
+                                .appText(.compact, weight: .regular)
                                 .foregroundStyle(.orange.opacity(0.85))
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -74,7 +76,7 @@ struct DailyPlanTimeEditor: View {
                 Divider().overlay(.white.opacity(0.08))
                 HStack {
                     Text("Hours · Minutes")
-                        .font(.system(size: 10))
+                        .appText(.compact, weight: .regular)
                         .foregroundStyle(.white.opacity(0.35))
                     Spacer()
                     Button("Save") { store.commitTimeDraft() }
@@ -83,7 +85,7 @@ struct DailyPlanTimeEditor: View {
                         .opacity(draft.canCommit ? 1 : 0.35)
                 }
                 .padding(.horizontal, 12)
-                .frame(height: 44)
+                .frame(height: max(44, typography.lineHeight(.compact) + typography.controlHeight(base: 29) + 10))
             }
             .background(background)
             .onExitCommand { store.cancelEditingTime() }
@@ -94,14 +96,14 @@ struct DailyPlanTimeEditor: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Text(entry.title)
-                    .font(.system(size: 12, weight: .medium))
+                    .appText(.control)
                     .foregroundStyle(.white.opacity(0.82))
                     .lineLimit(1)
                     .help(entry.title)
                 Spacer(minLength: 0)
                 if entry.isChanged {
                     Text("Edited")
-                        .font(.system(size: 9, weight: .medium))
+                        .appText(.compact)
                         .foregroundStyle(.orange.opacity(0.8))
                 }
             }
@@ -137,21 +139,22 @@ struct DailyPlanTimeEditor: View {
                 }
             ))
             .textFieldStyle(.plain)
-            .font(.system(size: 13, weight: .medium, design: .rounded))
+            .font(typography.font(.timeInput))
+            .frame(minHeight: typography.lineHeight(.timeInput))
             .monospacedDigit()
             .multilineTextAlignment(.trailing)
             .foregroundStyle(.white.opacity(0.9))
-            .frame(minWidth: 24, maxWidth: .infinity)
+            .frame(minWidth: timeInputMinimumWidth, maxWidth: .infinity)
             .accessibilityLabel("\(entry.title) \(label.lowercased())")
             .focused($focusedField, equals: DurationField(planID: entry.id, isHours: isHours))
             .onSubmit { store.commitTimeDraft() }
 
             Text(isHours ? "h" : "min")
-                .font(.system(size: 10))
+                .appText(.compact, weight: .regular)
                 .foregroundStyle(.white.opacity(0.4))
         }
         .padding(.horizontal, 10)
-        .frame(height: 32)
+        .frame(minHeight: max(32, typography.lineHeight(.timeInput) + 8))
         .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.055)))
         .overlay {
             RoundedRectangle(cornerRadius: 6)
@@ -164,5 +167,13 @@ struct DailyPlanTimeEditor: View {
     private func durationText(_ seconds: TimeInterval) -> String {
         let minutes = max(Int(seconds / 60), 0)
         return "\(minutes / 60)h \(minutes % 60)m"
+    }
+
+    private var timeInputMinimumWidth: CGFloat {
+        let font = NSFont.monospacedDigitSystemFont(
+            ofSize: typography.size(.timeInput),
+            weight: .medium
+        )
+        return ceil(("24" as NSString).size(withAttributes: [.font: font]).width + 8)
     }
 }

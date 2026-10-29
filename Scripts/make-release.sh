@@ -15,7 +15,7 @@ ARCHIVE_PATH="$RELEASE_ROOT/$ARCHIVE_NAME"
 
 if [[ -z "$VERSION" || -z "$BUILD" ]]; then
   echo "usage: $0 <semantic-version> <positive-build-number>" >&2
-  echo "example: SIGN_IDENTITY='Developer ID Application: …' $0 1.0.0 13" >&2
+  echo "example: SIGN_IDENTITY='Developer ID Application: …' $0 1.0.1 14" >&2
   exit 1
 fi
 

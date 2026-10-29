@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 enum MarkdownCommand: CaseIterable, Identifiable {
@@ -66,6 +67,18 @@ final class EditorInteractionState: ObservableObject {
 
         if pendingFocus {
             focusEditor()
+        }
+    }
+
+    func unbind(textView: NSTextView) {
+        guard self.textView === textView else { return }
+        self.textView = nil
+        if observedSelectionTextView === textView {
+            if let selectionObserver {
+                NotificationCenter.default.removeObserver(selectionObserver)
+            }
+            selectionObserver = nil
+            observedSelectionTextView = nil
         }
     }
 
@@ -427,23 +440,168 @@ final class EditorInteractionState: ObservableObject {
 
 struct EditorFocusBinder: NSViewRepresentable {
     let state: EditorInteractionState
+    let typography: NoteEditorTypographyState
+    let documentId: String
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
-        bind(from: view)
+        typography.prepareForDocument(documentId)
+        context.coordinator.bind(from: view, state: state, typography: typography, documentId: documentId)
         return view
     }
 
     func updateNSView(_ view: NSView, context: Context) {
-        bind(from: view)
+        typography.prepareForDocument(documentId)
+        context.coordinator.bind(from: view, state: state, typography: typography, documentId: documentId)
     }
 
-    private func bind(from view: NSView) {
-        DispatchQueue.main.async {
-            let container = view.superview
-            let textView = container?.firstDescendant(ofType: NSTextView.self)
-                ?? view.firstAncestorDescendant(ofType: NSTextView.self)
-            state.bind(containerView: container, textView: textView)
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.unbind()
+    }
+
+    @MainActor
+    final class Coordinator {
+        private weak var boundTextView: NSTextView?
+        private weak var interactionState: EditorInteractionState?
+        private weak var typography: NoteEditorTypographyState?
+        private var settingsObserver: AnyCancellable?
+        private var notificationObservers: [NSObjectProtocol] = []
+        private var keyDownMonitor: Any?
+        private var deferredApplyTimer: Timer?
+        private var bindGeneration = 0
+        private var isActive = true
+
+        func bind(from view: NSView, state: EditorInteractionState, typography: NoteEditorTypographyState, documentId: String) {
+            isActive = true
+            bindGeneration += 1
+            let generation = bindGeneration
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self,
+                      let view,
+                      self.isActive,
+                      self.bindGeneration == generation else { return }
+                let container = view.superview
+                let textView = container?.firstDescendant(ofType: NSTextView.self)
+                    ?? view.firstAncestorDescendant(ofType: NSTextView.self)
+                guard let textView else { return }
+
+                if self.boundTextView !== textView {
+                    self.unbind()
+                    self.isActive = true
+                    self.boundTextView = textView
+                    self.interactionState = state
+                    self.typography = typography
+                    self.installTypographyObservation(for: textView)
+                }
+
+                state.bind(containerView: container, textView: textView)
+                typography.bind(to: textView, documentId: documentId)
+                self.checkDeferredFontSize(in: textView)
+            }
+        }
+
+        func unbind() {
+            isActive = false
+            bindGeneration += 1
+            deferredApplyTimer?.invalidate()
+            deferredApplyTimer = nil
+            if let keyDownMonitor {
+                NSEvent.removeMonitor(keyDownMonitor)
+            }
+            keyDownMonitor = nil
+            settingsObserver?.cancel()
+            settingsObserver = nil
+            notificationObservers.forEach(NotificationCenter.default.removeObserver(_:))
+            notificationObservers.removeAll()
+
+            if let boundTextView {
+                typography?.unbind(from: boundTextView)
+                interactionState?.unbind(textView: boundTextView)
+            }
+            boundTextView = nil
+            interactionState = nil
+            typography = nil
+        }
+
+        private func installTypographyObservation(for textView: NSTextView) {
+            guard let typography else { return }
+            settingsObserver = typography.settingsStore.$noteFontSize
+                .dropFirst()
+                .sink { [weak self, weak textView] _ in
+                    Task { @MainActor [weak self, weak textView] in
+                        guard let self, let textView,
+                              self.isActive, self.boundTextView === textView,
+                              let typography = self.typography else { return }
+                        // The publisher fires before the property is stored.
+                        // Read it on this actor turn so rapid changes always
+                        // apply the latest preference, including normalization.
+                        typography.receiveRequestedFontSize(typography.settingsStore.noteFontSize, in: textView)
+                        self.checkDeferredFontSize(in: textView)
+                    }
+                }
+
+            let center = NotificationCenter.default
+            notificationObservers = [
+                center.addObserver(forName: NSTextView.didChangeSelectionNotification, object: textView, queue: .main) { [weak self, weak textView] _ in
+                    Task { @MainActor [weak self, weak textView] in
+                        guard let self, let textView else { return }
+                        self.checkDeferredFontSize(in: textView)
+                    }
+                },
+                center.addObserver(forName: NSText.didChangeNotification, object: textView, queue: .main) { [weak self, weak textView] _ in
+                    Task { @MainActor [weak self, weak textView] in
+                        guard let self, let textView else { return }
+                        self.checkDeferredFontSize(in: textView)
+                    }
+                }
+            ]
+
+            keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self, weak textView] event in
+                guard let self, let textView else { return event }
+                let consumed = MainActor.assumeIsolated {
+                    self.handleKeyDown(event, in: textView)
+                }
+                return consumed ? nil : event
+            }
+        }
+
+        private func checkDeferredFontSize(in textView: NSTextView) {
+            guard isActive, boundTextView === textView else { return }
+            typography?.editingSessionMayHaveEnded(in: textView)
+
+            guard typography?.hasDeferredFontSize == true else {
+                deferredApplyTimer?.invalidate()
+                deferredApplyTimer = nil
+                return
+            }
+
+            guard deferredApplyTimer == nil else { return }
+            let timer = Timer(timeInterval: 0.15, repeats: true) { [weak self, weak textView] timer in
+                let shouldContinue = MainActor.assumeIsolated {
+                    guard let self, let textView, self.isActive, self.boundTextView === textView else { return false }
+                    self.typography?.editingSessionMayHaveEnded(in: textView)
+                    let stillPending = self.typography?.hasDeferredFontSize == true
+                    if !stillPending { self.deferredApplyTimer = nil }
+                    return stillPending
+                }
+                if !shouldContinue { timer.invalidate() }
+            }
+            deferredApplyTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
+
+        private func handleKeyDown(_ event: NSEvent, in textView: NSTextView) -> Bool {
+            guard let window = textView.window,
+                  window.isKeyWindow,
+                  NSApp.keyWindow === window,
+                  window.firstResponder === textView,
+                  let action = NoteFontSizeShortcut.action(for: event) else { return false }
+            typography?.applyShortcut(action)
+            return true
         }
     }
 }

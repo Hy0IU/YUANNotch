@@ -7,6 +7,7 @@ import SwiftUI
 /// there is no "completed" section and no clear-completed affordance.
 struct RemindersPanelView: View {
     @ObservedObject var store: ReminderStore
+    @Environment(\.appTypography) private var typography
     /// Owns the sort preference, as it owns every persisted choice. Observed
     /// so picking a new order re-sorts the list in this update, rather than
     /// waiting for the next store commit; `store` reads the same value when
@@ -142,7 +143,7 @@ struct RemindersPanelView: View {
 
             if store.failedWriteCount > 0 {
                 Text("\(store.failedWriteCount) not written")
-                    .font(.system(size: 11))
+                    .appText(.secondary)
                     .foregroundStyle(.orange.opacity(0.85))
             }
 
@@ -155,12 +156,12 @@ struct RemindersPanelView: View {
             .help("Reload from Reminders")
         }
         .padding(.horizontal, 10)
-        .frame(height: 34)
+        .frame(height: max(34, typography.controlHeight() + 10))
     }
 
     private var listViewStrip: some View {
         let listViews = store.listViews
-        return ReminderListStripScroll(height: 24) {
+        return ReminderListStripScroll(height: typography.controlHeight()) {
             HStack(spacing: 6) {
                 ForEach(listViews) { list in
                     let index = listViews.firstIndex(where: { $0.id == list.id }) ?? 0
@@ -223,7 +224,7 @@ struct RemindersPanelView: View {
             .coordinateSpace(name: "reminderListStrip")
             .onPreferenceChange(ReminderListFramePreferenceKey.self) { listViewFrames = $0 }
         }
-        .frame(height: 24)
+        .frame(height: typography.controlHeight())
         .frame(maxWidth: .infinity, alignment: .leading)
         .layoutPriority(1)
     }
@@ -307,14 +308,14 @@ struct RemindersPanelView: View {
     private var draftField: some View {
         TextField(Self.draftPlaceholder, text: $composer.draft)
             .textFieldStyle(.plain)
-            .font(.system(size: 13))
+            .appText(.body)
             .foregroundStyle(.white.opacity(0.9))
             .fieldCaretFocus(request: draftFocusRequest, placeholder: Self.draftPlaceholder)
             .onSubmit(commit)
             .help("例如：28号晚上10点买药、半小时后取快递")
             .padding(.horizontal, 9)
             .frame(maxWidth: .infinity)
-            .frame(height: 28)
+            .frame(minHeight: typography.controlHeight(base: 28))
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(.white.opacity(0.045))
@@ -324,9 +325,9 @@ struct RemindersPanelView: View {
     private var addButton: some View {
         Button(action: commit) {
             Text("Add")
-                .font(.system(size: 12, weight: .medium))
+                .appText(.control)
                 .padding(.horizontal, 11)
-                .frame(height: 28)
+                .frame(minHeight: typography.controlHeight(base: 28))
                 .contentShape(Rectangle())
         }
         .buttonStyle(MarkdownToolbarButtonStyle())
@@ -420,7 +421,7 @@ struct RemindersPanelView: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.white.opacity(0.5))
             Text(title)
-                .font(.system(size: 11, weight: .medium))
+                .appText(.secondary, weight: .medium)
                 .foregroundStyle(composer.inputMatch != nil && !composer.hasManualDueSelection ? .orange.opacity(0.9) : .white.opacity(0.82))
                 .lineLimit(1)
             Image(systemName: "chevron.down")
@@ -428,7 +429,7 @@ struct RemindersPanelView: View {
                 .foregroundStyle(.white.opacity(0.4))
         }
         .padding(.horizontal, 8)
-        .frame(height: 22)
+        .frame(minHeight: typography.controlHeight(base: 22))
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(.white.opacity(0.05))
@@ -446,7 +447,7 @@ struct RemindersPanelView: View {
                     DatePicker("", selection: customDateBinding, displayedComponents: [.date])
                         .labelsHidden()
                         .datePickerStyle(.compact)
-                        .font(.system(size: 12))
+                        .appText(.control, weight: .regular)
                         // The panel paints itself dark regardless of system
                         // appearance. The menus around it draw their own colors,
                         // but the picker's compact style is system chrome — it
@@ -464,7 +465,7 @@ struct RemindersPanelView: View {
                     DatePicker("Due time", selection: customTimeBinding, displayedComponents: [.hourAndMinute])
                         .labelsHidden()
                         .datePickerStyle(.stepperField)
-                        .font(.system(size: 12))
+                        .appText(.control, weight: .regular)
                         .environment(\.colorScheme, .dark)
                         .fixedSize()
                     Spacer(minLength: 0)
@@ -487,7 +488,7 @@ struct RemindersPanelView: View {
 
     private func rowLabel(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11))
+            .appText(.secondary)
             .foregroundStyle(.white.opacity(0.45))
             .frame(width: Self.rowLabelWidth, alignment: .leading)
     }
@@ -585,7 +586,7 @@ struct RemindersPanelView: View {
     private func groupHeader(_ title: String) -> some View {
         HStack(spacing: 8) {
             Text(title)
-                .font(.system(size: 11, weight: .medium))
+                .appText(.secondary, weight: .medium)
                 .foregroundStyle(.white.opacity(0.42))
             Rectangle()
                 .fill(.white.opacity(0.07))
@@ -636,7 +637,7 @@ struct RemindersPanelView: View {
             // height is asked for explicitly, or the text is laid out against the
             // row's height and folds back onto one line.
             Text(item.title)
-                .font(.system(size: 13))
+                .appText(.body)
                 .foregroundStyle(.white.opacity(isCompleting ? 0.45 : (item.syncState == .idle ? 0.88 : 0.55)))
                 .strikethrough(isCompleting, pattern: .solid, color: .white.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
@@ -655,7 +656,7 @@ struct RemindersPanelView: View {
 
             if case .failed = item.syncState {
                 Text("not written")
-                    .font(.system(size: 10))
+                    .appText(.compact, weight: .regular)
                     .foregroundStyle(.orange.opacity(0.85))
             }
 
@@ -719,7 +720,7 @@ struct RemindersPanelView: View {
 
             TextField(Self.editPlaceholder, text: editDraftBinding)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .appText(.body)
                 .foregroundStyle(.white.opacity(0.9))
                 // Three ways to save, one pipeline: Return, the checkmark, and
                 // this — the field ending its editing session, whatever ended it.
@@ -783,7 +784,7 @@ struct RemindersPanelView: View {
             } label: {
                 if let dueDate = item.dueDate {
                     Text(Self.dueText(for: dueDate, isAllDay: item.isDueDateAllDay))
-                        .font(.system(size: 11))
+                        .appText(.secondary)
                         .monospacedDigit()
                         .foregroundStyle(.white.opacity(0.45))
                 } else {
@@ -801,7 +802,7 @@ struct RemindersPanelView: View {
             .accessibilityLabel("Edit due date for \(item.title)")
         } else if let dueDate = item.dueDate {
             Text(Self.dueText(for: dueDate, isAllDay: item.isDueDateAllDay))
-                .font(.system(size: 11))
+                .appText(.secondary)
                 .foregroundStyle(.white.opacity(0.45))
                 .monospacedDigit()
         }
@@ -833,33 +834,33 @@ struct RemindersPanelView: View {
     private func undoBar(_ undo: ReminderStore.PendingUndo) -> some View {
         HStack(spacing: 8) {
             Text("\"\(undo.title)\" \(undo.verb == .completed ? "completed" : "deleted")")
-                .font(.system(size: 12))
+                .appText(.control, weight: .regular)
                 .foregroundStyle(.white.opacity(0.75))
                 .lineLimit(1)
 
             Spacer(minLength: 8)
 
             Button("Undo") { withAnimation { store.undoLatestPendingWrite() } }
-                .font(.system(size: 12, weight: .medium))
+                .appText(.control)
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(0.9))
         }
         .padding(.horizontal, 12)
-        .frame(height: 30)
+        .frame(minHeight: 30)
         .background(.white.opacity(0.08))
     }
 
     private func errorBar(_ message: String) -> some View {
         HStack(spacing: 8) {
             Text(message)
-                .font(.system(size: 11))
+                .appText(.secondary)
                 .foregroundStyle(.orange.opacity(0.9))
                 .lineLimit(2)
 
             Spacer(minLength: 8)
 
             Button("Dismiss") { store.dismissError() }
-                .font(.system(size: 11))
+                .appText(.secondary)
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(0.8))
         }
@@ -872,10 +873,10 @@ struct RemindersPanelView: View {
         VStack(spacing: 6) {
             Spacer()
             Text("No reminders in this list")
-                .font(.system(size: 13))
+                .appText(.body)
                 .foregroundStyle(.white.opacity(0.6))
             Text("Create one above — it is written to Apple Reminders.")
-                .font(.system(size: 11))
+                .appText(.secondary)
                 .foregroundStyle(.white.opacity(0.4))
             Spacer()
         }
@@ -894,12 +895,12 @@ struct RemindersPanelView: View {
                 .foregroundStyle(.white.opacity(0.35))
 
             Text(guidanceTitle)
-                .font(.system(size: 13, weight: .medium))
+                .appText(.sectionTitle)
                 .foregroundStyle(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
 
             Text(guidanceBody)
-                .font(.system(size: 11))
+                .appText(.secondary)
                 .foregroundStyle(.white.opacity(0.45))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 300)
@@ -907,10 +908,10 @@ struct RemindersPanelView: View {
             HStack(spacing: 8) {
                 ForEach(Array(guidanceActions.enumerated()), id: \.offset) { _, action in
                     Button(action.title, action: action.handler)
-                        .font(.system(size: 12, weight: .medium))
+                        .appText(.control)
                         .buttonStyle(.plain)
                         .padding(.horizontal, 12)
-                        .frame(height: 26)
+                        .frame(minHeight: typography.controlHeight(base: 26))
                         .background(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
                                 .fill(.white.opacity(0.09))

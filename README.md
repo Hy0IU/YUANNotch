@@ -54,7 +54,15 @@ Reminders 条目中的日期可以直接点击修改；无日期条目在悬停�
 
 在 Plans 页面点击 **Add Daily Plan** 可以设置目标时长、启用日期和番茄钟节奏。点击计划右侧的播放按钮开始计时；Today 会把当前倒计时固定在计划列表上方，并显示当天整体与单项进度。专注阶段计入每日目标，休息阶段不计入。
 
+Plans 以本地时间每天 **04:00** 为新一天的起点，00:00–03:59 的专注仍计入上一日。到点后会结算上一日的专注时间、归零新一天的进度，并结束所有运行及暂停的计时，让全部计划回到收起的列表状态；不会自动开始新一轮。电脑睡眠或应用退出期间错过刷新，会在唤醒或下次启动后补做，计时只结算到错过的第一个 04:00。历史记录保留不清空，Today、启用日期和 History 使用同一日界线。
+
 点击 Today 总进度旁的铅笔，或 History 中的历史日期，可以按计划修改当天的学习时长（小时和分钟）；额外的学习时间可填入 **Other focus**。保存后总时长、单项进度和历史日历同步更新，已删除计划的历史记录也可以修改。未修改的记录保留原有秒数，番茄钟保持当前节奏；连续计时按修正后的剩余目标更新倒计时，达到目标时结束。每日合计最多 24 小时，未来日期不可编辑。
+
+### 调整字号
+
+在 **设置 → Appearance → Text** 中，界面字号可选择 Compact、Standard 或 Larger；笔记正文可独立设置为 12–24 pt，默认 15 pt。修改即时生效，重启后保留，面板尺寸仍由你自己调整。
+
+在笔记正文中编辑时，使用 **⌘+**（也支持 **⌘=**）放大、**⌘−** 缩小，**⌘0** 恢复 15 pt。这只调整显示字号，不改变 Markdown 内容；提醒事项、设置和其他输入框不会响应这些笔记快捷键。
 
 ### 使用暂存区
 
@@ -93,10 +101,10 @@ bash Scripts/package-app.sh
 
 ## 制作发布安装包
 
-发布脚本默认生成 DMG 和 SHA-256 校验文件，放在 `.release/`，不会替换 `/Applications` 中正在使用的应用。传入计划发布的版本号和递增构建号，例如：
+当前版本为 **1.0.1**，构建号为 **14**。发布脚本默认生成 DMG 和 SHA-256 校验文件，放在 `.release/`，不会替换 `/Applications` 中正在使用的应用。传入计划发布的版本号和递增构建号，例如：
 
 ```bash
-bash Scripts/make-release.sh 1.0.0 13
+bash Scripts/make-release.sh 1.0.1 14
 ```
 
 DMG 内含应用、Applications 链接和安装引导背景，挂载时会请求 Finder 打开安装窗口。布局工具直接生成镜像元数据，不需要控制 Finder，也不需要安装额外依赖。脚本同时生成 `*-preview.png` 合成效果图，便于检查设计；它不是 Finder 实际截图。
@@ -104,7 +112,7 @@ DMG 内含应用、Applications 链接和安装引导背景，挂载时会请求
 如需同时保留 ZIP 下载，设置 `INCLUDE_ZIP=1`：
 
 ```bash
-INCLUDE_ZIP=1 bash Scripts/make-release.sh 1.0.0 13
+INCLUDE_ZIP=1 bash Scripts/make-release.sh 1.0.1 14
 ```
 
 正式分发时，使用有效的 Developer ID Application 证书和已经配置好的 `notarytool` 钥匙串配置：
@@ -112,7 +120,7 @@ INCLUDE_ZIP=1 bash Scripts/make-release.sh 1.0.0 13
 ```bash
 SIGN_IDENTITY='Developer ID Application: …' \
 NOTARY_PROFILE='your-notary-profile' \
-bash Scripts/make-release.sh 1.0.0 13
+bash Scripts/make-release.sh 1.0.1 14
 ```
 
 脚本会签名应用和 DMG，等待 Apple 公证、附加并验证公证票据，最后计算校验值；任一步骤失败都会停止。仅设置 `SIGN_IDENTITY` 不会自动公证。启用 ZIP 时，也会公证并附加 ZIP 内应用的票据。
@@ -120,8 +128,8 @@ bash Scripts/make-release.sh 1.0.0 13
 发布前可校验压缩镜像、应用签名、Finder 布局、重新挂载后的背景引用和自动打开标记：
 
 ```bash
-bash Scripts/dmg-probe.sh .release/YUANNotch-1.0.0.dmg
-(cd .release && shasum -a 256 -c YUANNotch-1.0.0.dmg.sha256)
+bash Scripts/dmg-probe.sh .release/YUANNotch-1.0.1.dmg
+(cd .release && shasum -a 256 -c YUANNotch-1.0.1.dmg.sha256)
 ```
 
 最后在目标 macOS 上双击 DMG，检查 Finder 实际显示和拖拽安装，再将 DMG 与校验文件上传到对应的 GitHub Release。

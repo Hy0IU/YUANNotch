@@ -36,37 +36,37 @@ final class AppSettingsStore: ObservableObject {
     /// `NotebookWorkspaceState.fileDragForcesNotesMode`.
     @Published var drawerMode: DrawerMode {
         didSet {
-            UserDefaults.standard.set(drawerMode.rawValue, forKey: Self.drawerModeKey)
+            defaults.set(drawerMode.rawValue, forKey: Self.drawerModeKey)
         }
     }
 
     @Published var triggerMode: TriggerMode {
         didSet {
-            UserDefaults.standard.set(triggerMode.rawValue, forKey: Self.triggerModeKey)
+            defaults.set(triggerMode.rawValue, forKey: Self.triggerModeKey)
         }
     }
 
     @Published var hoverActivationDelay: Double {
         didSet {
-            UserDefaults.standard.set(hoverActivationDelay, forKey: Self.hoverActivationDelayKey)
+            defaults.set(hoverActivationDelay, forKey: Self.hoverActivationDelayKey)
         }
     }
 
     @Published var customExpandedSize: CGSize? {
         didSet {
             if let size = customExpandedSize {
-                UserDefaults.standard.set(size.width, forKey: Self.expandedWidthKey)
-                UserDefaults.standard.set(size.height, forKey: Self.expandedHeightKey)
+                defaults.set(size.width, forKey: Self.expandedWidthKey)
+                defaults.set(size.height, forKey: Self.expandedHeightKey)
             } else {
-                UserDefaults.standard.removeObject(forKey: Self.expandedWidthKey)
-                UserDefaults.standard.removeObject(forKey: Self.expandedHeightKey)
+                defaults.removeObject(forKey: Self.expandedWidthKey)
+                defaults.removeObject(forKey: Self.expandedHeightKey)
             }
         }
     }
 
     @Published var isFileShelfEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(isFileShelfEnabled, forKey: Self.fileShelfEnabledKey)
+            defaults.set(isFileShelfEnabled, forKey: Self.fileShelfEnabledKey)
         }
     }
 
@@ -74,13 +74,13 @@ final class AppSettingsStore: ObservableObject {
     /// stays fixed; the reveal animation interpolates toward these values.
     @Published var expandedTopCornerRadius: Double {
         didSet {
-            UserDefaults.standard.set(expandedTopCornerRadius, forKey: Self.expandedTopCornerRadiusKey)
+            defaults.set(expandedTopCornerRadius, forKey: Self.expandedTopCornerRadiusKey)
         }
     }
 
     @Published var expandedBottomCornerRadius: Double {
         didSet {
-            UserDefaults.standard.set(expandedBottomCornerRadius, forKey: Self.expandedBottomCornerRadiusKey)
+            defaults.set(expandedBottomCornerRadius, forKey: Self.expandedBottomCornerRadiusKey)
         }
     }
 
@@ -89,7 +89,7 @@ final class AppSettingsStore: ObservableObject {
     /// panel has nothing to read or write.
     @Published var isAppleRemindersSyncEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(isAppleRemindersSyncEnabled, forKey: Self.appleRemindersEnabledKey)
+            defaults.set(isAppleRemindersSyncEnabled, forKey: Self.appleRemindersEnabledKey)
         }
     }
 
@@ -99,9 +99,9 @@ final class AppSettingsStore: ObservableObject {
     @Published var remindersCalendarIdentifier: String? {
         didSet {
             if let identifier = remindersCalendarIdentifier {
-                UserDefaults.standard.set(identifier, forKey: Self.appleRemindersListIDKey)
+                defaults.set(identifier, forKey: Self.appleRemindersListIDKey)
             } else {
-                UserDefaults.standard.removeObject(forKey: Self.appleRemindersListIDKey)
+                defaults.removeObject(forKey: Self.appleRemindersListIDKey)
             }
         }
     }
@@ -112,9 +112,9 @@ final class AppSettingsStore: ObservableObject {
     @Published var reminderListViewIdentifiers: [String] {
         didSet {
             if reminderListViewIdentifiers.isEmpty {
-                UserDefaults.standard.removeObject(forKey: Self.appleRemindersListViewsKey)
+                defaults.removeObject(forKey: Self.appleRemindersListViewsKey)
             } else {
-                UserDefaults.standard.set(
+                defaults.set(
                     reminderListViewIdentifiers,
                     forKey: Self.appleRemindersListViewsKey
                 )
@@ -131,8 +131,30 @@ final class AppSettingsStore: ObservableObject {
     /// surface, so what was just added is what should be found first.
     @Published var reminderSortOrder: ReminderSortOrder = .added {
         didSet {
-            UserDefaults.standard.set(reminderSortOrder.rawValue, forKey: Self.reminderSortOrderKey)
+            defaults.set(reminderSortOrder.rawValue, forKey: Self.reminderSortOrderKey)
         }
+    }
+
+    /// The interface text scale is shared by the app's controls and settings.
+    @Published var interfaceTextSize: InterfaceTextSize {
+        didSet {
+            defaults.set(interfaceTextSize.rawValue, forKey: Self.interfaceTextSizeKey)
+        }
+    }
+
+    /// Note text has its own point size, independent of the interface scale.
+    @Published var noteFontSize: Double {
+        didSet {
+            let normalized = AppTypography.normalizedNoteFontSize(noteFontSize)
+            if noteFontSize != normalized {
+                noteFontSize = normalized
+            }
+            defaults.set(normalized, forKey: Self.noteFontSizeKey)
+        }
+    }
+
+    var typography: AppTypography {
+        AppTypography(interfaceSize: interfaceTextSize, noteFontSize: CGFloat(noteFontSize))
     }
 
     static let defaultExpandedTopCornerRadius: Double = 10
@@ -152,54 +174,68 @@ final class AppSettingsStore: ObservableObject {
     private static let appleRemindersListIDKey = "yuanNotch.appleReminders.listID"
     private static let appleRemindersListViewsKey = "yuanNotch.appleReminders.listViews"
     private static let reminderSortOrderKey = "yuanNotch.appleReminders.sortOrder"
+    static let interfaceTextSizeKey = "yuanNotch.typography.interfaceSize"
+    static let noteFontSizeKey = "yuanNotch.typography.noteFontSize"
 
-    init() {
-        drawerMode = UserDefaults.standard.string(forKey: Self.drawerModeKey)
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+
+        drawerMode = defaults.string(forKey: Self.drawerModeKey)
             .flatMap(DrawerMode.init(rawValue:)) ?? .notes
 
-        let rawMode = UserDefaults.standard.string(forKey: Self.triggerModeKey)
+        let rawMode = defaults.string(forKey: Self.triggerModeKey)
         triggerMode = rawMode.flatMap(TriggerMode.init(rawValue:)) ?? .hover
 
-        let storedHoverDelay = UserDefaults.standard.object(forKey: Self.hoverActivationDelayKey) == nil
+        let storedHoverDelay = defaults.object(forKey: Self.hoverActivationDelayKey) == nil
             ? Self.defaultHoverActivationDelay
-            : UserDefaults.standard.double(forKey: Self.hoverActivationDelayKey)
+            : defaults.double(forKey: Self.hoverActivationDelayKey)
         hoverActivationDelay = min(
             max(storedHoverDelay, Self.hoverActivationDelayRange.lowerBound),
             Self.hoverActivationDelayRange.upperBound
         )
 
-        let w = UserDefaults.standard.double(forKey: Self.expandedWidthKey)
-        let h = UserDefaults.standard.double(forKey: Self.expandedHeightKey)
+        let w = defaults.double(forKey: Self.expandedWidthKey)
+        let h = defaults.double(forKey: Self.expandedHeightKey)
         customExpandedSize = (w > 0 && h > 0) ? CGSize(width: w, height: h) : nil
 
-        isFileShelfEnabled = UserDefaults.standard.object(forKey: Self.fileShelfEnabledKey) as? Bool ?? true
+        isFileShelfEnabled = defaults.object(forKey: Self.fileShelfEnabledKey) as? Bool ?? true
 
         expandedTopCornerRadius = Self.loadRadius(
+            defaults: defaults,
             forKey: Self.expandedTopCornerRadiusKey,
             fallback: Self.defaultExpandedTopCornerRadius
         )
         expandedBottomCornerRadius = Self.loadRadius(
+            defaults: defaults,
             forKey: Self.expandedBottomCornerRadiusKey,
             fallback: Self.defaultExpandedBottomCornerRadius
         )
 
-        isAppleRemindersSyncEnabled = UserDefaults.standard
+        isAppleRemindersSyncEnabled = defaults
             .object(forKey: Self.appleRemindersEnabledKey) as? Bool ?? false
-        let storedReminderListID = UserDefaults.standard
+        let storedReminderListID = defaults
             .string(forKey: Self.appleRemindersListIDKey)
         remindersCalendarIdentifier = storedReminderListID
-        reminderListViewIdentifiers = UserDefaults.standard
+        reminderListViewIdentifiers = defaults
             .stringArray(forKey: Self.appleRemindersListViewsKey)
             ?? storedReminderListID.map { [$0] }
             ?? []
-        reminderSortOrder = UserDefaults.standard
+        reminderSortOrder = defaults
             .string(forKey: Self.reminderSortOrderKey)
             .flatMap(ReminderSortOrder.init(rawValue:)) ?? .added
+
+        interfaceTextSize = defaults.string(forKey: Self.interfaceTextSizeKey)
+            .flatMap(InterfaceTextSize.init(rawValue:)) ?? .standard
+        let storedNoteFontSize = (defaults.object(forKey: Self.noteFontSizeKey) as? NSNumber)?.doubleValue
+            ?? AppTypography.defaultNoteFontSize
+        noteFontSize = AppTypography.normalizedNoteFontSize(storedNoteFontSize)
     }
 
-    private static func loadRadius(forKey key: String, fallback: Double) -> Double {
-        guard UserDefaults.standard.object(forKey: key) != nil else { return fallback }
-        let value = UserDefaults.standard.double(forKey: key)
+    private static func loadRadius(defaults: UserDefaults, forKey key: String, fallback: Double) -> Double {
+        guard defaults.object(forKey: key) != nil else { return fallback }
+        let value = defaults.double(forKey: key)
         return value >= 0 ? value : fallback
     }
 }

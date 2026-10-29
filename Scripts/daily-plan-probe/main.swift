@@ -32,17 +32,17 @@ struct DailyPlanProbe {
         print("")
         print("— 1 · local-day accounting —")
 
-        let midnightStart = date(2026, 9, 22, 23, 55)
-        let midnightEnd = date(2026, 9, 23, 0, 5)
+        let midnightStart = date(2026, 9, 23, 3, 55)
+        let midnightEnd = date(2026, 9, 23, 4, 5)
         let split = DailyPlanEngine.splitFocusInterval(
             from: midnightStart,
             to: midnightEnd,
             calendar: calendar
         )
-        let firstDay = PlanDayKey(date: midnightStart, calendar: calendar)
+        let firstDay = PlanDayKey(date: date(2026, 9, 22, 12, 0), calendar: calendar)
         let secondDay = PlanDayKey(date: midnightEnd, calendar: calendar)
         check(
-            "a focus interval is split at local midnight",
+            "a focus interval is split at local 04:00",
             split[firstDay] == 300 && split[secondDay] == 300 && split.count == 2,
             "Sep 22 = \(Int(split[firstDay] ?? -1))s, Sep 23 = \(Int(split[secondDay] ?? -1))s"
         )
@@ -56,6 +56,27 @@ struct DailyPlanProbe {
             "DST does not assume a 24-hour day",
             dstSplit.values.reduce(0, +) == 600,
             "the spring-forward interval remains exactly \(Int(dstSplit.values.reduce(0, +)))s"
+        )
+        let dstBoundaryEnd = losAngeles.date(from: DateComponents(year: 2026, month: 3, day: 8, hour: 4, minute: 5))!
+        let dstBoundarySplit = DailyPlanEngine.splitFocusInterval(from: dstStart, to: dstBoundaryEnd, calendar: losAngeles)
+        let dstPreviousDay = PlanDayKey(
+            date: losAngeles.date(from: DateComponents(year: 2026, month: 3, day: 7, hour: 12))!,
+            calendar: losAngeles
+        )
+        check(
+            "the spring DST rollover still splits at wall-clock 04:00",
+            dstBoundarySplit[dstPreviousDay] == 65 * 60
+                && dstBoundarySplit[PlanDayKey(date: dstBoundaryEnd, calendar: losAngeles)] == 5 * 60,
+            "01:55–04:05 contains 65m before 04:00 and 5m after the skipped hour"
+        )
+        let fallStart = losAngeles.date(from: DateComponents(year: 2026, month: 10, day: 31, hour: 4))!
+        let fallEnd = losAngeles.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 4))!
+        let fallSplit = DailyPlanEngine.splitFocusInterval(from: fallStart, to: fallEnd, calendar: losAngeles)
+        check(
+            "the fall DST plan day includes the repeated hour",
+            fallSplit[PlanDayKey(date: fallStart, calendar: losAngeles)] == 25 * 60 * 60
+                && fallSplit.count == 1,
+            "04:00–04:00 spans 25 elapsed hours without changing its day label"
         )
 
         print("")
@@ -583,9 +604,9 @@ struct DailyPlanProbe {
             "the correction is not presented as saved; the draft can be retried"
         )
 
-        var rolloverClock = date(2026, 9, 24, 23, 55)
+        var rolloverClock = date(2026, 9, 25, 3, 55)
         let rolloverStore = DailyPlanStore(
-            persistence: DailyPlanPersistence(fileURL: tempRoot.appendingPathComponent("edit-midnight/plans.json")),
+            persistence: DailyPlanPersistence(fileURL: tempRoot.appendingPathComponent("edit-rollover/plans.json")),
             calendar: calendar, nowProvider: { rolloverClock }, startsTimer: false
         )
         rolloverStore.draft = DailyPlanDraft(title: "Late reading", targetMinutes: 60)
@@ -593,19 +614,25 @@ struct DailyPlanProbe {
         let latePlan = rolloverStore.plans[0]
         rolloverStore.start(latePlan, at: rolloverClock)
         rolloverClock = rolloverClock.addingTimeInterval(4 * 60)
-        let editedDay = rolloverClock
+        let editedDay = date(2026, 9, 24, 12, 0)
         rolloverStore.beginEditingTime(on: editedDay)
         rolloverStore.timeDraft!.entries[0].minutes = 20
         rolloverClock = rolloverClock.addingTimeInterval(2 * 60)
         rolloverStore.commitTimeDraft()
+        check(
+            "saving a draft after 04:00 does not revive yesterday's countdown",
+            rolloverStore.activeSession == nil && rolloverStore.todayFocusedSeconds == 0,
+            "yesterday's correction stays in history and all plans remain collapsed"
+        )
+        rolloverStore.start(latePlan, at: rolloverClock)
         rolloverClock = rolloverClock.addingTimeInterval(60)
         _ = rolloverStore.refresh(at: rolloverClock)
         check(
-            "a draft saved across midnight corrects only its original day",
+            "a draft saved across 04:00 corrects only its original plan day",
             rolloverStore.focusedSeconds(on: editedDay) == 20 * 60
                 && rolloverStore.todayFocusedSeconds == 60
                 && rolloverStore.activeSession?.isRunning == true,
-            "yesterday = 20m; the new day's restarted session adds only its own minute"
+            "yesterday = 20m; an explicitly started new session adds only its own minute"
         )
         rolloverStore.deletePlan(id: latePlan.id, at: rolloverClock)
         check(
@@ -675,6 +702,154 @@ struct DailyPlanProbe {
             continuousEditStore.activeSession == nil
                 && continuousEditStore.progress(for: continuousEditPlan) == 1,
             "the daily target is complete and no obsolete countdown remains"
+        )
+
+        print("")
+        print("— 6 · 04:00 rollover and collapsed plans —")
+        let boundaryPersistence = DailyPlanPersistence(fileURL: tempRoot.appendingPathComponent("boundary/plans.json"))
+        var boundaryClock = date(2026, 9, 24, 23, 50)
+        var boundaryNotifications = 0
+        let boundaryStore = DailyPlanStore(
+            persistence: boundaryPersistence, calendar: calendar,
+            nowProvider: { boundaryClock }, startsTimer: false,
+            onPhaseCompleted: { boundaryNotifications += 1 }
+        )
+        boundaryStore.draft = DailyPlanDraft(title: "Paused", targetMinutes: 60, pomodoro: .continuous)
+        boundaryStore.commitDraft()
+        boundaryStore.draft = DailyPlanDraft(
+            title: "Late work", targetMinutes: 120, activeWeekdays: [.thursday], pomodoro: .continuous
+        )
+        boundaryStore.commitDraft()
+        let pausedPlan = boundaryStore.plans[0]
+        let lateWork = boundaryStore.plans[1]
+        boundaryStore.start(pausedPlan)
+        boundaryClock = date(2026, 9, 24, 23, 55)
+        boundaryStore.start(lateWork)
+        boundaryClock = date(2026, 9, 25, 0, 5)
+        _ = boundaryStore.refresh(at: boundaryClock)
+        check(
+            "midnight preserves the selected countdown and previous plan day",
+            boundaryStore.phaseRemaining() == 110 * 60
+                && boundaryStore.todayFocusedSeconds == 15 * 60
+                && boundaryPersistence.load().pausedSessions[pausedPlan.id]?.phaseElapsed == 5 * 60,
+            "00:05 keeps 10m of Late work plus 5m of Paused in the same day"
+        )
+        check(
+            "before 04:00 the schedule and progress still belong to Thursday",
+            boundaryStore.isScheduledToday(lateWork)
+                && boundaryStore.todayTargetSeconds == 180 * 60
+                && boundaryStore.progress(for: lateWork) == 10.0 / 120.0,
+            "Friday at 00:05 retains Thursday's scheduled plans and focus totals"
+        )
+        boundaryStore.beginEditingTime(on: boundaryStore.today)
+        check(
+            "the early-morning Today editor uses yesterday's calendar label",
+            boundaryStore.timeDraft?.date == calendar.startOfDay(for: date(2026, 9, 24, 12, 0))
+                && boundaryStore.timeDraft?.entries.first(where: { $0.id == lateWork.id })?.originalSeconds == 10 * 60,
+            "the editor matches Today and Thursday's history cell"
+        )
+        boundaryStore.cancelEditingTime()
+        boundaryStore.beginEditingTime(on: calendar.startOfDay(for: boundaryClock))
+        check(
+            "the next plan day cannot be edited before its 04:00 boundary",
+            boundaryStore.timeDraft == nil,
+            "Friday's calendar cell is still in the future at 00:05"
+        )
+        boundaryStore.togglePause()
+        boundaryClock = date(2026, 9, 25, 3, 59, 59)
+        _ = boundaryStore.refresh(at: boundaryClock)
+        check(
+            "a paused card stays selected until 04:00",
+            boundaryStore.activeSession?.planID == lateWork.id
+                && boundaryStore.activeSession?.phaseElapsed == 10 * 60,
+            "the paused countdown is unchanged at 03:59:59"
+        )
+        boundaryClock = date(2026, 9, 25, 4, 0)
+        let didCollapse = boundaryStore.refresh(at: boundaryClock)
+        check(
+            "04:00 collapses all plans and clears their saved countdowns",
+            didCollapse && boundaryStore.activeSession == nil
+                && boundaryPersistence.load().activeSession == nil
+                && boundaryPersistence.load().pausedSessions.isEmpty
+                && boundaryStore.todayFocusedSeconds == 0
+                && boundaryStore.focusedSeconds(on: date(2026, 9, 24, 12, 0)) == 15 * 60
+                && boundaryNotifications == 0,
+            "all cards are compact, today's progress is zero, yesterday retains 15m"
+        )
+        check(
+            "04:00 advances the weekday schedule together with progress",
+            !boundaryStore.isScheduledToday(lateWork)
+                && boundaryStore.todayTargetSeconds == 60 * 60
+                && boundaryStore.progress(for: lateWork) == 0,
+            "Friday excludes Thursday-only targets and shows no previous-day focus"
+        )
+        check(
+            "repeating the daily refresh does not restart a timer",
+            !boundaryStore.refresh(at: boundaryClock) && boundaryStore.activeSession == nil,
+            "the same 04:00 tick is idempotent"
+        )
+        boundaryStore.start(pausedPlan)
+        check(
+            "the first start after rollover has a fresh countdown",
+            boundaryStore.phaseRemaining() == 60 * 60
+                && boundaryStore.activeSession?.completedFocusRounds == 0,
+            "no paused phase from yesterday is resumed"
+        )
+        boundaryStore.stopSession()
+
+        func checkMissedBoundary(_ label: String, wake: Date, relaunch: Bool) {
+            let persistence = DailyPlanPersistence(fileURL: tempRoot.appendingPathComponent("\(label)/plans.json"))
+            let start = date(2026, 9, 25, 3, 50)
+            let store = DailyPlanStore(
+                persistence: persistence, calendar: calendar, nowProvider: { start }, startsTimer: false
+            )
+            store.draft = DailyPlanDraft(title: "Overnight", targetMinutes: 120)
+            store.commitDraft()
+            store.start(store.plans[0])
+            let resumed: DailyPlanStore
+            if relaunch {
+                resumed = DailyPlanStore(
+                    persistence: persistence, calendar: calendar, nowProvider: { wake }, startsTimer: false
+                )
+            } else {
+                _ = store.refresh(at: wake)
+                resumed = store
+            }
+            check(
+                label,
+                resumed.activeSession == nil && persistence.load().pausedSessions.isEmpty
+                    && resumed.todayFocusedSeconds == 0
+                    && resumed.focusedSeconds(on: date(2026, 9, 24, 12, 0)) == 10 * 60
+                    && resumed.dayRecords.reduce(0) { $0 + $1.focusedSeconds } == 10 * 60,
+                "only 03:50–04:00 is recorded; no post-boundary work or selected card survives"
+            )
+        }
+        checkMissedBoundary("sleep past 04:00", wake: date(2026, 9, 25, 4, 5), relaunch: false)
+        checkMissedBoundary("sleep across multiple days", wake: date(2026, 9, 28, 9, 0), relaunch: false)
+        checkMissedBoundary("relaunch past 04:00", wake: date(2026, 9, 25, 4, 5), relaunch: true)
+
+        let phaseBoundaryPersistence = DailyPlanPersistence(fileURL: tempRoot.appendingPathComponent("phase-boundary/plans.json"))
+        let phaseBoundaryStart = date(2026, 9, 25, 3, 57, 30)
+        let phaseBoundaryStore = DailyPlanStore(
+            persistence: phaseBoundaryPersistence, calendar: calendar,
+            nowProvider: { phaseBoundaryStart }, startsTimer: false
+        )
+        phaseBoundaryStore.draft = DailyPlanDraft(
+            title: "Short rounds", targetMinutes: 60,
+            pomodoro: PomodoroConfiguration(
+                isEnabled: true, focusMinutes: 1, shortBreakMinutes: 1,
+                longBreakMinutes: 2, roundsBeforeLongBreak: 2
+            )
+        )
+        phaseBoundaryStore.commitDraft()
+        phaseBoundaryStore.start(phaseBoundaryStore.plans[0])
+        _ = phaseBoundaryStore.refresh(at: date(2026, 9, 25, 4, 5))
+        check(
+            "missed phase transitions settle focus but not breaks before 04:00",
+            phaseBoundaryStore.activeSession == nil
+                && phaseBoundaryStore.focusedSeconds(on: date(2026, 9, 24, 12, 0)) == 90
+                && phaseBoundaryStore.todayFocusedSeconds == 0,
+            "60s focus + 60s break + 30s focus contributes exactly 90s to yesterday"
         )
 
         print("")

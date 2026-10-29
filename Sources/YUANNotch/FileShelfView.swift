@@ -132,7 +132,7 @@ struct FileShelfView: View {
                 .font(.system(size: 9, weight: .semibold))
 
             Text("Release to add")
-                .font(.system(size: 10, weight: .semibold))
+                .appText(.compact, weight: .semibold)
         }
         .foregroundStyle(Color.white.opacity(0.58))
     }

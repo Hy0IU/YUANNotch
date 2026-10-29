@@ -15,6 +15,7 @@ struct DrawerModeToggle: View {
     let mode: DrawerMode
     let showsLabels: Bool
     let onSelect: (DrawerMode) -> Void
+    @Environment(\.appTypography) private var typography
 
     var body: some View {
         HStack(spacing: 2) {
@@ -27,12 +28,12 @@ struct DrawerModeToggle: View {
                             .font(.system(size: 10, weight: .semibold))
                         if showsLabels {
                             Text(candidate.title)
-                                .font(.system(size: 11, weight: candidate == mode ? .semibold : .regular))
+                                .appText(.control, weight: candidate == mode ? .semibold : .regular)
                         }
                     }
                     .foregroundStyle(.white.opacity(candidate == mode ? 0.88 : 0.48))
                     .padding(.horizontal, showsLabels ? 7 : 6)
-                    .frame(height: 24)
+                    .frame(height: max(24, typography.lineHeight(.control) + 4))
                     .background(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(.white.opacity(candidate == mode ? 0.1 : 0))

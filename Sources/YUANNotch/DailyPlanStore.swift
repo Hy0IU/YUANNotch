@@ -53,13 +53,18 @@ final class DailyPlanStore: NSObject, ObservableObject {
         return plans.first { $0.id == planID }
     }
 
+    /// Representative date for Today; before 04:00 this is yesterday's date.
+    var today: Date {
+        DailyPlanEngine.dayStart(containing: now, calendar: calendar)
+    }
+
     var plansForToday: [DailyPlan] {
-        let weekday = calendar.component(.weekday, from: now)
+        let weekday = calendar.component(.weekday, from: today)
         guard let day = DailyPlanWeekday(rawValue: weekday) else { return plans }
         return plans.filter {
             $0.activeWeekdays.contains(day)
                 || $0.id == activeSession?.planID
-                || focusedSeconds(for: $0.id, on: now) > 0
+                || focusedSeconds(for: $0.id, on: today) > 0
         }
     }
 
@@ -68,15 +73,16 @@ final class DailyPlanStore: NSObject, ObservableObject {
     }
 
     var todayFocusedSeconds: TimeInterval {
-        focusedSeconds(on: now)
+        focusedSeconds(on: today)
     }
 
     func isScheduledToday(_ plan: DailyPlan) -> Bool {
-        let weekday = calendar.component(.weekday, from: now)
+        let weekday = calendar.component(.weekday, from: today)
         guard let day = DailyPlanWeekday(rawValue: weekday) else { return true }
         return plan.activeWeekdays.contains(day)
     }
 
+    /// `date` is a plan day's calendar label, including midnight dates from History.
     func focusedSeconds(for planID: UUID, on date: Date) -> TimeInterval {
         let day = PlanDayKey(date: date, calendar: calendar)
         let recorded = dayRecords.filter {
@@ -97,7 +103,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
     }
 
     func progress(for plan: DailyPlan, on date: Date? = nil) -> Double {
-        let date = date ?? now
+        let date = date ?? today
         let target = TimeInterval(plan.targetMinutes * 60)
         guard target > 0 else { return 0 }
         return focusedSeconds(for: plan.id, on: date) / target
@@ -137,7 +143,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
                 phaseElapsed: 0,
                 runningSince: date,
                 completedFocusRounds: 0,
-                sessionDay: PlanDayKey(date: date, calendar: calendar)
+                sessionDay: PlanDayKey(date: today, calendar: calendar)
             )
         }
         save()
@@ -190,7 +196,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
             phaseElapsed: 0,
             runningSince: nil,
             completedFocusRounds: 0,
-            sessionDay: PlanDayKey(date: date, calendar: calendar)
+            sessionDay: PlanDayKey(date: today, calendar: calendar)
         )
         save()
     }
@@ -288,7 +294,9 @@ final class DailyPlanStore: NSObject, ObservableObject {
 
     func beginEditingTime(on date: Date, at currentDate: Date? = nil) {
         let currentDate = currentDate ?? nowProvider()
-        guard calendar.startOfDay(for: date) <= calendar.startOfDay(for: currentDate) else { return }
+        guard PlanDayKey(date: date, calendar: calendar)
+            <= PlanDayKey(date: DailyPlanEngine.dayStart(containing: currentDate, calendar: calendar), calendar: calendar)
+        else { return }
         now = currentDate
         _ = reconcile(at: currentDate, notifies: true)
         cancelEditing()
@@ -318,7 +326,9 @@ final class DailyPlanStore: NSObject, ObservableObject {
     func commitTimeDraft(at date: Date? = nil) {
         guard let draft = timeDraft, draft.canCommit else { return }
         let date = date ?? nowProvider()
-        guard calendar.startOfDay(for: draft.date) <= calendar.startOfDay(for: date) else { return }
+        guard PlanDayKey(date: draft.date, calendar: calendar)
+            <= PlanDayKey(date: DailyPlanEngine.dayStart(containing: date, calendar: calendar), calendar: calendar)
+        else { return }
         now = date
         _ = reconcile(at: date, notifies: true)
 
@@ -341,9 +351,9 @@ final class DailyPlanStore: NSObject, ObservableObject {
                 dayRecords.append(DailyPlanDayRecord(planID: entry.id, day: day, focusedSeconds: entry.seconds))
             }
         }
-        if day == PlanDayKey(date: date, calendar: calendar) {
+        if day == PlanDayKey(date: today, calendar: calendar) {
             for entry in draft.entries where entry.isChanged {
-                refreshContinuousSessionAfterTimeEdit(for: entry.id, on: date)
+                refreshContinuousSessionAfterTimeEdit(for: entry.id)
             }
         }
         if save() {
@@ -355,9 +365,9 @@ final class DailyPlanStore: NSObject, ObservableObject {
         }
     }
 
-    private func refreshContinuousSessionAfterTimeEdit(for planID: UUID, on date: Date) {
+    private func refreshContinuousSessionAfterTimeEdit(for planID: UUID) {
         guard let plan = plans.first(where: { $0.id == planID }), !plan.pomodoro.isEnabled else { return }
-        let remaining = max(TimeInterval(plan.targetMinutes * 60) - focusedSeconds(for: planID, on: date), 0)
+        let remaining = max(TimeInterval(plan.targetMinutes * 60) - focusedSeconds(for: planID, on: today), 0)
         if var session = activeSession, session.planID == planID {
             if remaining > 0 {
                 session.phaseDuration = session.phaseElapsed + remaining
@@ -408,47 +418,24 @@ final class DailyPlanStore: NSObject, ObservableObject {
     }
 
     private func resetSessionsForNewDay(at date: Date) -> Bool {
-        let today = PlanDayKey(date: date, calendar: calendar)
-        let activeNeedsReset = activeSession.map { $0.sessionDay != today } ?? false
-        let pausedNeedsReset = pausedSessions.values.contains { $0.sessionDay != today }
+        let currentDay = PlanDayKey(date: DailyPlanEngine.dayStart(containing: date, calendar: calendar), calendar: calendar)
+        let activeNeedsReset = activeSession.map { $0.sessionDay != currentDay } ?? false
+        let pausedNeedsReset = pausedSessions.values.contains { $0.sessionDay != currentDay }
         guard activeNeedsReset || pausedNeedsReset else { return false }
 
-        // Settle any running work up to midnight first, so yesterday's focus
-        // remains in yesterday's history even if the app was asleep at rollover.
-        _ = reconcilePhases(at: calendar.startOfDay(for: date), notifies: false)
-
-        if let session = activeSession, session.sessionDay != today {
-            let wasRunning = session.isRunning
-            if wasRunning {
-                settleRunningInterval(at: calendar.startOfDay(for: date))
+        if activeNeedsReset {
+            // Stop at the first missed 04:00, not the wake/relaunch time.
+            // Reconcile phase changes before settling so breaks never count as focus.
+            if let startedAt = activeSession?.runningSince {
+                let sessionStart = DailyPlanEngine.dayStart(containing: startedAt, calendar: calendar)
+                let nextDate = calendar.date(byAdding: .day, value: 1, to: sessionStart)!
+                let cutoff = min(date, DailyPlanEngine.dayStart(on: nextDate, calendar: calendar))
+                _ = reconcilePhases(at: cutoff, notifies: false)
+                settleRunningInterval(at: cutoff)
             }
-
-            if var reset = activeSession,
-               let plan = plans.first(where: { $0.id == reset.planID }) {
-                reset.phase = .focus
-                reset.phaseDuration = startingFocusDuration(for: plan, on: date)
-                reset.phaseElapsed = 0
-                reset.runningSince = wasRunning ? date : nil
-                reset.completedFocusRounds = 0
-                reset.sessionDay = today
-                activeSession = reset
-            } else {
-                activeSession = nil
-            }
+            activeSession = nil
         }
-
-        for planID in Array(pausedSessions.keys) {
-            guard var reset = pausedSessions[planID],
-                  reset.sessionDay != today,
-                  let plan = plans.first(where: { $0.id == planID }) else { continue }
-            reset.phase = .focus
-            reset.phaseDuration = startingFocusDuration(for: plan, on: date)
-            reset.phaseElapsed = 0
-            reset.runningSince = nil
-            reset.completedFocusRounds = 0
-            reset.sessionDay = today
-            pausedSessions[planID] = reset
-        }
+        pausedSessions.removeAll()
 
         save()
         return true
@@ -519,17 +506,17 @@ final class DailyPlanStore: NSObject, ObservableObject {
         }
     }
 
-    /// `date` selects the local day being queried; the interval itself ends at
-    /// the store's live clock (`now`), so a session spanning midnight can report
-    /// both yesterday and today without pretending either day is the current time.
+    /// `date` selects a plan day's calendar label; its interval runs 04:00–04:00.
+    /// The live interval ends at `now`, independently of the day being queried.
     private func liveFocusedSeconds(for planID: UUID, dayContaining date: Date) -> TimeInterval {
         guard let session = activeSession,
               session.planID == planID,
               session.phase == .focus,
               let startedAt = session.runningSince else { return 0 }
 
-        let dayStart = calendar.startOfDay(for: date)
-        guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) else { return 0 }
+        let dayStart = DailyPlanEngine.dayStart(on: date, calendar: calendar)
+        guard let nextDate = calendar.date(byAdding: .day, value: 1, to: dayStart) else { return 0 }
+        let dayEnd = DailyPlanEngine.dayStart(on: nextDate, calendar: calendar)
         let available = max(session.phaseDuration - session.phaseElapsed, 0)
         let sessionEnd = min(now, startedAt.addingTimeInterval(available))
         let overlapStart = max(startedAt, dayStart)
@@ -561,7 +548,8 @@ final class DailyPlanStore: NSObject, ObservableObject {
         }
 
         let target = TimeInterval(plan.targetMinutes * 60)
-        let remaining = target - focusedSeconds(for: plan.id, on: date)
+        let day = DailyPlanEngine.dayStart(containing: date, calendar: calendar)
+        let remaining = target - focusedSeconds(for: plan.id, on: day)
         return remaining > 0 ? remaining : target
     }
 
@@ -606,7 +594,8 @@ final class DailyPlanStore: NSObject, ObservableObject {
         if var session = activeSession,
            session.sessionDay == nil,
            let runningSince = session.runningSince {
-            session.sessionDay = PlanDayKey(date: runningSince, calendar: calendar)
+            let day = DailyPlanEngine.dayStart(containing: runningSince, calendar: calendar)
+            session.sessionDay = PlanDayKey(date: day, calendar: calendar)
             activeSession = session
         }
         if let activePlanID = activeSession?.planID {

@@ -10,6 +10,7 @@ import SwiftUI
 /// inside it — clicks, hover and drawing all keep working, and the wheel gets
 /// the same treatment a window's horizontal scroller does.
 struct HorizontalWheelScroll<Content: View>: NSViewRepresentable {
+    @Environment(\.appTypography) private var typography
     /// The strip's scroll position. The wheel writes it, so that the code that
     /// decides what to reveal knows where the dots currently sit; a change made
     /// from the SwiftUI side is applied to the scroller in `updateNSView`.
@@ -24,7 +25,7 @@ struct HorizontalWheelScroll<Content: View>: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WheelDrivenScrollView {
         let scrollView = WheelDrivenScrollView()
-        let documentView = NSHostingView(rootView: content)
+        let documentView = NSHostingView(rootView: hostedContent)
         // The hosting view is sized by us, not by SwiftUI's ideal size, because
         // the strip's scrollable range is exactly the dots' own width.
         documentView.sizingOptions = []
@@ -48,8 +49,8 @@ struct HorizontalWheelScroll<Content: View>: NSViewRepresentable {
             if documentView.frame.size != size {
                 documentView.frame.size = size
             }
-            if let hostingView = documentView as? NSHostingView<Content> {
-                hostingView.rootView = content
+            if let hostingView = documentView as? NSHostingView<AnyView> {
+                hostingView.rootView = hostedContent
             }
         }
 
@@ -63,6 +64,12 @@ struct HorizontalWheelScroll<Content: View>: NSViewRepresentable {
         init(offset: Binding<CGFloat>) {
             self.offset = offset
         }
+    }
+
+    private var hostedContent: AnyView {
+        AnyView(content
+            .environment(\.appTypography, typography)
+            .font(typography.font(.body)))
     }
 }
 

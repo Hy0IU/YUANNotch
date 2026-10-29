@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DailyPlansPanelView: View {
     @ObservedObject var store: DailyPlanStore
+    @Environment(\.appTypography) private var typography
     let size: CGSize
     let isDrawerExpanded: Bool
     let onShowFloatingPlan: () -> Void
@@ -50,7 +51,7 @@ struct DailyPlansPanelView: View {
                     page = candidate
                 } label: {
                     Text(candidate.rawValue)
-                        .font(.system(size: 11, weight: candidate == page ? .semibold : .regular))
+                        .appText(.control, weight: candidate == page ? .semibold : nil)
                         .foregroundStyle(.white.opacity(candidate == page ? 0.88 : 0.46))
                         .padding(.horizontal, 9)
                         .frame(height: 24)
@@ -64,8 +65,8 @@ struct DailyPlansPanelView: View {
 
             Spacer(minLength: 8)
 
-            Text(store.now.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
-                .font(.system(size: 11))
+            Text(store.today.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
+                .appText(.secondary)
                 .foregroundStyle(.white.opacity(0.42))
         }
         .padding(.horizontal, 10)
@@ -110,11 +111,11 @@ struct DailyPlansPanelView: View {
                     store.beginCreatingPlan()
                 } label: {
                     Label("Add Daily Plan", systemImage: "plus")
-                        .font(.system(size: 11, weight: .medium))
+                        .appText(.control)
                         .frame(height: 28)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(MarkdownToolbarButtonStyle())
+                .buttonStyle(DailyPlanToolbarButtonStyle())
 
                 Spacer()
 
@@ -134,15 +135,15 @@ struct DailyPlansPanelView: View {
         VStack(spacing: 8) {
             HStack {
                 Text("Daily progress")
-                    .font(.system(size: 12, weight: .semibold))
+                    .appText(.sectionTitle)
                     .foregroundStyle(.white.opacity(0.86))
                 Spacer()
                 Text("\(durationText(store.todayFocusedSeconds)) / \(durationText(store.todayTargetSeconds))")
-                    .font(.system(size: 11))
+                    .appText(.secondary)
                     .foregroundStyle(.white.opacity(0.44))
                     .monospacedDigit()
                 Button {
-                    store.beginEditingTime(on: store.now)
+                    store.beginEditingTime(on: store.today)
                 } label: {
                     Image(systemName: "pencil")
                         .font(.system(size: 10, weight: .medium))
@@ -171,6 +172,7 @@ struct DailyPlansPanelView: View {
     private var activeCard: some View {
         DailyPlanActiveCardView(
             store: store,
+            availableWidth: max(size.width - 20, 0),
             isDrawerExpanded: isDrawerExpanded,
             isFloating: false,
             onFloatingAction: onShowFloatingPlan,
@@ -184,20 +186,20 @@ struct DailyPlansPanelView: View {
         return VStack(spacing: 7) {
             HStack(spacing: 8) {
                 Text(plan.title)
-                    .font(.system(size: 13, weight: .medium))
+                    .appText(.body, weight: .medium)
                     .foregroundStyle(.white.opacity(0.88))
                     .lineLimit(1)
 
                 Spacer(minLength: 6)
 
                 Text(store.isScheduledToday(plan) ? planDaysText(plan) : "Not today · \(planDaysText(plan))")
-                    .font(.system(size: 9))
+                    .appText(.compact, weight: .regular)
                     .foregroundStyle(.white.opacity(0.35))
                     .lineLimit(1)
 
                 if plan.pomodoro.isEnabled {
                     Text("\(plan.pomodoro.focusMinutes) / \(plan.pomodoro.shortBreakMinutes)")
-                        .font(.system(size: 9, weight: .medium))
+                        .appText(.compact)
                         .foregroundStyle(.orange.opacity(0.78))
                         .padding(.horizontal, 6)
                         .frame(height: 20)
@@ -208,10 +210,12 @@ struct DailyPlansPanelView: View {
                 }
 
                 Menu {
-                    Button("Edit") { store.beginEditing(plan) }
-                    Button("Edit Focus Time…") { store.beginEditingTime(on: store.now) }
+                    Button { store.beginEditing(plan) } label: { Text("Edit").appText(.control) }
+                    Button { store.beginEditingTime(on: store.today) } label: { Text("Edit Focus Time…").appText(.control) }
                     Divider()
-                    Button("Delete", role: .destructive) { store.deletePlan(id: plan.id) }
+                    Button(role: .destructive) { store.deletePlan(id: plan.id) } label: {
+                        Text("Delete").appText(.control)
+                    }
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 10, weight: .semibold))
@@ -236,8 +240,8 @@ struct DailyPlansPanelView: View {
 
             HStack(spacing: 8) {
                 PlanProgressBar(progress: progress, color: progress >= 1 ? .green : Self.accent)
-                Text("\(durationText(store.focusedSeconds(for: plan.id, on: store.now))) / \(durationText(TimeInterval(plan.targetMinutes * 60)))")
-                    .font(.system(size: 10))
+                Text("\(durationText(store.focusedSeconds(for: plan.id, on: store.today))) / \(durationText(TimeInterval(plan.targetMinutes * 60)))")
+                    .appText(.compact, weight: .regular)
                     .foregroundStyle(.white.opacity(0.4))
                     .monospacedDigit()
                     .fixedSize()
@@ -256,10 +260,10 @@ struct DailyPlansPanelView: View {
                 .font(.system(size: 24, weight: .light))
                 .foregroundStyle(.white.opacity(0.3))
             Text("No daily plans yet")
-                .font(.system(size: 13, weight: .medium))
+                .appText(.body, weight: .medium)
                 .foregroundStyle(.white.opacity(0.62))
             Text("Add a recurring target, then start it whenever you are ready.")
-                .font(.system(size: 11))
+                .appText(.secondary)
                 .foregroundStyle(.white.opacity(0.36))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 260)
@@ -272,11 +276,11 @@ struct DailyPlansPanelView: View {
         VStack(spacing: 0) {
             HStack {
                 Text(store.editingPlanID == nil ? "New Daily Plan" : "Edit Daily Plan")
-                    .font(.system(size: 13, weight: .semibold))
+                    .appText(.sectionTitle)
                     .foregroundStyle(.white.opacity(0.9))
                 Spacer()
                 Button("Cancel") { store.cancelEditing() }
-                    .buttonStyle(MarkdownToolbarButtonStyle())
+                    .buttonStyle(DailyPlanToolbarButtonStyle())
             }
             .padding(.horizontal, 12)
             .frame(height: 38)
@@ -288,7 +292,7 @@ struct DailyPlansPanelView: View {
                     editorField("Name") {
                         TextField("Reading, Study, Work…", text: $store.draft.title)
                             .textFieldStyle(.plain)
-                            .font(.system(size: 12))
+                            .font(typography.font(.control))
                             .padding(.horizontal, 8)
                             .frame(height: 28)
                             .background(editorFieldBackground)
@@ -331,7 +335,7 @@ struct DailyPlansPanelView: View {
                                     }
                                 } label: {
                                     Text(day.shortTitle)
-                                        .font(.system(size: 10, weight: isSelected ? .semibold : .regular))
+                                        .appText(.compact, weight: isSelected ? .semibold : .regular)
                                         .foregroundStyle(isSelected ? Self.accent : .white.opacity(0.42))
                                         .frame(maxWidth: .infinity)
                                         .frame(height: 25)
@@ -351,13 +355,13 @@ struct DailyPlansPanelView: View {
                             }
                         }
                         Text("Highlighted days are active.")
-                            .font(.system(size: 9))
+                            .appText(.compact, weight: .regular)
                             .foregroundStyle(.white.opacity(0.34))
                     }
 
                     Toggle("Use Pomodoro", isOn: $store.draft.pomodoro.isEnabled)
                         .toggleStyle(.switch)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(typography.font(.control))
 
                     if store.draft.pomodoro.isEnabled {
                         HStack(spacing: 14) {
@@ -387,7 +391,7 @@ struct DailyPlansPanelView: View {
             HStack {
                 if store.editingPlanID != nil {
                     Button("Delete", role: .destructive) { store.deleteEditingPlan() }
-                        .buttonStyle(MarkdownToolbarButtonStyle())
+                        .buttonStyle(DailyPlanToolbarButtonStyle())
                 }
                 Spacer()
                 Button("Save") { store.commitDraft() }
@@ -407,7 +411,7 @@ struct DailyPlansPanelView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(.system(size: 10, weight: .medium))
+                .appText(.compact)
                 .foregroundStyle(.white.opacity(0.42))
             content()
         }
@@ -496,10 +500,11 @@ enum FloatingPlanMetrics {
 private struct FloatingPlanCountdownLabel: NSViewRepresentable {
     let store: DailyPlanStore
     let date: Date
+    let typography: AppTypography
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField(labelWithString: countdownText)
-        field.font = NSFont.monospacedDigitSystemFont(ofSize: 25, weight: .medium)
+        field.font = .monospacedDigitSystemFont(ofSize: typography.size(.timer), weight: .medium)
         field.textColor = NSColor.white.withAlphaComponent(0.94)
         field.alignment = .left
         field.maximumNumberOfLines = 1
@@ -514,6 +519,7 @@ private struct FloatingPlanCountdownLabel: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSTextField, context: Context) {
         let text = countdownText
+        nsView.font = .monospacedDigitSystemFont(ofSize: typography.size(.timer), weight: .medium)
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
@@ -541,6 +547,7 @@ struct FloatingPlanPanelView: View {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 DailyPlanActiveCardView(
                     store: store,
+                    availableWidth: FloatingPlanMetrics.panelSize.width - FloatingPlanMetrics.edgeInset * 2,
                     isDrawerExpanded: false,
                     isFloating: true,
                     onFloatingAction: onHide,
@@ -560,6 +567,8 @@ struct FloatingPlanPanelView: View {
 
 struct DailyPlanActiveCardView: View {
     @ObservedObject var store: DailyPlanStore
+    @Environment(\.appTypography) private var typography
+    let availableWidth: CGFloat
     let isDrawerExpanded: Bool
     let isFloating: Bool
     let onFloatingAction: () -> Void
@@ -576,111 +585,45 @@ struct DailyPlanActiveCardView: View {
             let phaseColor: Color = session.phase == .focus ? Self.accent : .green
             let displayNow = displayDate ?? store.now
             let remainingText = countdownText(store.phaseRemaining(at: displayNow))
-            VStack(spacing: 10) {
-                HStack(spacing: 12) {
-                    CircularPlanProgress(
-                        progress: session.phaseDuration > 0
-                            ? store.phaseElapsed(at: displayNow) / session.phaseDuration
-                            : 0,
-                        color: phaseColor,
-                        centerText: roundText(session, plan: plan),
-                        size: 58
-                    )
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(session.phase.title.uppercased()) · \(plan.title.uppercased())")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(phaseColor.opacity(0.9))
-                            .lineLimit(1)
-                        if isFloating {
-                            FloatingPlanCountdownLabel(store: store, date: displayNow)
-                                .frame(height: 30, alignment: .leading)
-                        } else {
-                            Text(remainingText)
-                                .font(.system(size: 25, weight: .medium, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.94))
-                                .monospacedDigit()
-                                .contentTransition(isDrawerExpanded ? .numericText() : .identity)
-                        }
-                        Text(session.isRunning ? "Running" : nextActionLabel(for: session))
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.4))
+            VStack(spacing: isFloating ? 5 : 10) {
+                if usesCompactControls {
+                    HStack(spacing: 12) {
+                        progressRing(session, plan: plan, phaseColor: phaseColor, displayNow: displayNow)
+                        sessionDetails(
+                            session,
+                            plan: plan,
+                            phaseColor: phaseColor,
+                            remainingText: remainingText,
+                            displayNow: displayNow
+                        )
+                        Spacer(minLength: 0)
                     }
-
-                    Spacer(minLength: 4)
-
-                    HStack(spacing: 5) {
-                        Button {
-                            store.togglePause()
-                        } label: {
-                            Image(systemName: session.isRunning ? "pause.fill" : "play.fill")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(Color.black.opacity(0.72))
-                                .frame(width: 34, height: 34)
-                                .background(Circle().fill(phaseColor))
-                        }
-                        .buttonStyle(.plain)
-                        .help(session.isRunning ? "Pause" : nextActionLabel(for: session))
-
-                        Button {
-                            store.finishCurrentPhase()
-                        } label: {
-                            Image(systemName: session.phase == .focus ? "forward.end.fill" : "forward.fill")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.52))
-                                .frame(width: 28, height: 28)
-                                .background(Circle().fill(.white.opacity(0.055)))
-                        }
-                        .buttonStyle(.plain)
-                        .help(session.phase == .focus ? "Finish Round" : "Skip Break")
-
-                        Button {
-                            store.resetSession()
-                        } label: {
-                            Image(systemName: "arrow.counterclockwise")
-                                .font(.system(size: 8, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.52))
-                                .frame(width: 28, height: 28)
-                                .background(Circle().fill(.white.opacity(0.055)))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Reset")
-
-                        Button(action: onFloatingAction) {
-                            Image(systemName: isFloating ? "pin.slash.fill" : "pin.fill")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.52))
-                                .frame(width: 24, height: 24)
-                        }
-                        .buttonStyle(.plain)
-                        .help(isFloating ? "Hide floating timer" : "Show floating timer")
-
-                        if !isFloating {
-                            Menu {
-                                Button("Edit") { store.beginEditing(plan) }
-                                Button("Edit Focus Time…") { store.beginEditingTime(on: store.now) }
-                                Divider()
-                                Button("Delete", role: .destructive) { store.deletePlan(id: plan.id) }
-                            } label: {
-                                Image(systemName: "ellipsis")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .frame(width: 24, height: 24)
-                            }
-                            .menuStyle(.borderlessButton)
-                            .menuIndicator(.hidden)
-                            .fixedSize()
-                            .help("Plan options")
-                        }
+                    HStack {
+                        Spacer()
+                        timerControls(session, plan: plan, phaseColor: phaseColor)
+                    }
+                } else {
+                    HStack(spacing: 12) {
+                        progressRing(session, plan: plan, phaseColor: phaseColor, displayNow: displayNow)
+                        sessionDetails(
+                            session,
+                            plan: plan,
+                            phaseColor: phaseColor,
+                            remainingText: remainingText,
+                            displayNow: displayNow
+                        )
+                        Spacer(minLength: 4)
+                        timerControls(session, plan: plan, phaseColor: phaseColor)
                     }
                 }
 
-                VStack(spacing: 6) {
+                VStack(spacing: isFloating ? 4 : 6) {
                     HStack {
                         Text("Daily plan progress")
                         Spacer()
-                        Text("\(durationText(store.focusedSeconds(for: plan.id, on: displayNow))) / \(durationText(TimeInterval(plan.targetMinutes * 60)))")
+                        Text("\(durationText(store.focusedSeconds(for: plan.id, on: store.today))) / \(durationText(TimeInterval(plan.targetMinutes * 60)))")
                     }
-                    .font(.system(size: 10))
+                    .appText(.compact, weight: .regular)
                     .foregroundStyle(.white.opacity(0.42))
                     .monospacedDigit()
 
@@ -690,7 +633,7 @@ struct DailyPlanActiveCardView: View {
                     )
                 }
             }
-            .padding(11)
+            .padding(isFloating ? 9 : 11)
             .background { cardBackgroundView }
             // A one-second store refresh can arrive while the panel mask is
             // shrinking. Keep the timer text and progress ring from animating
@@ -701,6 +644,168 @@ struct DailyPlanActiveCardView: View {
                     transaction.animation = nil
                     transaction.disablesAnimations = true
                 }
+            }
+        }
+    }
+
+    private var usesCompactControls: Bool {
+        !isFloating && availableWidth < 390
+    }
+
+    private func progressRing(
+        _ session: FocusSession,
+        plan: DailyPlan,
+        phaseColor: Color,
+        displayNow: Date
+    ) -> some View {
+        CircularPlanProgress(
+            progress: session.phaseDuration > 0
+                ? store.phaseElapsed(at: displayNow) / session.phaseDuration
+                : 0,
+            color: phaseColor,
+            centerText: roundText(session, plan: plan),
+            size: 58
+        )
+    }
+
+    private func sessionDetails(
+        _ session: FocusSession,
+        plan: DailyPlan,
+        phaseColor: Color,
+        remainingText: String,
+        displayNow: Date
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(session.phase.title.uppercased()) · \(plan.title.uppercased())")
+                .appText(.compact, weight: .semibold)
+                .foregroundStyle(phaseColor.opacity(0.9))
+                .lineLimit(1)
+                .help("\(session.phase.title) · \(plan.title)")
+            if isFloating {
+                FloatingPlanCountdownLabel(store: store, date: displayNow, typography: typography)
+                    .frame(height: typography.lineHeight(.timer), alignment: .leading)
+            } else {
+                Text(remainingText)
+                    .appText(.timer)
+                    .foregroundStyle(.white.opacity(0.94))
+                    .monospacedDigit()
+                    .fixedSize(horizontal: true, vertical: false)
+                    .contentTransition(isDrawerExpanded ? .numericText() : .identity)
+            }
+            Text(session.isRunning ? "Running" : nextActionLabel(for: session))
+                .appText(.compact, weight: .regular)
+                .foregroundStyle(.white.opacity(0.4))
+        }
+    }
+
+    @ViewBuilder
+    private func timerControls(
+        _ session: FocusSession,
+        plan: DailyPlan,
+        phaseColor: Color
+    ) -> some View {
+        HStack(spacing: 5) {
+            Button {
+                store.togglePause()
+            } label: {
+                Image(systemName: session.isRunning ? "pause.fill" : "play.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.72))
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(phaseColor))
+            }
+            .buttonStyle(.plain)
+            .help(session.isRunning ? "Pause" : nextActionLabel(for: session))
+            .accessibilityLabel(session.isRunning ? "Pause" : nextActionLabel(for: session))
+
+            if isFloating || usesCompactControls {
+                Menu {
+                    if !isFloating {
+                        Button { store.beginEditing(plan) } label: { Text("Edit").appText(.control) }
+                        Button { store.beginEditingTime(on: store.today) } label: {
+                            Text("Edit Focus Time…").appText(.control)
+                        }
+                        Divider()
+                    }
+                    Button {
+                        store.finishCurrentPhase()
+                    } label: {
+                        Text(session.phase == .focus ? "Finish Round" : "Skip Break").appText(.control)
+                    }
+                    Button { store.resetSession() } label: { Text("Reset").appText(.control) }
+                    if !isFloating {
+                        Divider()
+                        Button(role: .destructive) { store.deletePlan(id: plan.id) } label: {
+                            Text("Delete").appText(.control)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.62))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help(isFloating ? "More timer actions" : "More plan and timer actions")
+                .accessibilityLabel(isFloating ? "More timer actions" : "More plan and timer actions")
+            } else {
+                Button {
+                    store.finishCurrentPhase()
+                } label: {
+                    Image(systemName: session.phase == .focus ? "forward.end.fill" : "forward.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.52))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(.white.opacity(0.055)))
+                }
+                .buttonStyle(.plain)
+                .help(session.phase == .focus ? "Finish Round" : "Skip Break")
+
+                Button {
+                    store.resetSession()
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.52))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(.white.opacity(0.055)))
+                }
+                .buttonStyle(.plain)
+                .help("Reset")
+            }
+
+            Button(action: onFloatingAction) {
+                Image(systemName: isFloating ? "pin.slash.fill" : "pin.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.52))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .help(isFloating ? "Hide floating timer" : "Show floating timer")
+            .accessibilityLabel(isFloating ? "Hide floating timer" : "Show floating timer")
+
+            if !isFloating && !usesCompactControls {
+                Menu {
+                    Button { store.beginEditing(plan) } label: { Text("Edit").appText(.control) }
+                    Button { store.beginEditingTime(on: store.today) } label: {
+                        Text("Edit Focus Time…").appText(.control)
+                    }
+                    Divider()
+                    Button(role: .destructive) { store.deletePlan(id: plan.id) } label: {
+                        Text("Delete").appText(.control)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Plan options")
             }
         }
     }
@@ -775,6 +880,7 @@ private struct IntegerPlanInput: View {
 
     @State private var textValue: String
     @FocusState private var isFieldFocused: Bool
+    @Environment(\.appTypography) private var typography
 
     init(
         label: String,
@@ -804,7 +910,7 @@ private struct IntegerPlanInput: View {
         HStack(spacing: 5) {
             TextField(label, text: $textValue)
                 .textFieldStyle(.plain)
-                .font(.system(size: 11, weight: .medium))
+                .font(typography.font(.control))
                 .foregroundStyle(.white.opacity(0.9))
                 .multilineTextAlignment(.trailing)
                 .monospacedDigit()
@@ -846,7 +952,7 @@ private struct IntegerPlanInput: View {
                 .accessibilityLabel(label)
 
             Text(unit)
-                .font(.system(size: 10))
+                .appText(.compact, weight: .regular)
                 .foregroundStyle(.white.opacity(0.48))
                 .fixedSize()
 
@@ -899,7 +1005,7 @@ private struct CircularPlanProgress: View {
                 .rotationEffect(.degrees(-90))
             if !centerText.isEmpty {
                 Text(centerText)
-                    .font(.system(size: 10, weight: .medium))
+                    .appText(.compact)
                     .foregroundStyle(.white.opacity(0.72))
                     .monospacedDigit()
             }
@@ -912,16 +1018,52 @@ struct FocusActionButtonStyle: ButtonStyle {
     let isPrimary: Bool
     let color: Color
 
+    @Environment(\.appTypography) private var typography
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 11, weight: .medium))
+            .font(typography.font(.control))
             .foregroundStyle(isPrimary ? Color.black.opacity(0.76) : Color.white.opacity(0.76))
             .padding(.horizontal, 11)
-            .frame(height: 29)
+            .frame(height: typography.controlHeight(base: 29))
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(isPrimary ? color.opacity(configuration.isPressed ? 0.72 : 0.92) : .white.opacity(configuration.isPressed ? 0.1 : 0.055))
             )
             .pointingHandCursor()
+    }
+}
+
+struct DailyPlanToolbarButtonStyle: ButtonStyle {
+    @Environment(\.appTypography) private var typography
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(typography.font(.control))
+            .foregroundStyle(.white.opacity(foregroundOpacity(configuration)))
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(.white.opacity(backgroundOpacity(configuration)))
+            )
+            .animation(.easeOut(duration: 0.10), value: isHovering)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .onHover { hovering in
+                isHovering = isEnabled && hovering
+            }
+            .pointingHandCursor(isEnabled: isEnabled)
+    }
+
+    private func backgroundOpacity(_ configuration: Configuration) -> CGFloat {
+        guard isEnabled else { return 0 }
+        if configuration.isPressed { return 0.10 }
+        return isHovering ? 0.065 : 0
+    }
+
+    private func foregroundOpacity(_ configuration: Configuration) -> CGFloat {
+        guard isEnabled else { return 0.22 }
+        if configuration.isPressed { return 0.54 }
+        return isHovering ? 0.84 : 0.66
     }
 }

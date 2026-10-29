@@ -16,7 +16,7 @@ import SwiftUI
 // notebook with eight drew dots from x = −37pt onwards.
 //
 // Checks:
-//   1. arithmetic: for every drawer width the app allows and 1...40 tabs, the
+//   1. arithmetic: for every interface text size, drawer width and 1...40 tabs, the
 //      pager's chrome plus its strip plus everything to its right adds up to no
 //      more than the width it is given, and the strip is never narrower than one
 //      dot — so a row can always show at least one tab and can never overrun.
@@ -24,9 +24,8 @@ import SwiftUI
 //      NotebookToolbarLayout says — a squeeze would make it narrower — it sits
 //      where the pager's chrome puts it, and the pager, the mode toggle, "Clear"
 //      and the settings button do not intersect one another at any tab count.
-//   3. rendered: the widths NotebookToolbarLayout reserves for the mode toggle
-//      cover the real DrawerModeToggle in every state the row can show — with
-//      and without its labels, and with either segment selected.
+//   3. rendered: at every interface text size, the widths NotebookToolbarLayout
+//      reserves for the mode toggle cover every labelled and icon-only selection.
 //   4. the wheel: one notch slides the strip exactly one dot, the ends clamp, and
 //      the offset is reported back so the SwiftUI side stays in step.
 //   5. reveal: switching tabs slides the strip only as far as the selected dot
@@ -135,10 +134,15 @@ private struct ProbeIconButton: View {
 }
 
 @MainActor
-private func host<V: View>(_ view: V, width: CGFloat) -> NSHostingView<AnyView> {
+private func host<V: View>(
+    _ view: V,
+    width: CGFloat,
+    typography: AppTypography = AppTypography()
+) -> NSHostingView<AnyView> {
     let height = DrawerMetrics.toolbarHeight
     let root = AnyView(
         view
+            .environment(\.appTypography, typography)
             .frame(width: width, height: height)
             .coordinateSpace(name: rowSpace)
     )
@@ -217,6 +221,8 @@ private let drawerCases: [DrawerCase] = [
     DrawerCase(label: "wide 1200, radius 10", width: 1200 - 52)
 ]
 
+private let interfaceSizes = InterfaceTextSize.allCases
+
 // MARK: - 1 · Arithmetic
 
 @MainActor
@@ -227,51 +233,55 @@ private func checkArithmetic() {
     var slack: CGFloat = .greatestFiniteMagnitude
     var firstBad = ""
 
-    for drawer in drawerCases {
-        for tabCount in 1 ... 40 {
-            let layout = NotebookToolbarLayout(width: drawer.width, mode: .notes)
-            let strip = layout.stripWidth(tabCount: tabCount)
-            let reserve = NotebookToolbarLayout.trailingReserve(
-                showsClearButton: true,
-                showsModeToggleLabels: layout.showsModeToggleLabels
-            )
-            let total = NotebookToolbarLayout.pagerChrome + strip + reserve
-            let ideal = NotebookToolbarLayout.stripContentWidth(tabCount: tabCount)
-
-            if strip > ideal + 0.001 || strip < 0 {
-                firstBad = "\(drawer.label), \(tabCount) tabs: strip \(fmt(strip)) outside 0...\(fmt(ideal))"
-            }
-            if total > drawer.width + 0.001 {
-                firstBad = "\(drawer.label), \(tabCount) tabs: parts add to \(fmt(total)) > \(fmt(drawer.width))"
-            }
-            if strip < NotebookToolbarLayout.dotSlot {
-                firstBad = "\(drawer.label), \(tabCount) tabs: strip \(fmt(strip)) < one dot"
-            }
-
-            // The reveal rule must leave the selected dot's slot inside the view.
-            let viewport = strip
-            let content = ideal
-            let limit = layout.maximumScrollOffset(tabCount: tabCount)
-            var offset: CGFloat = 0
-            for index in [0, tabCount - 1, tabCount / 2, 0, tabCount - 1] {
-                offset = layout.scrollOffset(keepingVisible: index, currentOffset: offset, tabCount: tabCount)
-                let slot = CGRect(
-                    x: CGFloat(index) * NotebookToolbarLayout.dotStride,
-                    y: 0,
-                    width: NotebookToolbarLayout.dotSlot,
-                    height: 1
+    for interfaceSize in interfaceSizes {
+        let typography = AppTypography(interfaceSize: interfaceSize)
+        for drawer in drawerCases {
+            for tabCount in 1 ... 40 {
+                let layout = NotebookToolbarLayout(width: drawer.width, mode: .notes, typography: typography)
+                let strip = layout.stripWidth(tabCount: tabCount)
+                let reserve = NotebookToolbarLayout.trailingReserve(
+                    showsClearButton: true,
+                    showsModeToggleLabels: layout.showsModeToggleLabels,
+                    typography: typography
                 )
-                let visible = CGRect(x: offset, y: 0, width: viewport, height: 1)
-                if offset < -0.001 || offset > limit + 0.001 {
-                    firstBad = "\(drawer.label), \(tabCount) tabs: offset \(fmt(offset)) outside 0...\(fmt(limit))"
-                }
-                if content > viewport, !contains(visible, slot, tolerance: 1) {
-                    firstBad = "\(drawer.label), \(tabCount) tabs: dot \(index) at \(fmt(slot.minX)) not inside \(fmt(offset))...\(fmt(offset + viewport))"
-                }
-            }
+                let total = NotebookToolbarLayout.pagerChrome + strip + reserve
+                let ideal = NotebookToolbarLayout.stripContentWidth(tabCount: tabCount)
 
-            worstStrip = min(worstStrip, strip)
-            slack = min(slack, drawer.width - total)
+                if strip > ideal + 0.001 || strip < 0 {
+                    firstBad = "\(interfaceSize.title), \(drawer.label), \(tabCount) tabs: strip \(fmt(strip)) outside 0...\(fmt(ideal))"
+                }
+                if total > drawer.width + 0.001 {
+                    firstBad = "\(interfaceSize.title), \(drawer.label), \(tabCount) tabs: parts add to \(fmt(total)) > \(fmt(drawer.width))"
+                }
+                if strip < NotebookToolbarLayout.dotSlot {
+                    firstBad = "\(interfaceSize.title), \(drawer.label), \(tabCount) tabs: strip \(fmt(strip)) < one dot"
+                }
+
+                // The reveal rule must leave the selected dot's slot inside the view.
+                let viewport = strip
+                let content = ideal
+                let limit = layout.maximumScrollOffset(tabCount: tabCount)
+                var offset: CGFloat = 0
+                for index in [0, tabCount - 1, tabCount / 2, 0, tabCount - 1] {
+                    offset = layout.scrollOffset(keepingVisible: index, currentOffset: offset, tabCount: tabCount)
+                    let slot = CGRect(
+                        x: CGFloat(index) * NotebookToolbarLayout.dotStride,
+                        y: 0,
+                        width: NotebookToolbarLayout.dotSlot,
+                        height: 1
+                    )
+                    let visible = CGRect(x: offset, y: 0, width: viewport, height: 1)
+                    if offset < -0.001 || offset > limit + 0.001 {
+                        firstBad = "\(interfaceSize.title), \(drawer.label), \(tabCount) tabs: offset \(fmt(offset)) outside 0...\(fmt(limit))"
+                    }
+                    if content > viewport, !contains(visible, slot, tolerance: 1) {
+                        firstBad = "\(interfaceSize.title), \(drawer.label), \(tabCount) tabs: dot \(index) at \(fmt(slot.minX)) not inside \(fmt(offset))...\(fmt(offset + viewport))"
+                    }
+                }
+
+                worstStrip = min(worstStrip, strip)
+                slack = min(slack, drawer.width - total)
+            }
         }
     }
 
@@ -279,25 +289,28 @@ private func checkArithmetic() {
         "the row's parts never exceed the width it is given",
         firstBad.isEmpty,
         firstBad.isEmpty
-            ? "6 drawer cases x 40 tab counts: least slack \(fmt(slack))pt, narrowest strip \(fmt(worstStrip))pt (one dot needs \(fmt(NotebookToolbarLayout.dotSlot))pt)"
+            ? "3 interface sizes x 6 drawer cases x 40 tab counts: least slack \(fmt(slack))pt, narrowest strip \(fmt(worstStrip))pt (one dot needs \(fmt(NotebookToolbarLayout.dotSlot))pt)"
             : firstBad
     )
 
     // Non-notes surfaces have no pager and no "Clear": the toggle and settings
     // button must fit, falling back to icons if a future label grows too wide.
     var standaloneBad = ""
-    for drawer in drawerCases {
-        for mode in [DrawerMode.reminders, .plans] {
-            let layout = NotebookToolbarLayout(width: drawer.width, mode: mode)
-            let toggle = layout.showsModeToggleLabels
-                ? NotebookToolbarLayout.modeToggleLabelledWidth
-                : NotebookToolbarLayout.modeToggleIconWidth
-            let total = NotebookToolbarLayout.itemSpacing
-                + toggle
-                + NotebookToolbarLayout.itemSpacing
-                + NotebookToolbarLayout.iconButton
-            if total > drawer.width + 0.001 {
-                standaloneBad = "\(drawer.label), \(mode.title): toggle + settings = \(fmt(total)) of \(fmt(drawer.width))"
+    for interfaceSize in interfaceSizes {
+        let typography = AppTypography(interfaceSize: interfaceSize)
+        for drawer in drawerCases {
+            for mode in [DrawerMode.reminders, .plans] {
+                let layout = NotebookToolbarLayout(width: drawer.width, mode: mode, typography: typography)
+                let toggle = layout.showsModeToggleLabels
+                    ? NotebookToolbarLayout.labelledModeToggleWidth(for: typography)
+                    : NotebookToolbarLayout.modeToggleIconWidth
+                let total = NotebookToolbarLayout.itemSpacing
+                    + toggle
+                    + NotebookToolbarLayout.itemSpacing
+                    + NotebookToolbarLayout.iconButton
+                if total > drawer.width + 0.001 {
+                    standaloneBad = "\(interfaceSize.title), \(drawer.label), \(mode.title): toggle + settings = \(fmt(total)) of \(fmt(drawer.width))"
+                }
             }
         }
     }
@@ -305,7 +318,7 @@ private func checkArithmetic() {
         "standalone mode rows fit every drawer width",
         standaloneBad.isEmpty,
         standaloneBad.isEmpty
-            ? "6 drawer cases x 2 modes: toggle and settings stay inside the row"
+            ? "3 interface sizes x 6 drawer cases x 2 modes: toggle and settings stay inside the row"
             : standaloneBad
     )
 }
@@ -501,65 +514,153 @@ private struct ProbeRow: View {
     }
 }
 
+/// Exercise the live row and the measured assembly at all three interface
+/// scales. The standard path above keeps its exhaustive tab sweep; this pass
+/// checks each size with a few tab counts, all drawer widths and all modes.
+@MainActor
+private func checkTypographyRows() {
+    print("")
+    print("— 2b · interface sizes keep rendered rows inside the drawer —")
+
+    for interfaceSize in interfaceSizes {
+        let typography = AppTypography(interfaceSize: interfaceSize)
+        var failure = ""
+        var rowsChecked = 0
+
+        for drawer in drawerCases {
+            for mode in DrawerMode.allCases {
+                let tabCounts: [Int] = mode == .notes ? [1, 8, 40] : [1]
+                for tabCount in tabCounts {
+                    let layout = NotebookToolbarLayout(
+                        width: drawer.width,
+                        mode: mode,
+                        typography: typography
+                    )
+                    let store = NoteStore(tabCount: tabCount)
+                    let settings = AppSettingsStore()
+                    let workspace = NotebookWorkspaceState()
+                    let interaction = EditorInteractionState()
+
+                    let liveHost = host(
+                        NotebookToolbar(
+                            store: store,
+                            settingsStore: settings,
+                            workspaceState: workspace,
+                            editorInteractionState: interaction,
+                            layout: layout,
+                            onOpenSettings: {}
+                        ),
+                        width: drawer.width,
+                        typography: typography
+                    )
+
+                    Recorded.reset()
+                    let measuredHost = host(
+                        ProbeRow(store: store, layout: layout, interaction: interaction),
+                        width: drawer.width,
+                        typography: typography
+                    )
+                    let frames = Recorded.frames
+                    rowsChecked += 1
+
+                    if mode == .notes {
+                        guard let actualStrip = stripFrame(in: liveHost) else {
+                            failure = "\(drawer.label), \(tabCount) tabs: the live strip is missing"
+                            continue
+                        }
+                        let expectedStrip = layout.stripWidth(tabCount: tabCount)
+                        if abs(actualStrip.width - expectedStrip) > 0.5 {
+                            failure = "\(drawer.label), \(tabCount) tabs: live strip \(fmt(actualStrip.width))pt, expected \(fmt(expectedStrip))pt"
+                        }
+                    }
+
+                    let parts = ["pager", "modeToggle", "clear", "settings"].compactMap { name -> (String, CGRect)? in
+                        frames[name].map { (name, $0) }
+                    }
+                    for i in parts.indices {
+                        for j in parts.indices where j > i {
+                            let hit = parts[i].1.intersection(parts[j].1)
+                            if !hit.isNull, hit.width > 0.5, hit.height > 0.5 {
+                                failure = "\(drawer.label), \(mode.title), \(tabCount) tabs: \(parts[i].0) and \(parts[j].0) overlap by \(fmt(hit.width))pt"
+                            }
+                        }
+                    }
+                    for (name, rect) in parts where rect.minX < -0.5 || rect.maxX > drawer.width + 0.5 {
+                        failure = "\(drawer.label), \(mode.title), \(tabCount) tabs: \(name) at \(fmt(rect.minX))...\(fmt(rect.maxX)) leaves the row"
+                    }
+                    for (name, rect) in parts where rect.minY < -0.5 || rect.maxY > DrawerMetrics.toolbarHeight + 0.5 {
+                        failure = "\(drawer.label), \(mode.title), \(tabCount) tabs: \(name) reaches y=\(fmt(rect.minY))...\(fmt(rect.maxY)), outside the \(fmt(DrawerMetrics.toolbarHeight))pt toolbar"
+                    }
+                    if let toggle = frames["modeToggle"] {
+                        let reserve = layout.showsModeToggleLabels
+                            ? NotebookToolbarLayout.labelledModeToggleWidth(for: typography)
+                            : NotebookToolbarLayout.modeToggleIconWidth
+                        if toggle.width > reserve + 0.5 {
+                            failure = "\(drawer.label), \(mode.title), \(tabCount) tabs: toggle is \(fmt(toggle.width))pt, reserve is \(fmt(reserve))pt"
+                        }
+                    }
+
+                    _ = liveHost
+                    _ = measuredHost
+                }
+            }
+        }
+
+        check(
+            "\(interfaceSize.title) toolbar rows stay inside and do not overlap",
+            failure.isEmpty,
+            failure.isEmpty ? "\(rowsChecked) rendered rows across 6 drawer widths and all modes" : failure
+        )
+    }
+}
+
 // MARK: - 3 · The toggle's real width
 
 @MainActor
 private func checkModeToggleWidths() {
     print("")
     print("— 3 · what the mode toggle actually costs —")
-
-    // Every state the row can render, because the toggle is not one width: the
-    // selected segment's label is semibold and the three labels differ in length,
-    // so which mode is selected changes how wide the control is — "Reminders"
-    // selected is the widest of the four.
-    //
-    // What the layout needs is that its reserve *covers* the widest of them.
-    // This asserted equality instead, which turned half a point of font-metric
-    // drift into a failure in the safe direction (a reserve with slack is not a
-    // layout bug) while leaving the unsafe direction — a reserve too small for a
-    // control the row can really draw — unwatched, since only one selected state
-    // was ever measured. Measured 2026-09-21: the real control is 56.00pt with
-    // icons and 156.00 / 157.50pt labelled at 2x, and 57.00 / 158.00 / 159.00 at
-    // 1x, against reserves of 57 and 160 — which is why the reserve is the 1x
-    // figure and why the context is printed below.
     let scale = NSScreen.main?.backingScaleFactor ?? -1
     print("    measured on \(NSScreen.screens.count) screen(s), backing scale \(fmt(scale))"
-        + " — the same toggle is up to 1.5pt wider at 1x")
+        + "")
 
-    for showsLabels in [false, true] {
-        let reserve = showsLabels
-            ? NotebookToolbarLayout.modeToggleLabelledWidth
-            : NotebookToolbarLayout.modeToggleIconWidth
+    for interfaceSize in interfaceSizes {
+        let typography = AppTypography(interfaceSize: interfaceSize)
+        for showsLabels in [false, true] {
+            let reserve = showsLabels
+                ? NotebookToolbarLayout.labelledModeToggleWidth(for: typography)
+                : NotebookToolbarLayout.modeToggleIconWidth
 
-        var widest: CGFloat = -1
-        var widestSelection = DrawerMode.notes
-        for selection in DrawerMode.allCases {
-            let host = host(
-                Measured(name: "toggle") {
-                    DrawerModeToggle(mode: selection, showsLabels: showsLabels) { _ in }
-                },
-                width: 600
-            )
-            let measured = withExtendedLifetime(host) { Recorded.frames["toggle"] }
-            Recorded.reset()
+            var widest: CGFloat = -1
+            var widestSelection = DrawerMode.notes
+            for selection in DrawerMode.allCases {
+                let hostedToggle = host(
+                    Measured(name: "toggle") {
+                        DrawerModeToggle(mode: selection, showsLabels: showsLabels) { _ in }
+                    },
+                    width: 600,
+                    typography: typography
+                )
+                let measured = withExtendedLifetime(hostedToggle) { Recorded.frames["toggle"] }
+                Recorded.reset()
 
-            let width = measured?.width ?? -1
-            if width > widest {
-                widest = width
-                widestSelection = selection
+                let width = measured?.width ?? -1
+                if width > widest {
+                    widest = width
+                    widestSelection = selection
+                }
             }
-        }
 
-        // Half a point is font-metric rounding; more is the reserve being too
-        // small. The slack is printed either way, so a reserve that is quietly
-        // getting generous shows up here instead of going unnoticed.
-        let slack = reserve - widest
-        check(
-            "the \(showsLabels ? "labelled" : "icons only") reserve covers the toggle",
-            slack >= -0.5,
-            "widest \(fmt(widest))pt with \(widestSelection.title.lowercased()) selected, "
-                + "reserve \(fmt(reserve))pt, slack \(fmt(slack))pt"
-        )
+            // A reserve may have safe slack, but it must cover every rendered
+            // selection at this interface size.
+            let slack = reserve - widest
+            check(
+                "\(interfaceSize.title) \(showsLabels ? "labelled" : "icons only") reserve covers the toggle",
+                slack >= -0.5,
+                "widest \(fmt(widest))pt with \(widestSelection.title.lowercased()) selected, "
+                    + "reserve \(fmt(reserve))pt, slack \(fmt(slack))pt"
+            )
+        }
     }
 }
 
@@ -709,6 +810,7 @@ MainActor.assumeIsolated {
     print("")
     checkArithmetic()
     checkRenderedRow()
+    checkTypographyRows()
     checkModeToggleWidths()
     checkWheel()
     checkReveal()

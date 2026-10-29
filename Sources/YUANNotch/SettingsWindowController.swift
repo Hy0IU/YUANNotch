@@ -188,6 +188,8 @@ struct SettingsView: View {
         .navigationSplitViewStyle(.balanced)
         .toolbar(removing: .sidebarToggle)
         .frame(minWidth: 580, minHeight: 380)
+        .environment(\.appTypography, settingsStore.typography)
+        .font(settingsStore.typography.font(.body))
     }
 
     @ViewBuilder
@@ -215,6 +217,7 @@ struct SettingsView: View {
                 }
 
             Text(tab.title)
+                .appText(.body)
         }
         .padding(.vertical, 3)
     }
@@ -265,13 +268,15 @@ private struct StartupSettingsView: View {
 
                 if let errorMessage = manager.errorMessage {
                     Text(errorMessage)
-                        .font(.footnote)
+                        .appText(.secondary)
                         .foregroundStyle(.red)
                 }
             } header: {
                 Text("Startup")
+                    .appText(.sectionTitle)
             } footer: {
                 Text(footer)
+                    .appText(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -335,12 +340,73 @@ private struct AppearanceSettingsView: View {
                 )
             } header: {
                 Text("Corner Radius")
+                    .appText(.sectionTitle)
             } footer: {
                 Text("Corner radius of the expanded panel. Applies immediately.")
+                    .appText(.secondary)
+            }
+
+            Section {
+                Picker("Interface text size", selection: $settingsStore.interfaceTextSize) {
+                    ForEach(InterfaceTextSize.allCases) { size in
+                        Text(size.title).appText(.body).tag(size)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                LabeledContent("Note text size") {
+                    HStack(spacing: 8) {
+                        ValueField(
+                            value: $settingsStore.noteFontSize,
+                            range: AppTypography.noteFontSizeRange,
+                            decimals: 0,
+                            unit: "pt",
+                            accessibilityLabel: "Note text size in points"
+                        )
+
+                        Stepper(value: noteFontSizeBinding, in: AppTypography.noteFontSizeRange, step: 1) {
+                            EmptyView()
+                        }
+                        .labelsHidden()
+                        .accessibilityLabel("Adjust note text size")
+
+                        Button("Reset") {
+                            settingsStore.noteFontSize = AppTypography.defaultNoteFontSize
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
+                LabeledContent("Interface preview") {
+                    Text("Settings and controls")
+                        .appText(.body)
+                }
+
+                LabeledContent("Note preview") {
+                    Text("A sample note")
+                        .font(.system(size: settingsStore.typography.noteFontSize))
+                }
+
+                Text("Note shortcuts: ⌘+ / ⌘− / ⌘0")
+                    .appText(.secondary)
+            } header: {
+                Text("Text")
+                    .appText(.sectionTitle)
+            } footer: {
+                Text("Changes apply immediately. Note text size is independent of interface text size.")
+                    .appText(.secondary)
             }
         }
         .formStyle(.grouped)
     }
+
+    private var noteFontSizeBinding: Binding<Double> {
+        Binding(
+            get: { settingsStore.noteFontSize },
+            set: { settingsStore.noteFontSize = AppTypography.normalizedNoteFontSize($0) }
+        )
+    }
+
 }
 
 /// A slider and a field editing the same value under the same limits.
@@ -442,6 +508,7 @@ private struct ValueField: View {
 
             Text(unit)
                 .foregroundStyle(.secondary)
+                .appText(.secondary)
         }
     }
 
@@ -547,6 +614,7 @@ private struct TriggerSettingsView: View {
                 .pickerStyle(.inline)
             } footer: {
                 Text("Hover: moving the cursor to the top edge opens the panel. Click: click the notch area to open it.")
+                    .appText(.secondary)
             }
 
             Section {
@@ -564,6 +632,7 @@ private struct TriggerSettingsView: View {
                 )
             } footer: {
                 Text("How long the pointer must remain over the notch before the panel opens. Set to 0 for an immediate response.")
+                    .appText(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -591,6 +660,7 @@ private struct NotesSettingsView: View {
                         HStack(spacing: 10) {
                             Text(error)
                                 .foregroundStyle(.secondary)
+                                .appText(.secondary)
                             Button("Dismiss") { library.dismissError() }
                         }
                     }
@@ -609,6 +679,7 @@ private struct NotesSettingsView: View {
                 HStack(spacing: 10) {
                     Text(library.directoryURL.path)
                         .foregroundStyle(.secondary)
+                        .appText(.secondary)
                         .lineLimit(2)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
@@ -620,6 +691,7 @@ private struct NotesSettingsView: View {
             }
         } header: {
             Text("Location")
+                .appText(.sectionTitle)
         } footer: {
             Text(
                 """
@@ -640,6 +712,7 @@ private struct NotesSettingsView: View {
                 HStack(spacing: 10) {
                     Text(fileCountDescription)
                         .foregroundStyle(.secondary)
+                        .appText(.secondary)
 
                     Button("Import as Notes") {
                         lastImportCount = noteStore.adoptLooseMarkdownFiles()
@@ -651,9 +724,11 @@ private struct NotesSettingsView: View {
             if let lastImportCount {
                 Text(importResultDescription(lastImportCount))
                     .foregroundStyle(.secondary)
+                    .appText(.secondary)
             }
         } header: {
             Text("Markdown Files Not in the Notebook")
+                .appText(.sectionTitle)
         } footer: {
             Text(
                 """
@@ -719,6 +794,7 @@ private struct FileShelfSettingsView: View {
                 Toggle("Enable file shelf", isOn: $settingsStore.isFileShelfEnabled)
             } footer: {
                 Text("Drop files onto the notch or the open panel to stage them, then drag them out into other apps. Staged files stay in place on disk.")
+                    .appText(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -738,6 +814,7 @@ private struct IntegrationsSettingsView: View {
                     .disabled(reminderStore.isBusy)
             } header: {
                 Text("Apple Reminders")
+                    .appText(.sectionTitle)
             } footer: {
                 Text(
                     """
@@ -788,6 +865,7 @@ private struct IntegrationsSettingsView: View {
                 HStack(spacing: 10) {
                     Text(authorizationDescription)
                         .foregroundStyle(.secondary)
+                        .appText(.secondary)
 
                     if !reminderStore.authorization.canRead {
                         Button(reminderStore.authorization == .notDetermined ? "Request Access" : "Open System Settings") {
@@ -803,6 +881,7 @@ private struct IntegrationsSettingsView: View {
             }
         } footer: {
             Text(authorizationFooter)
+                .appText(.secondary)
         }
     }
 
@@ -812,6 +891,7 @@ private struct IntegrationsSettingsView: View {
             if reminderStore.lists.isEmpty {
                 Text("No writable reminder list was found. Create one in Reminders first.")
                     .foregroundStyle(.secondary)
+                    .appText(.secondary)
             } else {
                 // Read-only by design: the reminders panel is the one place the
                 // list is switched, so there is no second control to disagree
@@ -820,6 +900,7 @@ private struct IntegrationsSettingsView: View {
                 LabeledContent("List:") {
                     Text(listDescription)
                         .foregroundStyle(.secondary)
+                        .appText(.secondary)
                 }
 
                 LabeledContent("Open:") {
@@ -830,8 +911,10 @@ private struct IntegrationsSettingsView: View {
             }
         } header: {
             Text("List")
+                .appText(.sectionTitle)
         } footer: {
             Text(listFooter)
+                .appText(.secondary)
         }
     }
 
@@ -916,14 +999,14 @@ private struct AboutSettingsView: View {
                 .frame(width: 72, height: 72)
 
             Text("YUANNotch")
-                .font(.system(size: 22, weight: .bold))
+                .appText(.windowTitle)
 
             Text("Version \(version)")
-                .font(.callout)
+                .appText(.secondary)
                 .foregroundStyle(.secondary)
 
             Text("A native macOS note app that lives at the top edge of your screen.")
-                .font(.callout)
+                .appText(.secondary)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)

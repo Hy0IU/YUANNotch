@@ -164,7 +164,7 @@ final class NotchPanelController: NSObject {
     private var floatingHostingView: FirstMouseHostingView<NotebookView>?
     private var floatingDrawerState: DrawerState?
     private var floatingPlanPanel: NotchPanel?
-    private var floatingPlanHostingView: FirstMouseHostingView<FloatingPlanPanelView>?
+    private var floatingPlanHostingView: FirstMouseHostingView<FloatingPlanTypographyRoot>?
     private var floatingPlanLastFrame: NSRect?
     private var panelDragSession: PanelDragSession?
     private var isDockingPanel = false
@@ -495,8 +495,9 @@ final class NotchPanelController: NSObject {
 
         if floatingPlanHostingView == nil {
             let host = FirstMouseHostingView(
-                rootView: FloatingPlanPanelView(
+                rootView: FloatingPlanTypographyRoot(
                     store: dailyPlanStore,
+                    settingsStore: settingsStore,
                     onHide: { [weak self] in self?.hideFloatingPlan() }
                 )
             )
@@ -1755,5 +1756,19 @@ extension NotchPanelController: NSWindowDelegate {
         finishDrawerResize()
         floatingDrawerState?.isResizing = false
         backgroundDragLastFrame = panel.frame
+    }
+}
+
+/// The timer lives in its own hosting tree, so it observes the same settings
+/// store as the drawer instead of capturing a one-time environment snapshot.
+private struct FloatingPlanTypographyRoot: View {
+    @ObservedObject var store: DailyPlanStore
+    @ObservedObject var settingsStore: AppSettingsStore
+    let onHide: () -> Void
+
+    var body: some View {
+        FloatingPlanPanelView(store: store, onHide: onHide)
+            .environment(\.appTypography, settingsStore.typography)
+            .font(settingsStore.typography.font(.body))
     }
 }

@@ -59,5 +59,6 @@ struct NotebookToolbar: View {
             .help("Settings")
         }
         .frame(height: DrawerMetrics.toolbarHeight, alignment: .center)
+        .environment(\.appTypography, layout.typography)
     }
 }

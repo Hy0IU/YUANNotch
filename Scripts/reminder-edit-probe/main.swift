@@ -521,29 +521,35 @@ private func checkDueEditorLayout(store: ReminderStore) {
         return view.subviews.flatMap { datePickers(in: $0) }
     }
 
-    for width: CGFloat in [300, 360, 520] {
-        for (name, hasDate, hasTime, count) in [("timed", true, true, 2), ("all-day", true, false, 1), ("no-date", false, false, 0)] {
-            store.editingDueDraft?.hasDate = hasDate
-            store.editingDueDraft?.hasTime = hasTime
-            let host = NSHostingView(rootView: ReminderDueEditor(store: store).frame(width: width, height: 360))
-            host.frame = CGRect(x: 0, y: 0, width: width, height: 360)
-            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-            window.contentView = host
-            for _ in 0 ..< 5 {
-                host.layoutSubtreeIfNeeded()
-                RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+    for interfaceSize in InterfaceTextSize.allCases {
+        let typography = AppTypography(interfaceSize: interfaceSize)
+        for width: CGFloat in [300, 360, 520] {
+            for (name, hasDate, hasTime, count) in [("timed", true, true, 2), ("all-day", true, false, 1), ("no-date", false, false, 0)] {
+                store.editingDueDraft?.hasDate = hasDate
+                store.editingDueDraft?.hasTime = hasTime
+                let host = NSHostingView(rootView: ReminderDueEditor(store: store)
+                    .environment(\.appTypography, typography)
+                    .font(typography.font(.body))
+                    .frame(width: width, height: 360))
+                host.frame = CGRect(x: 0, y: 0, width: width, height: 360)
+                let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                window.contentView = host
+                for _ in 0 ..< 5 {
+                    host.layoutSubtreeIfNeeded()
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+                }
+                let pickers = datePickers(in: host)
+                let frames = pickers.map { $0.convert($0.bounds, to: host) }
+                let fits = frames.allSatisfy { $0.minX >= 0 && $0.maxX <= width && $0.width > 30 }
+                let separate = frames.count < 2 || !frames[0].intersects(frames[1])
+                check(pickers.count == count && fits && separate,
+                      "\(interfaceSize.rawValue) \(name) editor fits at \(Int(width))pt",
+                      "\(pickers.count) native date/time pickers; no horizontal clipping or overlap")
+                let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try! bitmap.representation(using: .png, properties: [:])!
+                    .write(to: output.appendingPathComponent("\(interfaceSize.rawValue)-\(name)-\(Int(width)).png"))
             }
-            let pickers = datePickers(in: host)
-            let frames = pickers.map { $0.convert($0.bounds, to: host) }
-            let fits = frames.allSatisfy { $0.minX >= 0 && $0.maxX <= width && $0.width > 30 }
-            let separate = frames.count < 2 || !frames[0].intersects(frames[1])
-            check(pickers.count == count && fits && separate,
-                  "\(name) editor fits at \(Int(width))pt",
-                  "\(pickers.count) native date/time pickers; no horizontal clipping or overlap")
-            let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
-            host.cacheDisplay(in: host.bounds, to: bitmap)
-            try! bitmap.representation(using: .png, properties: [:])!
-                .write(to: output.appendingPathComponent("\(name)-\(Int(width)).png"))
         }
     }
     print("Offscreen date editor previews: \(output.path)")
@@ -590,29 +596,34 @@ private func checkNaturalLanguageCreate() async {
 private func checkInputLayout(store: ReminderStore, settings: AppSettingsStore) {
     let output = FileManager.default.temporaryDirectory.appendingPathComponent("yuannotch-reminder-input-previews", isDirectory: true)
     try! FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-    for width: CGFloat in [300, 360, 520] {
-        for (name, input) in [("recognized", "28号晚上10点买药"), ("invalid", "2月30号买药"), ("repeated", "每天晚上10点买药")] {
-            store.composer.draft = input
-            let size = CGSize(width: width, height: 420)
-            let host = NSHostingView(rootView: RemindersPanelView(
-                store: store, settingsStore: settings, composer: store.composer, size: size, onOpenSettings: {}
-            ))
-            host.frame = CGRect(origin: .zero, size: size)
-            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
-            window.contentView = host
-            for _ in 0 ..< 5 {
-                host.layoutSubtreeIfNeeded()
-                RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+    for interfaceSize in InterfaceTextSize.allCases {
+        let typography = AppTypography(interfaceSize: interfaceSize)
+        for width: CGFloat in [300, 360, 520] {
+            for (name, input) in [("recognized", "28号晚上10点买药"), ("invalid", "2月30号买药"), ("repeated", "每天晚上10点买药")] {
+                store.composer.draft = input
+                let size = CGSize(width: width, height: 420)
+                let host = NSHostingView(rootView: RemindersPanelView(
+                    store: store, settingsStore: settings, composer: store.composer, size: size, onOpenSettings: {}
+                ).environment(\.appTypography, typography)
+                 .font(typography.font(.body)))
+                host.frame = CGRect(origin: .zero, size: size)
+                let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                window.contentView = host
+                for _ in 0 ..< 5 {
+                    host.layoutSubtreeIfNeeded()
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+                }
+                if let inputField = field(in: host, placeholder: "New reminder") {
+                    let frame = inputField.convert(inputField.bounds, to: host)
+                    check(frame.width >= 100 && frame.minX >= 0 && frame.maxX <= width && inputField.stringValue == input
+                        && inputField.font?.pointSize == typography.size(.body),
+                          "\(interfaceSize.rawValue) \(name) input fits at \(Int(width))pt", "raw input is unchanged; the native field fits the panel")
+                } else { check(false, "input field rendered", "the shipping panel did not produce its compose field") }
+                let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try! bitmap.representation(using: .png, properties: [:])!.write(to: output.appendingPathComponent("\(interfaceSize.rawValue)-\(name)-\(Int(width)).png"))
+                store.setPanelVisible(false)
             }
-            if let inputField = field(in: host, placeholder: "New reminder") {
-                let frame = inputField.convert(inputField.bounds, to: host)
-                check(frame.width >= 100 && frame.minX >= 0 && frame.maxX <= width && inputField.stringValue == input,
-                      "\(name) input fits at \(Int(width))pt", "raw input is unchanged; the native field fits the panel")
-            } else { check(false, "input field rendered", "the shipping panel did not produce its compose field") }
-            let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
-            host.cacheDisplay(in: host.bounds, to: bitmap)
-            try! bitmap.representation(using: .png, properties: [:])!.write(to: output.appendingPathComponent("\(name)-\(Int(width)).png"))
-            store.setPanelVisible(false)
         }
     }
     print("Offscreen input previews: \(output.path)")

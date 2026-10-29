@@ -86,7 +86,7 @@ struct FileShelfChip: View {
                 }
 
                 Text(displayName)
-                    .font(.system(size: 9, weight: .medium))
+                    .appText(.compact)
                     .foregroundStyle(
                         .white.opacity(
                             isAvailable ? (isSelected ? 0.92 : 0.66) : 0.34

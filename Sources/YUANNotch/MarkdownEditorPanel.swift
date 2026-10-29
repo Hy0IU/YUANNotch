@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MarkdownEditorPanel: View {
     @ObservedObject var store: NoteStore
+    let settingsStore: AppSettingsStore
     let imageStore: LocalImageStore
     let editorInteractionState: EditorInteractionState
     let isFileShelfToggleVisible: Bool
@@ -16,6 +17,7 @@ struct MarkdownEditorPanel: View {
         VStack(spacing: 0) {
             MarkdownNoteEditor(
                 store: store,
+                settingsStore: settingsStore,
                 imageStore: imageStore,
                 editorInteractionState: editorInteractionState
             )

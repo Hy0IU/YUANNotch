@@ -31,6 +31,8 @@ struct NotebookView: View {
                 onShowFloatingPlan: onShowFloatingPlan
             )
         }
+        .environment(\.appTypography, settingsStore.typography)
+        .font(settingsStore.typography.font(.body))
     }
 
     /// The hosting view fills the panel. Its offered size is the panel's
@@ -216,6 +218,7 @@ private struct NotebookViewContent: View {
                         case .notes:
                             MarkdownEditorPanel(
                                 store: store,
+                                settingsStore: settingsStore,
                                 imageStore: imageStore,
                                 editorInteractionState: editorInteractionState,
                                 isFileShelfToggleVisible: settingsStore.isFileShelfEnabled
@@ -288,7 +291,7 @@ private struct NotebookViewContent: View {
     /// this one value — the pager's strip, the mode toggle's labels and the
     /// narrowing of the strip — so none of them can drift from the others.
     private var toolbarLayout: NotebookToolbarLayout {
-        NotebookToolbarLayout(width: editorSize.width, mode: effectiveMode)
+        NotebookToolbarLayout(width: editorSize.width, mode: effectiveMode, typography: settingsStore.typography)
     }
 
     private var compactIcon: some View {

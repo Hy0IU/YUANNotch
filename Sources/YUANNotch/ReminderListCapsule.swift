@@ -5,6 +5,7 @@ import SwiftUI
 /// One local view onto a real Reminders list. Activating a capsule switches
 /// views; clicking the selected capsule opens its list chooser and actions.
 struct ReminderListCapsule: View {
+    @Environment(\.appTypography) private var typography
     let list: ReminderList
     let availableLists: [ReminderList]
     let occupiedListIDs: Set<String>
@@ -23,7 +24,7 @@ struct ReminderListCapsule: View {
         // compress the visible dimensions.
         .padding(.horizontal, 12)
         .frame(minWidth: 56)
-        .frame(height: 24)
+        .frame(height: typography.controlHeight())
         // Draw the shell around the control itself. macOS is free to re-host a
         // menu's label, which can discard a background attached inside it.
         .background(
@@ -81,10 +82,10 @@ struct ReminderListCapsule: View {
                                 .font(.system(size: 11, weight: .semibold))
                         }
                     }
-                    .font(.system(size: 12))
+                    .appText(.control, weight: .regular)
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 8)
-                    .frame(height: 28)
+                    .frame(minHeight: typography.controlHeight(base: 28))
                     .contentShape(RoundedRectangle(cornerRadius: 5))
                 }
                 .buttonStyle(.plain)
@@ -98,9 +99,9 @@ struct ReminderListCapsule: View {
                 onDelete()
             } label: {
                 Label("Remove View", systemImage: "trash")
-                    .font(.system(size: 12))
+                    .appText(.control, weight: .regular)
                     .padding(.horizontal, 8)
-                    .frame(height: 28)
+                    .frame(minHeight: typography.controlHeight(base: 28))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(RoundedRectangle(cornerRadius: 5))
             }
@@ -114,7 +115,7 @@ struct ReminderListCapsule: View {
 
     private var capsuleLabel: some View {
         Text(list.title)
-            .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+            .appText(.control, weight: isSelected ? .semibold : .medium)
             .foregroundStyle(.white.opacity(isSelected ? 0.92 : 0.72))
             .lineLimit(1)
             .truncationMode(.tail)
@@ -136,6 +137,7 @@ struct ReminderListCapsule: View {
 /// into horizontal movement. Unlike the individual capsules, the strip is the
 /// only object that consumes wheel events.
 struct ReminderListStripScroll<Content: View>: NSViewRepresentable {
+    @Environment(\.appTypography) private var typography
     let height: CGFloat
     @ViewBuilder let content: Content
 
@@ -145,7 +147,7 @@ struct ReminderListStripScroll<Content: View>: NSViewRepresentable {
 
     func makeNSView(context: Context) -> ReminderListStripScrollView {
         let scrollView = ReminderListStripScrollView()
-        let hostingView = NSHostingView(rootView: content)
+        let hostingView = NSHostingView(rootView: hostedContent)
         hostingView.sizingOptions = [.intrinsicContentSize]
         scrollView.documentView = hostingView
         context.coordinator.hostingView = hostingView
@@ -158,13 +160,13 @@ struct ReminderListStripScroll<Content: View>: NSViewRepresentable {
         // Capture before changing the hosted tree. AppKit may adjust the clip
         // view as soon as the document's intrinsic width changes.
         let previousX = scrollView.contentView.bounds.origin.x
-        hostingView.rootView = content
+        hostingView.rootView = hostedContent
         hostingView.invalidateIntrinsicContentSize()
         resize(hostingView, in: scrollView, preservingX: previousX)
     }
 
     private func resize(
-        _ hostingView: NSHostingView<Content>,
+        _ hostingView: NSHostingView<AnyView>,
         in scrollView: NSScrollView,
         preservingX previousX: CGFloat
     ) {
@@ -177,7 +179,16 @@ struct ReminderListStripScroll<Content: View>: NSViewRepresentable {
     }
 
     final class Coordinator {
-        var hostingView: NSHostingView<Content>?
+        var hostingView: NSHostingView<AnyView>?
+    }
+
+    // A new NSHostingView starts a separate SwiftUI environment. Forward the
+    // current metrics on both creation and update so this strip follows the
+    // rest of the drawer when the user changes its text size.
+    private var hostedContent: AnyView {
+        AnyView(content
+            .environment(\.appTypography, typography)
+            .font(typography.font(.body)))
     }
 }
 
