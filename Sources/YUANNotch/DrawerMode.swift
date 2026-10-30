@@ -15,7 +15,7 @@ enum DrawerMode: String, CaseIterable, Identifiable {
         switch self {
         case .notes: return "Notes"
         case .reminders: return "Reminders"
-        case .plans: return "Plans"
+        case .plans: return "Goals"
         }
     }
 

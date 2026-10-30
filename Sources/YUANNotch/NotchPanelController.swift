@@ -163,9 +163,7 @@ final class NotchPanelController: NSObject {
     private var floatingPanel: NotchPanel?
     private var floatingHostingView: FirstMouseHostingView<NotebookView>?
     private var floatingDrawerState: DrawerState?
-    private var floatingPlanPanel: NotchPanel?
-    private var floatingPlanHostingView: FirstMouseHostingView<FloatingPlanTypographyRoot>?
-    private var floatingPlanLastFrame: NSRect?
+    private var floatingPlanController: FloatingPlanWindowController?
     private var panelDragSession: PanelDragSession?
     private var isDockingPanel = false
     private var backgroundDragLastFrame: NSRect?
@@ -268,26 +266,6 @@ final class NotchPanelController: NSObject {
         return panel
     }
 
-    private func makeFloatingPlanPanel() -> NotchPanel {
-        let panel = NotchPanel(
-            contentRect: .zero,
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.allowsKeyboardFocus = false
-        configurePanel(panel)
-        panel.level = .floating
-        // The content view is transparent and contains live SwiftUI/AppKit
-        // text. AppKit's window shadow is computed from that changing alpha
-        // mask, which can leave a stale offset glyph beside a refreshed timer.
-        // The card owns its own fixed-shape shadow instead.
-        panel.hasShadow = false
-        panel.isMovable = true
-        panel.isMovableByWindowBackground = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        return panel
-    }
 
     private func drawerPanel(for screen: NSScreen?) -> NotchPanel {
         let key = screen?.uniqueID ?? "unknown-screen"
@@ -474,69 +452,22 @@ final class NotchPanelController: NSObject {
             drawerState: drawerState,
             editorInteractionState: editorInteractionState,
             onOpenSettings: { [weak self] in self?.openSettings() },
-            onShowFloatingPlan: { [weak self] in self?.showFloatingPlan() }
+            onToggleFloatingPlan: { [weak self] in self?.toggleFloatingPlan() }
         )
     }
 
-    private func showFloatingPlan() {
-        guard dailyPlanStore.activeSession != nil,
-              dailyPlanStore.activePlan != nil else {
-            return
-        }
-
-        let panel: NotchPanel
-        if let existing = floatingPlanPanel {
-            panel = existing
-        } else {
-            let created = makeFloatingPlanPanel()
-            floatingPlanPanel = created
-            panel = created
-        }
-
-        if floatingPlanHostingView == nil {
-            let host = FirstMouseHostingView(
-                rootView: FloatingPlanTypographyRoot(
-                    store: dailyPlanStore,
-                    settingsStore: settingsStore,
-                    onHide: { [weak self] in self?.hideFloatingPlan() }
-                )
+    private func toggleFloatingPlan() {
+        if floatingPlanController == nil {
+            floatingPlanController = FloatingPlanWindowController(
+                store: dailyPlanStore,
+                settingsStore: settingsStore
             )
-            host.autoresizingMask = [.width, .height]
-            host.sizingOptions = []
-            host.wantsLayer = true
-            host.layer?.masksToBounds = false
-            floatingPlanHostingView = host
-            panel.contentView = host
         }
-
-        panel.setFrame(floatingPlanFrame(), display: true)
-        panel.orderFrontRegardless()
+        floatingPlanController?.toggle(on: currentScreen)
     }
 
     private func hideFloatingPlan() {
-        guard let panel = floatingPlanPanel else { return }
-        floatingPlanLastFrame = panel.frame
-        panel.orderOut(nil)
-    }
-
-    private func floatingPlanFrame() -> NSRect {
-        if let saved = floatingPlanLastFrame,
-           NSScreen.screens.contains(where: { $0.visibleFrame.intersects(saved) }) {
-            return saved
-        }
-
-        let screen = currentScreen ?? NSScreen.main ?? NSScreen.screens.first
-        let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let size = NSSize(
-            width: FloatingPlanMetrics.panelSize.width,
-            height: FloatingPlanMetrics.panelSize.height
-        )
-        return NSRect(
-            x: visibleFrame.maxX - size.width - 24,
-            y: visibleFrame.maxY - size.height - 24,
-            width: size.width,
-            height: size.height
-        )
+        floatingPlanController?.hide()
     }
 
     /// Get-or-create the drawer content for a display. Each panel keeps its
@@ -1759,16 +1690,3 @@ extension NotchPanelController: NSWindowDelegate {
     }
 }
 
-/// The timer lives in its own hosting tree, so it observes the same settings
-/// store as the drawer instead of capturing a one-time environment snapshot.
-private struct FloatingPlanTypographyRoot: View {
-    @ObservedObject var store: DailyPlanStore
-    @ObservedObject var settingsStore: AppSettingsStore
-    let onHide: () -> Void
-
-    var body: some View {
-        FloatingPlanPanelView(store: store, onHide: onHide)
-            .environment(\.appTypography, settingsStore.typography)
-            .font(settingsStore.typography.font(.body))
-    }
-}

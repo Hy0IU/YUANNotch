@@ -13,6 +13,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
     @Published var editingPlanID: UUID?
     @Published var draft = DailyPlanDraft()
     @Published var timeDraft: DailyPlanTimeDraft?
+    let floatingPresentation = FloatingPlanPresentation()
 
     private let persistence: DailyPlanPersistence
     private var calendar: Calendar
@@ -621,4 +622,11 @@ final class DailyPlanStore: NSObject, ObservableObject {
             return false
         }
     }
+}
+
+/// Shared by the drawer pin and the independent floating window; never persisted.
+@MainActor
+final class FloatingPlanPresentation: ObservableObject {
+    @Published var isVisible = false
+    @Published var isExpanded = false
 }

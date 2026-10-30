@@ -82,7 +82,7 @@ struct DailyPlanLayoutProbe {
                     store: store,
                     size: CGSize(width: 360, height: 420),
                     isDrawerExpanded: true,
-                    onShowFloatingPlan: {}
+                    onToggleFloatingPlan: {}
                 )
                 .environment(\.appTypography, typography),
                 size: CGSize(width: 360, height: 420)
@@ -134,9 +134,9 @@ struct DailyPlanLayoutProbe {
                 startsTimer: false
             )
             floatingStore.start(longPlan, at: floatingNow)
-            let floatingSize = FloatingPlanMetrics.panelSize
+            let floatingSize = FloatingPlanMetrics.expandedSize
             let floating = makeHost(
-                FloatingPlanPanelView(store: floatingStore, onHide: {})
+                FloatingPlanPanelView(store: floatingStore, isExpanded: true, onExpand: {})
                     .environment(\.appTypography, typography),
                 size: floatingSize
             )
@@ -151,6 +151,12 @@ struct DailyPlanLayoutProbe {
             precondition(timer.bounds.width + 0.5 >= timerWidth, "Floating countdown is clipped")
             try render(floating, to: output.appendingPathComponent("floating-\(sizeName).png"))
             print("PASS floating timer \(sizeName): full hour countdown fits the 360 × 125 card")
+            let compact = makeHost(
+                FloatingPlanPanelView(store: floatingStore, isExpanded: false, onExpand: {})
+                    .environment(\.appTypography, typography),
+                size: FloatingPlanMetrics.compactSize
+            )
+            try render(compact, to: output.appendingPathComponent("floating-compact-\(sizeName).png"))
         }
 
         var rolloverNow = calendar.date(from: DateComponents(year: 2026, month: 10, day: 29, hour: 3, minute: 50))!
@@ -166,7 +172,7 @@ struct DailyPlanLayoutProbe {
         let rolloverHost = makeHost(
             DailyPlansPanelView(
                 store: rolloverStore, size: CGSize(width: 520, height: 420),
-                isDrawerExpanded: true, onShowFloatingPlan: {}
+                isDrawerExpanded: true, onToggleFloatingPlan: {}
             ),
             size: CGSize(width: 520, height: 420)
         )

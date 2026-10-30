@@ -6,7 +6,7 @@ struct DailyPlansPanelView: View {
     @Environment(\.appTypography) private var typography
     let size: CGSize
     let isDrawerExpanded: Bool
-    let onShowFloatingPlan: () -> Void
+    let onToggleFloatingPlan: () -> Void
 
     @State private var page: Page = .today
 
@@ -175,7 +175,7 @@ struct DailyPlansPanelView: View {
             availableWidth: max(size.width - 20, 0),
             isDrawerExpanded: isDrawerExpanded,
             isFloating: false,
-            onFloatingAction: onShowFloatingPlan,
+            onFloatingAction: onToggleFloatingPlan,
             displayDate: nil
         )
     }
@@ -492,9 +492,46 @@ struct DailyPlansPanelView: View {
     }
 }
 
+private struct FloatingPlanPinButton: View {
+    @ObservedObject var presentation: FloatingPlanPresentation
+    let action: () -> Void
+
+    private var hidesTimer: Bool { presentation.isVisible }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: hidesTimer ? "pin.slash.fill" : "pin.fill")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(
+                    presentation.isVisible
+                        ? Color.orange
+                        : Color.white.opacity(0.52)
+                )
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.plain)
+        .help(hidesTimer ? "Hide floating timer" : "Show floating timer")
+        .accessibilityLabel(hidesTimer ? "Hide floating timer" : "Show floating timer")
+    }
+}
+
 enum FloatingPlanMetrics {
-    static let panelSize = CGSize(width: 360, height: 125)
+    static let compactSize = CGSize(width: 64, height: 64)
+    static let expandedSize = CGSize(width: 360, height: 125)
     static let edgeInset: CGFloat = 6
+    static let collapseDelay: TimeInterval = 0.12
+    static let collapseDuration: TimeInterval = 0.22
+
+    static func collapseFrame(from start: CGRect, to end: CGRect, progress: Double) -> CGRect {
+        let t = CGFloat(min(max(progress, 0), 1))
+        let eased = t * t * (3 - 2 * t)
+        return CGRect(
+            x: start.minX + (end.minX - start.minX) * eased,
+            y: start.minY + (end.minY - start.minY) * eased,
+            width: start.width + (end.width - start.width) * eased,
+            height: start.height + (end.height - start.height) * eased
+        )
+    }
 }
 
 private struct FloatingPlanCountdownLabel: NSViewRepresentable {
@@ -538,29 +575,128 @@ private struct FloatingPlanCountdownLabel: NSViewRepresentable {
     }
 }
 
-struct FloatingPlanPanelView: View {
-    @ObservedObject var store: DailyPlanStore
-    let onHide: () -> Void
+private struct FloatingPlanCardBackground: View {
+    var cornerRadius: CGFloat = 14
 
     var body: some View {
-        ZStack {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        shape.fill(.thickMaterial)
+            .overlay { shape.fill(Color(red: 0.08, green: 0.08, blue: 0.10).opacity(0.68)) }
+            .overlay { shape.stroke(.white.opacity(0.045), lineWidth: 0.5) }
+    }
+}
+
+private struct FloatingPlanControlsBoundsKey: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
+private struct FloatingPlanDragRegion: NSViewRepresentable {
+    let controlsFrame: CGRect
+
+    func makeNSView(context: Context) -> DragView {
+        DragView()
+    }
+
+    func updateNSView(_ view: DragView, context: Context) {
+        view.controlsFrame = controlsFrame
+    }
+
+    final class DragView: NSView {
+        var controlsFrame = CGRect.zero
+
+        override var isFlipped: Bool { true }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            let localPoint = convert(point, from: superview)
+            guard !controlsFrame.contains(localPoint) else { return nil }
+            return super.hitTest(point)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            window?.performDrag(with: event)
+        }
+    }
+}
+
+struct FloatingPlanPanelView: View {
+    @ObservedObject var store: DailyPlanStore
+    let isExpanded: Bool
+    let onExpand: () -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            let metrics = FloatingPlanMetrics.self
+            let expansion = min(max(
+                (geometry.size.width - metrics.compactSize.width)
+                    / (metrics.expandedSize.width - metrics.compactSize.width),
+                0
+            ), 1)
+            let width = max(geometry.size.width - metrics.edgeInset * 2, 0)
+            let height = max(geometry.size.height - metrics.edgeInset * 2, 0)
+            let cornerRadius = 12 + 2 * expansion
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                DailyPlanActiveCardView(
-                    store: store,
-                    availableWidth: FloatingPlanMetrics.panelSize.width - FloatingPlanMetrics.edgeInset * 2,
-                    isDrawerExpanded: false,
-                    isFloating: true,
-                    onFloatingAction: onHide,
-                    displayDate: context.date
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                if let session = store.activeSession, let plan = store.activePlan {
+                    ZStack(alignment: .topLeading) {
+                        FloatingPlanCardBackground(cornerRadius: cornerRadius)
+                        if expansion > 0 {
+                            DailyPlanActiveCardView(
+                                store: store,
+                                availableWidth: metrics.expandedSize.width - metrics.edgeInset * 2,
+                                isDrawerExpanded: false,
+                                isFloating: true,
+                                displayDate: context.date,
+                                showsProgressRing: false,
+                                showsBackground: false
+                            )
+                            .frame(
+                                width: metrics.expandedSize.width - metrics.edgeInset * 2,
+                                height: metrics.expandedSize.height - metrics.edgeInset * 2,
+                                alignment: .topLeading
+                            )
+                            .opacity(min(max((expansion - 0.65) / 0.35, 0), 1))
+                            .accessibilityHidden(expansion < 1)
+                            .allowsHitTesting(expansion == 1)
+                        }
+                        Button {
+                            if !isExpanded { onExpand() }
+                        } label: {
+                            CircularPlanProgress(
+                                progress: session.phaseDuration > 0
+                                    ? store.phaseElapsed(at: context.date) / session.phaseDuration
+                                    : 0,
+                                color: session.phase == .focus ? .orange : .green,
+                                centerText: expansion > 0 ? focusRoundText(session, plan: plan) : "",
+                                size: 32 + 26 * expansion,
+                                centerTextOpacity: expansion
+                            )
+                            .position(x: 26 + 12 * expansion, y: 26 + 12 * expansion)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .allowsHitTesting(!isExpanded)
+                        .accessibilityHidden(isExpanded)
+                        .accessibilityLabel("Expand focus timer")
+                        .help("Click to expand the focus timer")
+                    }
+                    .frame(width: width, height: height, alignment: .topLeading)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                }
+            }
+            .padding(metrics.edgeInset)
+        }
+        .overlayPreferenceValue(FloatingPlanControlsBoundsKey.self) { controls in
+            if isExpanded, let controls {
+                GeometryReader { geometry in
+                    FloatingPlanDragRegion(controlsFrame: geometry[controls])
+                }
             }
         }
-        .padding(FloatingPlanMetrics.edgeInset)
-        .frame(
-            width: FloatingPlanMetrics.panelSize.width,
-            height: FloatingPlanMetrics.panelSize.height
-        )
         .preferredColorScheme(.dark)
     }
 }
@@ -571,13 +707,13 @@ struct DailyPlanActiveCardView: View {
     let availableWidth: CGFloat
     let isDrawerExpanded: Bool
     let isFloating: Bool
-    let onFloatingAction: () -> Void
+    var onFloatingAction: (() -> Void)? = nil
     let displayDate: Date?
+    var showsProgressRing = true
+    var showsBackground = true
 
     private static let accent = Color.orange
     private static let cardBackground = Color.white.opacity(0.055)
-    private static let floatingCardTint = Color(red: 0.08, green: 0.08, blue: 0.10).opacity(0.68)
-    private static let floatingCardCornerRadius: CGFloat = 14
 
     @ViewBuilder
     var body: some View {
@@ -634,7 +770,9 @@ struct DailyPlanActiveCardView: View {
                 }
             }
             .padding(isFloating ? 9 : 11)
-            .background { cardBackgroundView }
+            .background {
+                if showsBackground { cardBackgroundView }
+            }
             // A one-second store refresh can arrive while the panel mask is
             // shrinking. Keep the timer text and progress ring from animating
             // inside that same reveal transaction; the panel itself still
@@ -652,20 +790,25 @@ struct DailyPlanActiveCardView: View {
         !isFloating && availableWidth < 390
     }
 
+    @ViewBuilder
     private func progressRing(
         _ session: FocusSession,
         plan: DailyPlan,
         phaseColor: Color,
         displayNow: Date
     ) -> some View {
-        CircularPlanProgress(
-            progress: session.phaseDuration > 0
-                ? store.phaseElapsed(at: displayNow) / session.phaseDuration
-                : 0,
-            color: phaseColor,
-            centerText: roundText(session, plan: plan),
-            size: 58
-        )
+        if showsProgressRing {
+            CircularPlanProgress(
+                progress: session.phaseDuration > 0
+                    ? store.phaseElapsed(at: displayNow) / session.phaseDuration
+                    : 0,
+                color: phaseColor,
+                centerText: focusRoundText(session, plan: plan),
+                size: 58
+            )
+        } else {
+            Color.clear.frame(width: 58, height: 58)
+        }
     }
 
     private func sessionDetails(
@@ -718,26 +861,22 @@ struct DailyPlanActiveCardView: View {
             .help(session.isRunning ? "Pause" : nextActionLabel(for: session))
             .accessibilityLabel(session.isRunning ? "Pause" : nextActionLabel(for: session))
 
-            if isFloating || usesCompactControls {
+            if usesCompactControls {
                 Menu {
-                    if !isFloating {
-                        Button { store.beginEditing(plan) } label: { Text("Edit").appText(.control) }
-                        Button { store.beginEditingTime(on: store.today) } label: {
-                            Text("Edit Focus Time…").appText(.control)
-                        }
-                        Divider()
+                    Button { store.beginEditing(plan) } label: { Text("Edit").appText(.control) }
+                    Button { store.beginEditingTime(on: store.today) } label: {
+                        Text("Edit Focus Time…").appText(.control)
                     }
+                    Divider()
                     Button {
                         store.finishCurrentPhase()
                     } label: {
                         Text(session.phase == .focus ? "Finish Round" : "Skip Break").appText(.control)
                     }
                     Button { store.resetSession() } label: { Text("Reset").appText(.control) }
-                    if !isFloating {
-                        Divider()
-                        Button(role: .destructive) { store.deletePlan(id: plan.id) } label: {
-                            Text("Delete").appText(.control)
-                        }
+                    Divider()
+                    Button(role: .destructive) { store.deletePlan(id: plan.id) } label: {
+                        Text("Delete").appText(.control)
                     }
                 } label: {
                     Image(systemName: "ellipsis")
@@ -749,8 +888,8 @@ struct DailyPlanActiveCardView: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help(isFloating ? "More timer actions" : "More plan and timer actions")
-                .accessibilityLabel(isFloating ? "More timer actions" : "More plan and timer actions")
+                .help("More plan and timer actions")
+                .accessibilityLabel("More plan and timer actions")
             } else {
                 Button {
                     store.finishCurrentPhase()
@@ -763,6 +902,7 @@ struct DailyPlanActiveCardView: View {
                 }
                 .buttonStyle(.plain)
                 .help(session.phase == .focus ? "Finish Round" : "Skip Break")
+                .accessibilityLabel(session.phase == .focus ? "Finish Round" : "Skip Break")
 
                 Button {
                     store.resetSession()
@@ -775,17 +915,15 @@ struct DailyPlanActiveCardView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Reset")
+                .accessibilityLabel("Reset")
             }
 
-            Button(action: onFloatingAction) {
-                Image(systemName: isFloating ? "pin.slash.fill" : "pin.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.52))
-                    .frame(width: 24, height: 24)
+            if !isFloating, let onFloatingAction {
+                FloatingPlanPinButton(
+                    presentation: store.floatingPresentation,
+                    action: onFloatingAction
+                )
             }
-            .buttonStyle(.plain)
-            .help(isFloating ? "Hide floating timer" : "Show floating timer")
-            .accessibilityLabel(isFloating ? "Hide floating timer" : "Show floating timer")
 
             if !isFloating && !usesCompactControls {
                 Menu {
@@ -808,27 +946,17 @@ struct DailyPlanActiveCardView: View {
                 .help("Plan options")
             }
         }
+        .anchorPreference(key: FloatingPlanControlsBoundsKey.self, value: .bounds) {
+            isFloating ? $0 : nil
+        }
     }
 
     @ViewBuilder
     private var cardBackgroundView: some View {
-        let shape = RoundedRectangle(
-            cornerRadius: isFloating ? Self.floatingCardCornerRadius : 10,
-            style: .continuous
-        )
         if isFloating {
-            shape
-                // The material supplies the desktop blur; the tint makes the
-                // live card substantially more opaque than the drawer card.
-                .fill(.thickMaterial)
-                .overlay {
-                    shape.fill(Self.floatingCardTint)
-                }
-                .overlay {
-                    shape.stroke(.white.opacity(0.045), lineWidth: 0.5)
-                }
+            FloatingPlanCardBackground()
         } else {
-            shape.fill(Self.cardBackground)
+            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Self.cardBackground)
         }
     }
 
@@ -840,14 +968,6 @@ struct DailyPlanActiveCardView: View {
         }
     }
 
-    private func roundText(_ session: FocusSession, plan: DailyPlan) -> String {
-        guard plan.pomodoro.isEnabled else { return "Free" }
-        let round = session.phase == .focus
-            ? session.completedFocusRounds + 1
-            : max(session.completedFocusRounds, 1)
-        let withinCycle = ((round - 1) % plan.pomodoro.roundsBeforeLongBreak) + 1
-        return "\(withinCycle) / \(plan.pomodoro.roundsBeforeLongBreak)"
-    }
 
     private func durationText(_ seconds: TimeInterval) -> String {
         let totalMinutes = max(Int(seconds) / 60, 0)
@@ -868,6 +988,15 @@ struct DailyPlanActiveCardView: View {
         }
         return String(format: "%02d:%02d", minutes, remainder)
     }
+}
+
+private func focusRoundText(_ session: FocusSession, plan: DailyPlan) -> String {
+    guard plan.pomodoro.isEnabled else { return "Free" }
+    let round = session.phase == .focus
+        ? session.completedFocusRounds + 1
+        : max(session.completedFocusRounds, 1)
+    let withinCycle = ((round - 1) % plan.pomodoro.roundsBeforeLongBreak) + 1
+    return "\(withinCycle) / \(plan.pomodoro.roundsBeforeLongBreak)"
 }
 
 private struct IntegerPlanInput: View {
@@ -994,6 +1123,7 @@ private struct CircularPlanProgress: View {
     let color: Color
     let centerText: String
     let size: CGFloat
+    var centerTextOpacity: Double = 1
 
     var body: some View {
         ZStack {
@@ -1008,6 +1138,7 @@ private struct CircularPlanProgress: View {
                     .appText(.compact)
                     .foregroundStyle(.white.opacity(0.72))
                     .monospacedDigit()
+                    .opacity(centerTextOpacity)
             }
         }
         .frame(width: size, height: size)
