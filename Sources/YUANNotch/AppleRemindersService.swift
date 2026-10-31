@@ -205,7 +205,8 @@ extension RemindersServing {
 /// violations are hard errors. The store is actor-isolated state and never
 /// crosses an isolation boundary.
 actor AppleRemindersService: RemindersServing {
-    private let store = EKEventStore()
+    // Actor-isolated; the Schedule conformance uses this same connection.
+    let store = EKEventStore()
 
     private var changeObserver: NSObjectProtocol?
     private var changeDebounceTask: Task<Void, Never>?

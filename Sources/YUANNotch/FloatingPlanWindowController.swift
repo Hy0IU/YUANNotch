@@ -50,7 +50,8 @@ final class FloatingPlanWindowController: NSObject {
             store: store,
             settingsStore: settingsStore,
             presentation: presentation,
-            onExpand: { [weak self] in self?.expand() }
+            onExpand: { [weak self] in self?.expand() },
+            onHide: { [weak self] in self?.hide() }
         ))
         host.onMouseExit = { [weak self] in self?.collapseIfOutside() }
         host.onMouseEnter = { [weak self] in
@@ -254,12 +255,14 @@ private struct FloatingPlanWindowContent: View {
     @ObservedObject var settingsStore: AppSettingsStore
     @ObservedObject var presentation: FloatingPlanPresentation
     let onExpand: () -> Void
+    let onHide: () -> Void
 
     var body: some View {
         FloatingPlanPanelView(
             store: store,
             isExpanded: presentation.isExpanded,
-            onExpand: onExpand
+            onExpand: onExpand,
+            onHide: onHide
         )
         .environment(\.appTypography, settingsStore.typography)
         .font(settingsStore.typography.font(.body))

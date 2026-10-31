@@ -6,6 +6,7 @@ import SwiftUI
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let settingsStore: AppSettingsStore
     private let reminderStore: ReminderStore
+    private let scheduleStore: ScheduleStore
     private let notesLibrary: NotesLibrary
     private let noteStore: NoteStore
     private let onCheckForUpdates: () -> Void
@@ -14,12 +15,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     init(
         settingsStore: AppSettingsStore,
         reminderStore: ReminderStore,
+        scheduleStore: ScheduleStore,
         notesLibrary: NotesLibrary,
         noteStore: NoteStore,
         onCheckForUpdates: @escaping () -> Void
     ) {
         self.settingsStore = settingsStore
         self.reminderStore = reminderStore
+        self.scheduleStore = scheduleStore
         self.notesLibrary = notesLibrary
         self.noteStore = noteStore
         self.onCheckForUpdates = onCheckForUpdates
@@ -46,6 +49,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             rootView: SettingsView(
                 settingsStore: settingsStore,
                 reminderStore: reminderStore,
+                scheduleStore: scheduleStore,
                 notesLibrary: notesLibrary,
                 noteStore: noteStore,
                 launchAtLoginManager: launchAtLoginManager,
@@ -163,6 +167,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @ObservedObject var settingsStore: AppSettingsStore
     @ObservedObject var reminderStore: ReminderStore
+    @ObservedObject var scheduleStore: ScheduleStore
     let notesLibrary: NotesLibrary
     let noteStore: NoteStore
     @ObservedObject var launchAtLoginManager: LaunchAtLoginManager
@@ -236,7 +241,10 @@ struct SettingsView: View {
         case .fileShelf:
             FileShelfSettingsView(settingsStore: settingsStore)
         case .integrations:
-            IntegrationsSettingsView(settingsStore: settingsStore, reminderStore: reminderStore)
+            IntegrationsSettingsView(
+                settingsStore: settingsStore, reminderStore: reminderStore,
+                scheduleStore: scheduleStore
+            )
         case .about:
             AboutSettingsView(onCheckForUpdates: onCheckForUpdates)
         }
@@ -806,6 +814,7 @@ private struct FileShelfSettingsView: View {
 private struct IntegrationsSettingsView: View {
     @ObservedObject var settingsStore: AppSettingsStore
     @ObservedObject var reminderStore: ReminderStore
+    @ObservedObject var scheduleStore: ScheduleStore
 
     var body: some View {
         Form {
@@ -844,6 +853,8 @@ private struct IntegrationsSettingsView: View {
                     }
                 }
             }
+
+            ScheduleSourcesSettingsView(store: scheduleStore)
         }
         .formStyle(.grouped)
         .task { reminderStore.requestRefresh(reloadLists: true) }

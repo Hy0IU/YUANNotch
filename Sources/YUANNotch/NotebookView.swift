@@ -8,6 +8,7 @@ struct NotebookView: View {
     @ObservedObject var fileShelfStore: FileShelfStore
     @ObservedObject var reminderStore: ReminderStore
     @ObservedObject var dailyPlanStore: DailyPlanStore
+    @ObservedObject var scheduleStore: ScheduleStore
     @ObservedObject var workspaceState: NotebookWorkspaceState
     @ObservedObject var drawerState: DrawerState
     @ObservedObject var editorInteractionState: EditorInteractionState
@@ -23,6 +24,7 @@ struct NotebookView: View {
                 fileShelfStore: fileShelfStore,
                 reminderStore: reminderStore,
                 dailyPlanStore: dailyPlanStore,
+                scheduleStore: scheduleStore,
                 workspaceState: workspaceState,
                 drawerState: drawerState,
                 editorInteractionState: editorInteractionState,
@@ -59,6 +61,7 @@ private struct NotebookViewContent: View {
     @ObservedObject var fileShelfStore: FileShelfStore
     @ObservedObject var reminderStore: ReminderStore
     @ObservedObject var dailyPlanStore: DailyPlanStore
+    @ObservedObject var scheduleStore: ScheduleStore
     @ObservedObject var workspaceState: NotebookWorkspaceState
     @ObservedObject var drawerState: DrawerState
     @ObservedObject var editorInteractionState: EditorInteractionState
@@ -206,6 +209,13 @@ private struct NotebookViewContent: View {
                                 settingsStore: settingsStore,
                                 composer: reminderStore.composer,
                                 size: editorSize,
+                                onOpenSettings: onOpenSettings
+                            )
+                        case .schedule:
+                            SchedulePanelView(
+                                store: scheduleStore,
+                                size: editorSize,
+                                isDrawerExpanded: drawerState.isExpanded,
                                 onOpenSettings: onOpenSettings
                             )
                         case .plans:

@@ -133,10 +133,11 @@ struct DailyPlanLayoutProbe {
                 nowProvider: { floatingNow },
                 startsTimer: false
             )
+            floatingStore.floatingPresentation.isVisible = true
             floatingStore.start(longPlan, at: floatingNow)
             let floatingSize = FloatingPlanMetrics.expandedSize
             let floating = makeHost(
-                FloatingPlanPanelView(store: floatingStore, isExpanded: true, onExpand: {})
+                FloatingPlanPanelView(store: floatingStore, isExpanded: true, onExpand: {}, onHide: {})
                     .environment(\.appTypography, typography),
                 size: floatingSize
             )
@@ -150,9 +151,9 @@ struct DailyPlanLayoutProbe {
             let timerWidth = (timer.stringValue as NSString).size(withAttributes: [.font: timer.font!]).width
             precondition(timer.bounds.width + 0.5 >= timerWidth, "Floating countdown is clipped")
             try render(floating, to: output.appendingPathComponent("floating-\(sizeName).png"))
-            print("PASS floating timer \(sizeName): full hour countdown fits the 360 × 125 card")
+            print("PASS floating timer \(sizeName): full hour countdown fits the \(Int(floatingSize.width)) × \(Int(floatingSize.height)) card")
             let compact = makeHost(
-                FloatingPlanPanelView(store: floatingStore, isExpanded: false, onExpand: {})
+                FloatingPlanPanelView(store: floatingStore, isExpanded: false, onExpand: {}, onHide: {})
                     .environment(\.appTypography, typography),
                 size: FloatingPlanMetrics.compactSize
             )

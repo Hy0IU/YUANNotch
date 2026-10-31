@@ -120,7 +120,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>LSUIElement</key>
   <true/>
   <key>NSRemindersFullAccessUsageDescription</key>
-  <string>YUANNotch writes the reminders you create onto your Mac's Reminders database so Apple can sync them to your other devices.</string>
+  <string>YUANNotch reads dated reminders for your schedule and writes reminders you create so Apple can sync them to your other devices.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>YUANNotch reads your selected calendars to show meetings and other events alongside dated reminders in Schedule. This view does not modify your calendars.</string>
 </dict>
 </plist>
 PLIST

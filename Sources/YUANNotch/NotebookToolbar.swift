@@ -34,7 +34,8 @@ struct NotebookToolbar: View {
 
             DrawerModeToggle(
                 mode: layout.mode,
-                showsLabels: layout.showsModeToggleLabels
+                showsLabels: layout.showsModeToggleLabels,
+                usesMenu: layout.showsModeMenu
             ) { mode in
                 workspaceState.fileDragForcesNotesMode = false
                 settingsStore.drawerMode = mode

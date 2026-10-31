@@ -517,7 +517,7 @@ private struct FloatingPlanPinButton: View {
 
 enum FloatingPlanMetrics {
     static let compactSize = CGSize(width: 64, height: 64)
-    static let expandedSize = CGSize(width: 360, height: 125)
+    static let expandedSize = CGSize(width: 390, height: 125)
     static let edgeInset: CGFloat = 6
     static let collapseDelay: TimeInterval = 0.12
     static let collapseDuration: TimeInterval = 0.22
@@ -628,6 +628,7 @@ struct FloatingPlanPanelView: View {
     @ObservedObject var store: DailyPlanStore
     let isExpanded: Bool
     let onExpand: () -> Void
+    let onHide: () -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -650,6 +651,7 @@ struct FloatingPlanPanelView: View {
                                 availableWidth: metrics.expandedSize.width - metrics.edgeInset * 2,
                                 isDrawerExpanded: false,
                                 isFloating: true,
+                                onFloatingAction: onHide,
                                 displayDate: context.date,
                                 showsProgressRing: false,
                                 showsBackground: false
@@ -918,7 +920,7 @@ struct DailyPlanActiveCardView: View {
                 .accessibilityLabel("Reset")
             }
 
-            if !isFloating, let onFloatingAction {
+            if let onFloatingAction {
                 FloatingPlanPinButton(
                     presentation: store.floatingPresentation,
                     action: onFloatingAction

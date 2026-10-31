@@ -64,13 +64,14 @@ struct FloatingPlanProbe {
             print("Rendered \(size.rawValue) pin states on the same offscreen drawer")
         }
 
+        store.floatingPresentation.isVisible = true
         let compact = makeHost(
-            FloatingPlanPanelView(store: store, isExpanded: false, onExpand: {}),
+            FloatingPlanPanelView(store: store, isExpanded: false, onExpand: {}, onHide: {}),
             size: FloatingPlanMetrics.compactSize
         )
         try render(compact, to: output.appendingPathComponent("compact-progress.png"))
         let expanded = makeHost(
-            FloatingPlanPanelView(store: store, isExpanded: true, onExpand: {}),
+            FloatingPlanPanelView(store: store, isExpanded: true, onExpand: {}, onHide: {}),
             size: FloatingPlanMetrics.expandedSize
         )
         try render(expanded, to: output.appendingPathComponent("expanded.png"))
@@ -141,7 +142,7 @@ struct FloatingPlanProbe {
                 )
                 let host = makeHost(
                     FloatingPlanPanelView(
-                        store: breakStore, isExpanded: step != 2, onExpand: {}
+                        store: breakStore, isExpanded: step != 2, onExpand: {}, onHide: {}
                     ),
                     size: frame.size
                 )
@@ -151,12 +152,12 @@ struct FloatingPlanProbe {
         }
         for size in InterfaceTextSize.allCases {
             let host = makeHost(
-                FloatingPlanPanelView(store: store, isExpanded: true, onExpand: {})
+                FloatingPlanPanelView(store: store, isExpanded: true, onExpand: {}, onHide: {})
                     .environment(\.appTypography, AppTypography(interfaceSize: size)),
                 size: FloatingPlanMetrics.expandedSize
             )
             checkExpandedHitRegions(host)
-            print("PASS expanded \(size.rawValue): ring, countdown, and progress share a drag surface; all three controls remain outside it")
+            print("PASS expanded \(size.rawValue): drag surface excludes all four controls")
         }
         print("Offscreen previews: \(output.path)")
         print("No windows ordered front, pointer movement, clicks, keyboard input, or desktop event dispatch")
@@ -176,8 +177,8 @@ struct FloatingPlanProbe {
                      "The countdown must belong to the drag surface")
         precondition(hit(CGPoint(x: 120, y: 96)) === dragSurface,
                      "The progress row must belong to the drag surface")
-        // Fixed-size controls are right-aligned; probe inside each visible circle.
-        for (label, inset) in [("Play/Pause", 98.0), ("Finish Round", 62.0), ("Reset", 29.0)] {
+        // Fixed-size controls are right-aligned; probe inside each visible button.
+        for (label, inset) in [("Play/Pause", 127.0), ("Finish Round", 91.0), ("Reset", 58.0), ("Hide", 27.0)] {
             let buttonHit = hit(CGPoint(x: host.bounds.width - inset, y: 45))
             precondition(buttonHit != nil && buttonHit !== dragSurface,
                          "The drag surface must not intercept \(label)")

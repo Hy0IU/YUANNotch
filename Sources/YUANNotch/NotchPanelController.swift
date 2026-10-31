@@ -110,13 +110,16 @@ final class NotchPanelController: NSObject {
     }
 
     private let editorInteractionState = EditorInteractionState()
-    private lazy var reminderStore = ReminderStore(settingsStore: settingsStore)
+    private let eventKitService = AppleRemindersService()
+    private lazy var reminderStore = ReminderStore(settingsStore: settingsStore, service: eventKitService)
+    private lazy var scheduleStore = ScheduleStore(service: eventKitService)
     private let dailyPlanStore = DailyPlanStore(
         onPhaseCompleted: { InterfaceSound.focusPhaseCompleted() }
     )
     private lazy var settingsWindowController = SettingsWindowController(
         settingsStore: settingsStore,
         reminderStore: reminderStore,
+        scheduleStore: scheduleStore,
         notesLibrary: notesLibrary,
         noteStore: store,
         onCheckForUpdates: onCheckForUpdates
@@ -448,6 +451,7 @@ final class NotchPanelController: NSObject {
             fileShelfStore: fileShelfStore,
             reminderStore: reminderStore,
             dailyPlanStore: dailyPlanStore,
+            scheduleStore: scheduleStore,
             workspaceState: workspaceState,
             drawerState: drawerState,
             editorInteractionState: editorInteractionState,

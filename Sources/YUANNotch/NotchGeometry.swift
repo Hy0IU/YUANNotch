@@ -194,7 +194,8 @@ struct NotebookToolbarLayout: Equatable {
     /// standard typography. Layout decisions use the dynamic helper below.
     static let modeToggleLabelledWidth: CGFloat = labelledModeToggleWidth(for: AppTypography())
     /// Icons-only has no text, so this budget does not vary with typography.
-    static let modeToggleIconWidth: CGFloat = 84
+    static let modeToggleIconWidth: CGFloat = CGFloat(DrawerMode.allCases.count) * 26 + 8
+    static let modeMenuWidth: CGFloat = 36
     /// The pager's own chrome: minus, plus, the two gaps around the strip and
     /// the pill's horizontal padding.
     static let pagerChrome: CGFloat = 72
@@ -222,7 +223,7 @@ struct NotebookToolbarLayout: Equatable {
                 let weight: NSFont.Weight = candidate == selectedMode ? .semibold : .regular
                 let font = typography.nsFont(.control, weight: weight)
                 let titleWidth = (candidate.title as NSString).size(withAttributes: [.font: font]).width
-                return width + titleWidth
+                return width + ceil(titleWidth) + 1
             }
         }.max() ?? 0
 
@@ -249,15 +250,23 @@ struct NotebookToolbarLayout: Equatable {
         return width >= Self.standaloneWidthWithLabels(typography: typography)
     }
 
+    /// A fourth tab must not consume the last visible notebook dot.
+    var showsModeMenu: Bool {
+        isNotesMode && width < Self.pagerChrome + Self.trailingReserve(
+            showsClearButton: true, showsModeToggleLabels: false
+        ) + Self.dotSlot
+    }
+
     /// Everything the toolbar puts to the right of the pager.
     static func trailingReserve(
         showsClearButton: Bool,
         showsModeToggleLabels: Bool,
-        typography: AppTypography = AppTypography()
+        typography: AppTypography = AppTypography(),
+        showsModeMenu: Bool = false
     ) -> CGFloat {
-        let toggle = showsModeToggleLabels
-            ? labelledModeToggleWidth(for: typography)
-            : modeToggleIconWidth
+        let toggle = showsModeMenu ? modeMenuWidth : (
+            showsModeToggleLabels ? labelledModeToggleWidth(for: typography) : modeToggleIconWidth
+        )
         var reserve = itemSpacing + toggle
         if showsClearButton { reserve += itemSpacing + iconButton }
         reserve += itemSpacing + iconButton
@@ -292,7 +301,8 @@ struct NotebookToolbarLayout: Equatable {
             - Self.trailingReserve(
                 showsClearButton: showsClearButton,
                 showsModeToggleLabels: showsModeToggleLabels,
-                typography: typography
+                typography: typography,
+                showsModeMenu: showsModeMenu
             )
         return min(Self.stripContentWidth(tabCount: tabCount), max(budget, 0))
     }

@@ -242,7 +242,8 @@ private func checkArithmetic() {
                 let reserve = NotebookToolbarLayout.trailingReserve(
                     showsClearButton: true,
                     showsModeToggleLabels: layout.showsModeToggleLabels,
-                    typography: typography
+                    typography: typography,
+                    showsModeMenu: layout.showsModeMenu
                 )
                 let total = NotebookToolbarLayout.pagerChrome + strip + reserve
                 let ideal = NotebookToolbarLayout.stripContentWidth(tabCount: tabCount)
@@ -299,7 +300,7 @@ private func checkArithmetic() {
     for interfaceSize in interfaceSizes {
         let typography = AppTypography(interfaceSize: interfaceSize)
         for drawer in drawerCases {
-            for mode in [DrawerMode.reminders, .plans] {
+            for mode in [DrawerMode.reminders, .schedule, .plans] {
                 let layout = NotebookToolbarLayout(width: drawer.width, mode: mode, typography: typography)
                 let toggle = layout.showsModeToggleLabels
                     ? NotebookToolbarLayout.labelledModeToggleWidth(for: typography)
@@ -318,7 +319,7 @@ private func checkArithmetic() {
         "standalone mode rows fit every drawer width",
         standaloneBad.isEmpty,
         standaloneBad.isEmpty
-            ? "3 interface sizes x 6 drawer cases x 2 modes: toggle and settings stay inside the row"
+            ? "3 interface sizes x 6 drawer cases x 3 modes: toggle and settings stay inside the row"
             : standaloneBad
     )
 }
@@ -437,7 +438,7 @@ private func checkRenderedRow() {
     }
 
     for drawer in drawerCases {
-        for mode in [DrawerMode.reminders, .plans] {
+        for mode in [DrawerMode.reminders, .schedule, .plans] {
             let layout = NotebookToolbarLayout(width: drawer.width, mode: mode)
             Recorded.reset()
             let store = NoteStore(tabCount: 1)
@@ -502,7 +503,10 @@ private struct ProbeRow: View {
             Spacer(minLength: 0)
 
             Measured(name: "modeToggle") {
-                DrawerModeToggle(mode: layout.mode, showsLabels: layout.showsModeToggleLabels) { _ in }
+                DrawerModeToggle(
+                    mode: layout.mode, showsLabels: layout.showsModeToggleLabels,
+                    usesMenu: layout.showsModeMenu
+                ) { _ in }
             }
 
             if layout.isNotesMode {
@@ -592,9 +596,11 @@ private func checkTypographyRows() {
                         failure = "\(drawer.label), \(mode.title), \(tabCount) tabs: \(name) reaches y=\(fmt(rect.minY))...\(fmt(rect.maxY)), outside the \(fmt(DrawerMetrics.toolbarHeight))pt toolbar"
                     }
                     if let toggle = frames["modeToggle"] {
-                        let reserve = layout.showsModeToggleLabels
-                            ? NotebookToolbarLayout.labelledModeToggleWidth(for: typography)
-                            : NotebookToolbarLayout.modeToggleIconWidth
+                        let reserve = layout.showsModeMenu ? NotebookToolbarLayout.modeMenuWidth : (
+                            layout.showsModeToggleLabels
+                                ? NotebookToolbarLayout.labelledModeToggleWidth(for: typography)
+                                : NotebookToolbarLayout.modeToggleIconWidth
+                        )
                         if toggle.width > reserve + 0.5 {
                             failure = "\(drawer.label), \(mode.title), \(tabCount) tabs: toggle is \(fmt(toggle.width))pt, reserve is \(fmt(reserve))pt"
                         }
