@@ -83,7 +83,7 @@ struct SchedulePanelView: View {
 
     private var today: Date { store.calendar.startOfDay(for: Date()) }
     private var focus: Date { focusedDay ?? today }
-    private var columnWidth: CGFloat { max(180, min(266, size.width - 52)) }
+    private var columnWidth: CGFloat { max(180, min(216, size.width - 52)) }
     private var days: [Date] {
         (firstDayOffset...lastDayOffset).compactMap {
             store.calendar.date(byAdding: .day, value: $0, to: windowCenter)
@@ -136,18 +136,13 @@ struct SchedulePanelView: View {
             .popover(isPresented: $showsSources, arrowEdge: .bottom) {
                 sourcesPopover
             }
-            Button { store.requestRefresh() } label: {
-                if store.isLoading {
-                    ProgressView().controlSize(.mini)
-                        .frame(width: 24, height: typography.controlHeight())
-                } else {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 11, weight: .medium))
-                        .frame(width: 24, height: typography.controlHeight())
-                }
+            Button {
+                Task { await store.refreshManually() }
+            } label: {
+                RefreshGlyph(isSpinning: store.isRefreshing)
+                    .frame(height: typography.controlHeight())
             }
             .buttonStyle(MarkdownToolbarButtonStyle())
-            .disabled(store.isLoading)
             .help("Refresh Calendar and Reminders")
             .accessibilityLabel("Refresh schedule")
         }
@@ -266,7 +261,7 @@ struct SchedulePanelView: View {
                         calendarAvailability: availability(for: .calendar),
                         reminderAvailability: availability(for: .reminders),
                         hasErrors: !store.errors.isEmpty,
-                        isLoading: store.isLoading
+                        isLoading: store.isLoadingDay(date)
                     )
                     .frame(width: columnWidth, height: height)
                     .id(date)
@@ -315,7 +310,7 @@ struct SchedulePanelView: View {
     private func availability(for kind: ScheduleSourceKind) -> ScheduleDayAvailability {
         guard authorization(for: kind).canRead else { return .unavailable }
         let sources = store.sources.filter { $0.kind == kind }
-        guard !sources.isEmpty else { return store.isLoading ? .loading : .noSources }
+        guard !sources.isEmpty else { return store.isInitialLoading ? .loading : .noSources }
         return sources.contains(where: { store.isSelected($0) }) ? .readable : .unselected
     }
 }
@@ -360,11 +355,11 @@ private struct ScheduleDayColumn: View {
             dateHeader
             Divider().overlay(.white.opacity(0.06))
             ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 8) {
+                LazyVStack(alignment: .leading, spacing: 6) {
                     entrySection(.reminders, entries: day.reminders, availability: reminderAvailability)
                     entrySection(.calendar, entries: day.events, availability: calendarAvailability)
                 }
-                .padding(10)
+                .padding(8)
             }
             .scrollBounceBehavior(.basedOnSize, axes: .vertical)
             .scrollIndicators(.hidden)
@@ -384,7 +379,7 @@ private struct ScheduleDayColumn: View {
     }
 
     private var dateHeader: some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .center, spacing: 6) {
             Text(day.date.formatted(.dateTime.day().scheduleCalendar(calendar)))
                 .appText(.windowTitle, weight: .semibold)
                 .monospacedDigit()
@@ -408,8 +403,8 @@ private struct ScheduleDayColumn: View {
                     .background(.orange.opacity(0.12), in: Capsule())
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .accessibilityAddTraits(.isHeader)
     }
 
@@ -418,7 +413,7 @@ private struct ScheduleDayColumn: View {
         entries: [ScheduleEntry],
         availability: ScheduleDayAvailability
     ) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 5) {
                 Image(systemName: kind.scheduleIcon).font(.system(size: 10))
                 Text(kind.scheduleTitle).appText(.compact)
@@ -463,33 +458,38 @@ private struct ScheduleEntryBar: View {
     var body: some View {
         HStack(spacing: 0) {
             Rectangle().fill(tint.opacity(0.9)).frame(width: 3)
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(entry.title.isEmpty ? "Untitled" : entry.title)
                     .appText(.body, weight: .medium)
                     .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(timeLabel)
-                    .appText(.compact)
-                    .foregroundStyle(entry.kind == .reminders ? .white.opacity(0.58) : tint.opacity(0.95))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(timeLabel)
+                        .appText(.compact)
+                        .foregroundStyle(entry.kind == .reminders ? .white.opacity(0.58) : tint.opacity(0.95))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .layoutPriority(1)
+                    Spacer(minLength: 0)
+                    HStack(spacing: 3) {
+                        Circle().fill(tint).frame(width: 4, height: 4)
+                        Text(source?.title ?? (entry.kind == .calendar ? "Calendar" : "Reminders"))
+                            .appText(.compact)
+                            .foregroundStyle(.white.opacity(0.42))
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: 64, alignment: .trailing)
+                }
                 if let location = entry.location, !location.isEmpty, entry.kind == .calendar {
                     Text(location)
                         .appText(.compact)
                         .foregroundStyle(.white.opacity(0.4))
                         .lineLimit(1)
                 }
-                HStack(spacing: 4) {
-                    Circle().fill(tint).frame(width: 4, height: 4)
-                    Text(source?.title ?? (entry.kind == .calendar ? "Calendar" : "Reminders"))
-                        .appText(.compact)
-                        .foregroundStyle(.white.opacity(0.42))
-                        .lineLimit(1)
-                }
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(tint.opacity(0.085))
@@ -583,7 +583,9 @@ struct ScheduleSourcesSettingsView: View {
                     ForEach(Array(store.errors.enumerated()), id: \.offset) { _, message in
                         Text(message).appText(.secondary).foregroundStyle(.orange)
                     }
-                    Button("Refresh Schedule") { store.requestRefresh() }
+                    Button("Refresh Schedule") {
+                        Task { await store.refreshManually() }
+                    }
                         .appText(.control)
                 } header: {
                     Text("Schedule status").appText(.sectionTitle)
@@ -626,7 +628,7 @@ private struct ScheduleSourceGroup: View {
             }
             if authorization.canRead {
                 if sources.isEmpty {
-                    Text(store.isLoading ? "Discovering sources…" : "No readable sources found.")
+                    Text(store.isInitialLoading ? "Discovering sources…" : "No readable sources found.")
                         .appText(.secondary)
                         .foregroundStyle(.secondary)
                 } else {

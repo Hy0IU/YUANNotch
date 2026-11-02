@@ -8,6 +8,7 @@ mkdir -p "$BUILD_ROOT"
 xcrun swiftc -swift-version 6 -parse-as-library \
   -o "$BUILD_ROOT/floating-plan-probe" \
   "$ROOT_DIR/Scripts/floating-plan-probe/main.swift" \
+  "$ROOT_DIR/Scripts/floating-plan-probe/CollapseScenarios.swift" \
   "$SOURCE_DIR/AppTypography.swift" \
   "$SOURCE_DIR/AppSettingsStore.swift" \
   "$SOURCE_DIR/DrawerMode.swift" \

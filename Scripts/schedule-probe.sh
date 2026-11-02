@@ -9,6 +9,7 @@ mkdir -p "$BUILD_ROOT"
 xcrun swiftc -swift-version 6 -parse-as-library \
   "$ROOT_DIR/Scripts/schedule-probe/main.swift" \
   "$ROOT_DIR/Scripts/schedule-probe/AuthorizationScenarios.swift" \
+  "$ROOT_DIR/Scripts/schedule-probe/RefreshScenarios.swift" \
   "$SOURCE_DIR/ScheduleModels.swift" \
   "$SOURCE_DIR/AppleRemindersService.swift" \
   "$SOURCE_DIR/AppleRemindersService+Schedule.swift" \

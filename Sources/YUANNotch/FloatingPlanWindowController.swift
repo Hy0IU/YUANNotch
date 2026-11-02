@@ -6,21 +6,28 @@ final class FloatingPlanWindowController: NSObject {
     let panel: NotchPanel
 
     var isExpanded: Bool { presentation.isExpanded }
+    var isCollapsing: Bool { collapseTimer != nil }
 
     private let store: DailyPlanStore
+    private let nowProvider: () -> TimeInterval
     private var presentation: FloatingPlanPresentation { store.floatingPresentation }
     private var lastCompactFrame: NSRect?
     private var anchorsRight = true
-    private var menuTrackingCount = 0
     private var compactMouseDown: NSEvent?
-    private var collapseTask: DispatchWorkItem?
+    private var consumesExpansionClick = false
+    private var collapseTask: Task<Void, Never>?
     private var collapseTimer: Timer?
     private var collapseStartedAt: TimeInterval = 0
     private var collapseStartFrame: NSRect = .zero
     private var collapseEndFrame: NSRect = .zero
 
-    init(store: DailyPlanStore, settingsStore: AppSettingsStore) {
+    init(
+        store: DailyPlanStore,
+        settingsStore: AppSettingsStore,
+        nowProvider: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) {
         self.store = store
+        self.nowProvider = nowProvider
         panel = NotchPanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -53,33 +60,19 @@ final class FloatingPlanWindowController: NSObject {
             onExpand: { [weak self] in self?.expand() },
             onHide: { [weak self] in self?.hide() }
         ))
-        host.onMouseExit = { [weak self] in self?.collapseIfOutside() }
-        host.onMouseEnter = { [weak self] in
-            guard let self, self.panel.frame.contains(NSEvent.mouseLocation) else { return }
-            self.cancelCollapse()
+        host.onMouseExit = { [weak self] in
+            guard let self, !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
+            self.pointerDidExit()
         }
         host.autoresizingMask = [.width, .height]
         host.sizingOptions = []
         host.wantsLayer = true
         host.layer?.masksToBounds = false
         panel.contentView = host
-
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(menuTrackingDidBegin),
-            name: NSMenu.didBeginTrackingNotification, object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(menuTrackingDidEnd),
-            name: NSMenu.didEndTrackingNotification, object: nil
-        )
-    }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self)
     }
 
     func toggle(on screen: NSScreen? = nil) {
-        if panel.isVisible {
+        if presentation.isVisible {
             hide()
         } else {
             show(on: screen)
@@ -88,7 +81,7 @@ final class FloatingPlanWindowController: NSObject {
 
     func show(on screen: NSScreen? = nil) {
         guard store.activeSession != nil, store.activePlan != nil else { return }
-        if panel.isVisible { hide() }
+        if presentation.isVisible { hide() }
         presentation.isExpanded = false
         let screen = screen ?? NSScreen.main ?? NSScreen.screens.first
         let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -111,17 +104,19 @@ final class FloatingPlanWindowController: NSObject {
 
     func hide() {
         cancelCollapse()
+        if presentation.isVisible {
+            lastCompactFrame = resizedFrame(to: FloatingPlanMetrics.compactSize)
+            panel.orderOut(nil)
+        }
         presentation.isVisible = false
-        guard panel.isVisible else { return }
-        lastCompactFrame = resizedFrame(to: FloatingPlanMetrics.compactSize)
-        panel.orderOut(nil)
         presentation.isExpanded = false
         compactMouseDown = nil
+        consumesExpansionClick = false
     }
 
     func expand() {
         cancelCollapse()
-        guard panel.isVisible, !isExpanded else { return }
+        guard presentation.isVisible, !isExpanded else { return }
         let screen = panel.screen ?? NSScreen.main
         anchorsRight = panel.frame.midX >= (screen?.visibleFrame.midX ?? panel.frame.midX)
         let frame = resizedFrame(to: FloatingPlanMetrics.expandedSize)
@@ -129,14 +124,20 @@ final class FloatingPlanWindowController: NSObject {
         panel.setFrame(frame, display: true)
     }
 
-    private func collapseIfOutside() {
-        guard canCollapse else { return }
-        guard collapseTask == nil, collapseTimer == nil else { return }
-        let task = DispatchWorkItem { [weak self] in
-            guard let self else { return }
+    /// A validated exit starts one uninterrupted contraction. Global button
+    /// state and later pointer entry do not participate in its lifetime.
+    func pointerDidExit() {
+        guard canCollapse, collapseTask == nil, collapseTimer == nil else { return }
+        collapseTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(FloatingPlanMetrics.collapseDelay))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self else { return }
             self.collapseTask = nil
             guard self.canCollapse else { return }
-            self.collapseStartedAt = ProcessInfo.processInfo.systemUptime
+            self.collapseStartedAt = self.nowProvider()
             self.collapseStartFrame = self.panel.frame
             self.collapseEndFrame = self.resizedFrame(to: FloatingPlanMetrics.compactSize)
             let timer = Timer(
@@ -147,14 +148,10 @@ final class FloatingPlanWindowController: NSObject {
             self.collapseTimer = timer
             RunLoop.main.add(timer, forMode: .common)
         }
-        collapseTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + FloatingPlanMetrics.collapseDelay, execute: task)
     }
 
     private var canCollapse: Bool {
-        panel.isVisible && isExpanded && menuTrackingCount == 0
-            && NSEvent.pressedMouseButtons & 1 == 0
-            && !panel.frame.contains(NSEvent.mouseLocation)
+        presentation.isVisible && isExpanded
     }
 
     private func cancelCollapse() {
@@ -163,17 +160,27 @@ final class FloatingPlanWindowController: NSObject {
         let wasCollapsing = collapseTimer != nil
         collapseTimer?.invalidate()
         collapseTimer = nil
-        if wasCollapsing, panel.isVisible, isExpanded {
+        if wasCollapsing, presentation.isVisible, isExpanded {
             panel.setFrame(collapseStartFrame, display: true)
         }
     }
 
+    /// Called only for a press delivered to this floating panel. Consume the
+    /// reopening click so it cannot also activate a control after resizing.
+    @discardableResult
+    func pointerDidPress() -> Bool {
+        guard canCollapse, collapseTask != nil || isCollapsing else { return false }
+        expand()
+        return true
+    }
+
     @objc private func collapseTimerFired() {
+        guard collapseTimer?.isValid == true else { return }
         guard canCollapse else {
             cancelCollapse()
             return
         }
-        let elapsed = ProcessInfo.processInfo.systemUptime - collapseStartedAt
+        let elapsed = nowProvider() - collapseStartedAt
         let progress = min(elapsed / FloatingPlanMetrics.collapseDuration, 1)
         let frame = FloatingPlanMetrics.collapseFrame(
             from: collapseStartFrame, to: collapseEndFrame, progress: progress
@@ -188,10 +195,22 @@ final class FloatingPlanWindowController: NSObject {
     }
 
     private func handleMouseEvent(_ event: NSEvent) -> Bool {
+        if consumesExpansionClick {
+            if event.type == .leftMouseUp {
+                consumesExpansionClick = false
+                collapseAfterPointerInteraction()
+                return true
+            }
+            if event.type == .leftMouseDragged { return true }
+        }
         if isExpanded {
+            if event.type == .leftMouseDown, pointerDidPress() {
+                consumesExpansionClick = true
+                return true
+            }
             if event.type == .leftMouseUp {
                 // Controls and the explicit drag surface finish before collapsing.
-                DispatchQueue.main.async { [weak self] in self?.collapseIfOutside() }
+                collapseAfterPointerInteraction()
             }
             return false
         }
@@ -217,6 +236,13 @@ final class FloatingPlanWindowController: NSObject {
         return true
     }
 
+    private func collapseAfterPointerInteraction() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
+            self.pointerDidExit()
+        }
+    }
+
     private func resizedFrame(to size: CGSize) -> NSRect {
         let current = panel.frame
         let frame = NSRect(
@@ -234,18 +260,6 @@ final class FloatingPlanWindowController: NSObject {
             y: min(max(frame.minY, visibleFrame.minY), max(visibleFrame.maxY - frame.height, visibleFrame.minY)),
             width: frame.width, height: frame.height
         )
-    }
-
-    @objc private func menuTrackingDidBegin(_ notification: Notification) {
-        menuTrackingCount += 1
-        cancelCollapse()
-    }
-
-    @objc private func menuTrackingDidEnd(_ notification: Notification) {
-        menuTrackingCount = max(menuTrackingCount - 1, 0)
-        if menuTrackingCount == 0 {
-            DispatchQueue.main.async { [weak self] in self?.collapseIfOutside() }
-        }
     }
 }
 
@@ -272,7 +286,6 @@ private struct FloatingPlanWindowContent: View {
 @MainActor
 private final class FloatingPlanHostingView<Content: View>: FirstMouseHostingView<Content> {
     var onMouseExit: (() -> Void)?
-    var onMouseEnter: (() -> Void)?
     private var pointerTrackingArea: NSTrackingArea?
 
     override func updateTrackingAreas() {
@@ -285,10 +298,6 @@ private final class FloatingPlanHostingView<Content: View>: FirstMouseHostingVie
         )
         addTrackingArea(area)
         pointerTrackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        onMouseEnter?()
     }
 
     override func mouseExited(with event: NSEvent) {

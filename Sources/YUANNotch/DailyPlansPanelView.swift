@@ -517,7 +517,7 @@ private struct FloatingPlanPinButton: View {
 
 enum FloatingPlanMetrics {
     static let compactSize = CGSize(width: 64, height: 64)
-    static let expandedSize = CGSize(width: 390, height: 125)
+    static let expandedSize = CGSize(width: 350, height: 125)
     static let edgeInset: CGFloat = 6
     static let collapseDelay: TimeInterval = 0.12
     static let collapseDuration: TimeInterval = 0.22
@@ -741,8 +741,9 @@ struct DailyPlanActiveCardView: View {
                         timerControls(session, plan: plan, phaseColor: phaseColor)
                     }
                 } else {
-                    HStack(spacing: 12) {
+                    HStack(spacing: isFloating ? 0 : 12) {
                         progressRing(session, plan: plan, phaseColor: phaseColor, displayNow: displayNow)
+                            .padding(.trailing, isFloating ? 12 : 0)
                         sessionDetails(
                             session,
                             plan: plan,

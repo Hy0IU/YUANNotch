@@ -11,6 +11,8 @@ final class ScheduleStore: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var errors: [String] = []
     @Published private(set) var requestingAccess: ScheduleSourceKind?
+    @Published private(set) var isRefreshing = false
+    @Published private(set) var loadedRange: DateInterval?
 
     let calendar: Calendar
     private(set) var range: DateInterval
@@ -93,8 +95,10 @@ final class ScheduleStore: ObservableObject {
     /// A newer range or selection invalidates every older in-flight response.
     func refresh(in range: DateInterval) async {
         guard !Task.isCancelled else { return }
-        self.range = range
-        entries.removeAll { !Self.intersects($0, range: range) }
+        if self.range != range {
+            self.range = range
+            entries.removeAll { !Self.intersects($0, range: range) }
+        }
         let task = startRefresh()
         await withTaskCancellationHandler {
             await task.value
@@ -105,6 +109,27 @@ final class ScheduleStore: ObservableObject {
 
     func requestRefresh() {
         _ = startRefresh()
+    }
+
+    /// Only manual reloads animate; polling keeps the current surface quiet.
+    func refreshManually() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(500))
+        await refresh(in: range)
+        guard !Task.isCancelled else { return }
+        try? await Task.sleep(until: deadline, clock: .continuous)
+    }
+
+    var isInitialLoading: Bool { isLoading && loadedRange == nil }
+
+    /// Known empty days keep their text during reload; newly exposed dates
+    /// still distinguish an unanswered query from a confirmed empty day.
+    func isLoadingDay(_ day: Date) -> Bool {
+        guard isLoading else { return false }
+        guard let loadedRange, let interval = calendar.dateInterval(of: .day, for: day) else { return true }
+        return interval.start < loadedRange.start || interval.end > loadedRange.end
     }
 
     func setVisible(_ visible: Bool) {
@@ -271,7 +296,7 @@ final class ScheduleStore: ObservableObject {
                 })
             }
         }
-        sources = nextSources.sorted {
+        nextSources.sort {
             if $0.kind != $1.kind { return $0.kind.rawValue < $1.kind.rawValue }
             if $0.account != $1.account {
                 return $0.account.localizedStandardCompare($1.account) == .orderedAscending
@@ -281,10 +306,13 @@ final class ScheduleStore: ObservableObject {
             }
             return $0.id < $1.id
         }
-        entries = nextEntries.sorted {
+        nextEntries.sort {
             if $0.start != $1.start { return $0.start < $1.start }
             return $0.id < $1.id
         }
+        if sources != nextSources { sources = nextSources }
+        if entries != nextEntries { entries = nextEntries }
+        if loadedRange != range { loadedRange = range }
         refreshTask = nil
         isLoading = isRequestingAccess
         rebuildErrors()
@@ -322,13 +350,16 @@ final class ScheduleStore: ObservableObject {
 
     private func updateAuthorization(_ kind: ScheduleSourceKind, status: ScheduleAuthorization) {
         switch kind {
-        case .calendar: calendarAuthorization = status
-        case .reminders: reminderAuthorization = status
+        case .calendar:
+            if calendarAuthorization != status { calendarAuthorization = status }
+        case .reminders:
+            if reminderAuthorization != status { reminderAuthorization = status }
         }
     }
 
     private func rebuildErrors() {
-        errors = ScheduleSourceKind.allCases.compactMap { accessErrors[$0] ?? providerErrors[$0] }
+        let nextErrors = ScheduleSourceKind.allCases.compactMap { accessErrors[$0] ?? providerErrors[$0] }
+        if errors != nextErrors { errors = nextErrors }
     }
 
     // MARK: - Observation lifetimes

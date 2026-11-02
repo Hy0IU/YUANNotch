@@ -58,6 +58,7 @@ private struct ScheduleProbe {
     static func main() async throws {
         _ = NSApplication.shared
         await ScheduleAuthorizationScenarios.run()
+        await ScheduleRefreshScenarios.run()
         let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
@@ -187,6 +188,18 @@ private struct ScheduleProbe {
             size: navigationSize
         )
         await settle(navigationHost)
+        try render(navigationHost, at: output.appendingPathComponent("schedule-refresh-before.png"))
+        let manualRefresh = Task { await displayStore.refreshManually() }
+        try await Task.sleep(for: .milliseconds(120))
+        navigationHost.layoutSubtreeIfNeeded()
+        try render(navigationHost, at: output.appendingPathComponent("schedule-refresh-120ms.png"))
+        try await Task.sleep(for: .milliseconds(160))
+        navigationHost.layoutSubtreeIfNeeded()
+        try render(navigationHost, at: output.appendingPathComponent("schedule-refresh-280ms.png"))
+        await manualRefresh.value
+        await settle(navigationHost)
+        try render(navigationHost, at: output.appendingPathComponent("schedule-refresh-after.png"))
+        print("Rendered manual refresh phases on the same offscreen schedule host")
         let initialRange = displayStore.range
         guard let scroll = horizontalScrollView(in: navigationHost), let document = scroll.documentView else {
             preconditionFailure("The schedule must provide a horizontal day scroller")

@@ -42,6 +42,7 @@ struct FloatingPlanProbe {
         ))
         let store = DailyPlanStore(persistence: persistence, nowProvider: { now }, startsTimer: false)
         let selectedSession = store.activeSession
+        try FloatingPlanCollapseScenarios.run(store: store, settings: settings, output: output)
 
         for size in InterfaceTextSize.allCases {
             settings.interfaceTextSize = size
@@ -157,8 +158,10 @@ struct FloatingPlanProbe {
                 size: FloatingPlanMetrics.expandedSize
             )
             checkExpandedHitRegions(host)
+            try render(host, to: output.appendingPathComponent("expanded-\(size.rawValue).png"))
             print("PASS expanded \(size.rawValue): drag surface excludes all four controls")
         }
+        try checkHourCountdowns(scratch: scratch, output: output, now: now, day: day)
         print("Offscreen previews: \(output.path)")
         print("No windows ordered front, pointer movement, clicks, keyboard input, or desktop event dispatch")
     }
@@ -183,6 +186,60 @@ struct FloatingPlanProbe {
             precondition(buttonHit != nil && buttonHit !== dragSurface,
                          "The drag surface must not intercept \(label)")
         }
+    }
+
+    @MainActor
+    private static func checkHourCountdowns(scratch: URL, output: URL, now: Date, day: PlanDayKey) throws {
+        var longFocus = PomodoroConfiguration.standard
+        longFocus.focusMinutes = 180
+        for (name, minutes, configuration, expected) in [
+            ("three-hour-focus", 180, longFocus, "3:00:00"),
+            ("full-day-continuous", 1440, PomodoroConfiguration.continuous, "24:00:00")
+        ] {
+            let plan = DailyPlan(title: "Work", targetMinutes: minutes, pomodoro: configuration)
+            let persistence = DailyPlanPersistence(fileURL: scratch.appendingPathComponent("\(name).json"))
+            try persistence.save(DailyPlanArchive(
+                plans: [plan],
+                activeSession: FocusSession(
+                    planID: plan.id, phase: .focus, phaseDuration: TimeInterval(minutes * 60),
+                    phaseElapsed: 0, runningSince: nil, completedFocusRounds: 0, sessionDay: day
+                )
+            ))
+            let store = DailyPlanStore(persistence: persistence, nowProvider: { now }, startsTimer: false)
+            store.floatingPresentation.isVisible = true
+            for size in InterfaceTextSize.allCases {
+                let host = makeHost(
+                    FloatingPlanPanelView(store: store, isExpanded: true, onExpand: {}, onHide: {})
+                        .environment(\.appTypography, AppTypography(interfaceSize: size)),
+                    size: FloatingPlanMetrics.expandedSize
+                )
+                checkExpandedHitRegions(host)
+                guard let field = countdownField(in: host, matching: expected) else {
+                    preconditionFailure("Missing \(expected) countdown for \(size.rawValue)")
+                }
+                precondition(field.bounds.width + 0.5 >= field.intrinsicContentSize.width,
+                             "\(name) \(size.rawValue): countdown clipped to \(field.bounds.width)pt; needs \(field.intrinsicContentSize.width)pt")
+                let rect = field.convert(field.bounds, to: host)
+                let leading = CGPoint(x: rect.minX + 1, y: rect.midY)
+                let trailing = CGPoint(x: rect.maxX - 1, y: rect.midY)
+                guard let leadingHit = host.hitTest(host.convert(leading, to: host.superview)),
+                      let trailingHit = host.hitTest(host.convert(trailing, to: host.superview)) else {
+                    preconditionFailure("The countdown must stay inside the floating window")
+                }
+                precondition(leadingHit === trailingHit, "The countdown must not reach into the timer controls")
+                try render(host, to: output.appendingPathComponent("\(name)-\(size.rawValue).png"))
+                print("PASS \(name) \(size.rawValue): full countdown fits without touching controls")
+            }
+        }
+    }
+
+    @MainActor
+    private static func countdownField(in view: NSView, matching text: String) -> NSTextField? {
+        if let field = view as? NSTextField, field.stringValue == text { return field }
+        for child in view.subviews {
+            if let field = countdownField(in: child, matching: text) { return field }
+        }
+        return nil
     }
 
     @MainActor
