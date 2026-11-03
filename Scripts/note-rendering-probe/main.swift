@@ -64,6 +64,7 @@ private struct EditorHost: View {
     @ObservedObject var model: ProbeModel
     var width: CGFloat = 760
     var height: CGFloat = 560
+    var backgroundColor: Color = .black
 
     var body: some View {
         NativeTextViewWrapper(
@@ -75,7 +76,7 @@ private struct EditorHost: View {
             isEditable: true
         )
         .frame(width: width, height: height)
-        .background(Color.black)
+        .background(backgroundColor)
     }
 }
 
@@ -252,7 +253,8 @@ private func clickCheckbox(in textView: NSTextView, sample: String) -> Bool {
     for line in fragment.textLineFragments {
         if NSLocationInRange(sampleRange.location - fragmentStart, line.characterRange) {
             let y = line.typographicBounds.height / 2
-            let width = textView.font?.pointSize ?? 24
+            let paragraph = textView.textStorage?.attribute(.paragraphStyle, at: sampleRange.location, effectiveRange: nil) as? NSParagraphStyle
+            let width = max(textView.font?.pointSize ?? 24, paragraph?.headIndent ?? 0)
             for step in 0...Int(ceil(width * 2)) {
                 let x = CGFloat(step) / 2
                 let pointInLine = CGPoint(x: x - line.glyphOrigin.x, y: y)
@@ -285,7 +287,10 @@ private func probeNarrowLists(outputDirectory: URL) throws {
         ("\t• ", "Tabbed"), ("  • ", "Spaced"),
         ("- [ ] ", "Unchecked"), ("- [x] ", "Checked"),
         ("10. [ ] ", "OrderedOpen"), ("10. [x] ", "OrderedDone"),
-        ("-   [ ] ", "WideSpace"), ("• ", "InlineCode")
+        ("-   [ ] ", "WideSpace"), ("• ", "InlineCode"),
+        ("\t• ", "RootBullet"), ("\t1. ", "RootOrdered"),
+        ("\t• [ ] ", "RootOpen"), ("\t• [x] ", "RootDone"),
+        ("\t\t• ", "NestedBullet")
     ]
     let text = examples.map { prefix, label in
         "\(prefix)\(label) words \(label == "InlineCode" ? "`foo` " : "")wrap across multiple lines in this deliberately narrow editor column for alignment checks."
@@ -306,6 +311,7 @@ private func probeNarrowLists(outputDirectory: URL) throws {
         model.fontSize = size
         pump(host)
         var taskColumns: [CGFloat] = []
+        var rootTaskColumns: [CGFloat] = []
         for (_, label) in examples {
             let columns = wrappedColumns(in: textView, startingAt: label)
             let aligned = columns.count > 1 && columns.dropFirst().allSatisfy { abs($0 - columns[0]) < 2 }
@@ -314,10 +320,21 @@ private func probeNarrowLists(outputDirectory: URL) throws {
             if label == "Unchecked" || label == "Checked", let first = columns.first {
                 taskColumns.append(first)
             }
+            if label == "RootOpen" || label == "RootDone", let first = columns.first {
+                rootTaskColumns.append(first)
+            }
         }
         check("\(Int(size))pt checked and unchecked text align",
               taskColumns.count == 2 && abs(taskColumns[0] - taskColumns[1]) < 2,
               "first-line starts: \(taskColumns)")
+        check("\(Int(size))pt indented checked and unchecked text align",
+              rootTaskColumns.count == 2 && abs(rootTaskColumns[0] - rootTaskColumns[1]) < 2,
+              "first-line starts: \(rootTaskColumns)")
+        let rootStart = wrappedColumns(in: textView, startingAt: "RootBullet").first
+        let nestedStart = wrappedColumns(in: textView, startingAt: "NestedBullet").first
+        check("\(Int(size))pt two tabs remain nested",
+              rootStart.map { root in nestedStart.map { $0 > root } ?? false } ?? false,
+              "root=\(rootStart ?? -1), nested=\(nestedStart ?? -1)")
         check("\(Int(size))pt inline code does not suppress its list marker",
               sameColor(attribute(.foregroundColor, in: textView, at: "• InlineCode") as? NSColor, NSColor(Color.orange)),
               "the list marker remains styled when its body contains inline code")
@@ -341,6 +358,46 @@ private func probeNarrowLists(outputDirectory: URL) throws {
           clickedOff && model.storedText == text && beforeToggle.count == afterUntoggle.count
             && zip(beforeToggle, afterUntoggle).allSatisfy { pair in abs(pair.0 - pair.1) < 2 },
           "click=\(clickedOff), after: \(afterUntoggle)")
+    let rootBefore = wrappedColumns(in: textView, startingAt: "RootOpen")
+    let rootClicked = clickCheckbox(in: textView, sample: "[ ] RootOpen")
+    pump(host)
+    let rootAfter = wrappedColumns(in: textView, startingAt: "RootOpen")
+    check("clicking an indented task keeps its wrapped text columns",
+          rootClicked && model.storedText.contains("\t• [x] RootOpen")
+            && rootBefore.count > 1 && rootBefore.count == rootAfter.count
+            && zip(rootBefore, rootAfter).allSatisfy { pair in abs(pair.0 - pair.1) < 2 },
+          "click=\(rootClicked), before: \(rootBefore); after: \(rootAfter)")
+    window.close()
+}
+
+@MainActor
+private func saveListLegibilityScreenshots(outputDirectory: URL) throws {
+    // The editor inserts one leading tab when a user types "- " or "1. ".
+    let text = [
+        "正文参考 Plain text for alignment",
+        "\t• 根项目 A longer list item makes the text wrap onto another line so the continuation can be compared with the first line.",
+        "\t1. 有序步骤 Ordered step",
+        "\t• [ ] 待处理 Open task",
+        "\t• [x] 已完成 Completed task",
+        "\t\t• 嵌套项目 Nested item"
+    ].joined(separator: "\n")
+    let model = ProbeModel(text: text)
+    let host = NSHostingView(rootView: EditorHost(
+        model: model, width: 622, height: 375,
+        backgroundColor: Color(red: 0.06, green: 0.06, blue: 0.07)
+    ))
+    host.frame = NSRect(x: 0, y: 0, width: 622, height: 375)
+    let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+    window.contentView = host
+    pump(host, turns: 16)
+    for size in [CGFloat(15), 12, 24] {
+        model.fontSize = size
+        pump(host)
+        let screenshot = outputDirectory.appendingPathComponent("list-legibility-\(Int(size)).png")
+        try saveScreenshot(of: host, to: screenshot)
+        print("SCREENSHOT  \(screenshot.path)")
+    }
     window.close()
 }
 
@@ -450,6 +507,7 @@ private func runProbe(outputDirectory: URL) throws {
     print("SCREENSHOT  \(screenshot.path)")
     try saveMixedScreenshots(outputDirectory: outputDirectory)
     try probeNarrowLists(outputDirectory: outputDirectory)
+    try saveListLegibilityScreenshots(outputDirectory: outputDirectory)
 
     let orange = NSColor(Color.orange)
     let bodyColor = NoteMarkdownStyle.configuration(fontSize: model.fontSize).theme.bodyText
