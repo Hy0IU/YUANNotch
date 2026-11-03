@@ -331,7 +331,7 @@ private func runProbe(outputDirectory: URL) throws {
           sameColor(color("missing page"), orange)
             && sameColor(color("[unfinished]"), orange)
             && attribute(.link, in: textView, at: "https://example.org") != nil
-            && sameColor(textView.linkTextAttributes[.foregroundColor] as? NSColor, orange),
+            && sameColor(textView.linkTextAttributes?[.foregroundColor] as? NSColor, orange),
           "wiki and incomplete links are colored; detected URLs use AppKit link drawing")
     activate("# 混合标题", offset: 3)
     check("active heading marker uses timer orange", sameColor(color("# 混合标题"), orange), "heading source")
@@ -350,7 +350,7 @@ private func runProbe(outputDirectory: URL) throws {
     check("active link source uses timer orange",
           sameColor(color("[link label](https://example.com)"), orange)
             && sameColor(color("link label"), orange)
-            && sameColor(textView.linkTextAttributes[.foregroundColor] as? NSColor, orange),
+            && sameColor(textView.linkTextAttributes?[.foregroundColor] as? NSColor, orange),
           "link syntax and AppKit link drawing use the same accent")
 
     // Editing via NSTextView's real insertion API should create an undo action.

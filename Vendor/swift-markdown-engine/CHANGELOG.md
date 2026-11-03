@@ -21,11 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
 ### Added
+- `ListStyle.markerSpacingEm` adds optional, font-relative space after ordinary
+  list markers, shared by the first-line layout and the hanging indent.
 - `ContentInsets` struct exposing `top` / `leading` / `trailing` / `bottom`
   inset knobs for the editor's enclosing scroll view, configurable via
   `MarkdownEditorConfiguration.contentInsets`.
 
 ### Fixed
+- Task squares derive their text column from the drawn square size and gap.
+- Emphasis and block-quote markers honor the theme's secondary-marker color;
+  wiki links and AppKit-drawn links honor the configured link color.
+- Heading, block-quote and horizontal-rule styling leave fenced code untouched.
+- Font-size updates also apply the host's corresponding list metrics.
 - Image embeds no longer grow the editor's memory without bound. The
   engine's image cache was a plain `[String: NSImage]` holding whatever
   the ``EmbeddedImageProvider`` returned — full-resolution bitmaps, kept
