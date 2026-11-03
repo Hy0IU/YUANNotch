@@ -18,7 +18,8 @@ extension MarkdownStyler {
         var attrs: [StyledRange] = []
         let headingTokens = ctx.tokens.filter { $0.kind == .heading }
         for token in headingTokens {
-            if MarkdownDetection.isInsideCodeBlock(range: token.range, codeTokens: ctx.codeTokens) { continue }
+            if let marker = token.markerRanges.first,
+               MarkdownDetection.isInsideCodeBlock(range: marker, codeTokens: ctx.codeTokens) { continue }
             let level = token.markerRanges.first?.length ?? 1
             let multiplier = ctx.configuration.headings.fontMultiplier(for: level)
             let fontSize = ctx.baseFont.pointSize * multiplier

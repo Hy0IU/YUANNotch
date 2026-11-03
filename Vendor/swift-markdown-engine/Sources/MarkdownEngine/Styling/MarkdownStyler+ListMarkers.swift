@@ -33,7 +33,7 @@ extension MarkdownStyler {
 
         for line in MarkdownLists.listLines(in: ctx.text, range: ctx.fullRange) {
             if line.isTaskItem { continue }
-            if MarkdownDetection.isInsideCodeBlock(range: line.range, codeTokens: ctx.codeTokens) { continue }
+            if MarkdownDetection.isInsideCodeBlock(range: line.markerGlyph, codeTokens: ctx.codeTokens) { continue }
             let glyph = ctx.nsText.substring(with: line.markerGlyph)
             guard !glyph.isEmpty else { continue }
 

@@ -69,12 +69,18 @@ extension MarkdownStyler {
                 // column every other list marker shares.
                 // `MarkdownLists.paragraphAttributes` measures the hanging
                 // indent from the same slot for the same reason.
+                // Kern is applied per character, not once to the whole run.
+                // Cancel each glyph separately so ordered markers such as
+                // `10.` and multiple separating spaces do not over-collapse.
                 for hiddenRange in [markerRange, spacerRange] where hiddenRange.location != NSNotFound {
-                    let hiddenText = ctx.nsText.substring(with: hiddenRange)
-                    attrs.append((hiddenRange, [
-                        .foregroundColor: NSColor.clear,
-                        .kern: -HeadingHelpers.textWidth(hiddenText, font: ctx.baseFont)
-                    ]))
+                    for index in hiddenRange.location..<NSMaxRange(hiddenRange) {
+                        let characterRange = NSRange(location: index, length: 1)
+                        let character = ctx.nsText.substring(with: characterRange)
+                        attrs.append((characterRange, [
+                            .foregroundColor: NSColor.clear,
+                            .kern: -HeadingHelpers.textWidth(character, font: ctx.baseFont)
+                        ]))
+                    }
                 }
 
                 // Absorb the source brackets' different advances into the

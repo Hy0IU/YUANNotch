@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import MarkdownEngine
 import SwiftUI
 
@@ -8,6 +9,8 @@ private let fixture = """
 这里是中文正文与 English body text，用于检查基础字体尺寸。
 
 ## 次级标题 Secondary Heading
+
+# 使用 `foo` 的说明
 
 - 普通列表项 A regular list item
 - [ ] 待办任务 An unchecked task
@@ -148,9 +151,10 @@ private func check(_ label: String, _ passed: Bool, _ detail: String) {
     if !passed { failures += 1 }
 }
 
-/// Measure actual TextKit segments, excluding the marker, on every wrapped line.
+/// Segment rectangles include half the kern at their boundaries. Keep them
+/// for diagnostics, but measure the drawn glyph origins for column alignment.
 @MainActor
-private func wrappedColumns(in textView: NSTextView, startingAt sample: String) -> [CGFloat] {
+private func segmentColumns(in textView: NSTextView, startingAt sample: String) -> [CGFloat] {
     guard let manager = textView.textLayoutManager,
           let content = manager.textContentManager as? NSTextContentStorage else { return [] }
     let text = textView.string as NSString
@@ -176,18 +180,114 @@ private func wrappedColumns(in textView: NSTextView, startingAt sample: String) 
 }
 
 @MainActor
+private func wrappedColumns(in textView: NSTextView, startingAt sample: String) -> [CGFloat] {
+    guard let manager = textView.textLayoutManager,
+          let content = manager.textContentManager as? NSTextContentStorage else { return [] }
+    let text = textView.string as NSString
+    let sampleRange = text.range(of: sample)
+    guard sampleRange.location != NSNotFound,
+          let start = content.location(content.documentRange.location, offsetBy: sampleRange.location) else { return [] }
+    let paragraph = text.paragraphRange(for: sampleRange)
+    guard let end = content.location(content.documentRange.location, offsetBy: NSMaxRange(paragraph)),
+          let range = NSTextRange(location: start, end: end) else { return [] }
+    manager.ensureLayout(for: range)
+    guard let fragment = manager.textLayoutFragment(for: start) else { return [] }
+    let fragmentStart = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
+    let bodyStart = sampleRange.location - fragmentStart
+    var columns: [CGFloat] = []
+    for line in fragment.textLineFragments {
+        let lineRange = line.characterRange
+        let source = line.attributedString
+        guard lineRange.location != NSNotFound, NSMaxRange(lineRange) <= source.length else { return [] }
+        var target = max(bodyStart, lineRange.location)
+        let characters = source.string as NSString
+        while target < NSMaxRange(lineRange),
+              [0x20, 0x09, 0x0A, 0x0D].contains(Int(characters.character(at: target))) {
+            target += 1
+        }
+        guard target < NSMaxRange(lineRange) else { continue }
+        let ctLine = CTLineCreateWithAttributedString(source.attributedSubstring(from: lineRange))
+        let targetInLine = target - lineRange.location
+        var origin: CGFloat?
+        for run in CTLineGetGlyphRuns(ctLine) as! [CTRun] {
+            let count = CTRunGetGlyphCount(run)
+            var indices = [CFIndex](repeating: 0, count: count)
+            var positions = [CGPoint](repeating: .zero, count: count)
+            CTRunGetStringIndices(run, CFRange(location: 0, length: 0), &indices)
+            CTRunGetPositions(run, CFRange(location: 0, length: 0), &positions)
+            if let index = indices.firstIndex(of: targetInLine) {
+                origin = positions[index].x
+                break
+            }
+        }
+        guard let origin else { return [] }
+        columns.append(fragment.layoutFragmentFrame.minX + line.typographicBounds.minX + origin)
+    }
+    return columns
+}
+
+/// Send a real mouse-down to a point that the editor's TextKit hit test maps
+/// into the checkbox, exercising the same local restyle as an actual click.
+@MainActor
+private func clickCheckbox(in textView: NSTextView, sample: String) -> Bool {
+    guard let window = textView.window,
+          let manager = textView.textLayoutManager,
+          let content = manager.textContentManager as? NSTextContentStorage else { return false }
+    let text = textView.string as NSString
+    let sampleRange = text.range(of: sample)
+    guard sampleRange.location != NSNotFound,
+          let location = content.location(content.documentRange.location, offsetBy: sampleRange.location),
+          let end = content.location(location, offsetBy: 3),
+          let range = NSTextRange(location: location, end: end) else { return false }
+    manager.ensureLayout(for: range)
+    guard let fragment = manager.textLayoutFragment(for: location) else { return false }
+    let fragmentStart = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
+    let checkboxRange = NSRange(location: sampleRange.location, length: 3)
+    var lineY: CGFloat = 0
+    for line in fragment.textLineFragments {
+        if NSLocationInRange(sampleRange.location - fragmentStart, line.characterRange) {
+            let y = line.typographicBounds.height / 2
+            let width = textView.font?.pointSize ?? 24
+            for step in 0...Int(ceil(width * 2)) {
+                let x = CGFloat(step) / 2
+                let pointInLine = CGPoint(x: x - line.glyphOrigin.x, y: y)
+                let index = fragmentStart + line.characterRange.location + line.characterIndex(for: pointInLine)
+                guard NSLocationInRange(index, checkboxRange),
+                      textView.textStorage?.attribute(.taskCheckbox, at: index, effectiveRange: nil) != nil else { continue }
+                let pointInView = CGPoint(
+                    x: fragment.layoutFragmentFrame.minX + x + textView.textContainerOrigin.x,
+                    y: fragment.layoutFragmentFrame.minY + lineY + y + textView.textContainerOrigin.y
+                )
+                let pointInWindow = textView.convert(pointInView, to: nil)
+                guard let event = NSEvent.mouseEvent(
+                    with: .leftMouseDown, location: pointInWindow, modifierFlags: [], timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+                ) else { return false }
+                textView.mouseDown(with: event)
+                return true
+            }
+            return false
+        }
+        lineY += line.typographicBounds.height
+    }
+    return false
+}
+
+@MainActor
 private func probeNarrowLists(outputDirectory: URL) throws {
     let examples = [
         ("- ", "Dash"), ("• ", "Bullet"), ("10. ", "Ten"), ("100. ", "Hundred"),
         ("\t• ", "Tabbed"), ("  • ", "Spaced"),
-        ("- [ ] ", "Unchecked"), ("- [x] ", "Checked")
+        ("- [ ] ", "Unchecked"), ("- [x] ", "Checked"),
+        ("10. [ ] ", "OrderedOpen"), ("10. [x] ", "OrderedDone"),
+        ("-   [ ] ", "WideSpace"), ("• ", "InlineCode")
     ]
     let text = examples.map { prefix, label in
-        "\(prefix)\(label) words wrap across multiple lines in this deliberately narrow editor column for alignment checks."
+        "\(prefix)\(label) words \(label == "InlineCode" ? "`foo` " : "")wrap across multiple lines in this deliberately narrow editor column for alignment checks."
     }.joined(separator: "\n")
     let model = ProbeModel(text: text)
-    let host = NSHostingView(rootView: EditorHost(model: model, width: 220, height: 1500))
-    host.frame = NSRect(x: 0, y: 0, width: 220, height: 1500)
+    let host = NSHostingView(rootView: EditorHost(model: model, width: 220, height: 2600))
+    host.frame = NSRect(x: 0, y: 0, width: 220, height: 2600)
     let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
     window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
     window.contentView = host
@@ -204,7 +304,8 @@ private func probeNarrowLists(outputDirectory: URL) throws {
         for (_, label) in examples {
             let columns = wrappedColumns(in: textView, startingAt: label)
             let aligned = columns.count > 1 && columns.dropFirst().allSatisfy { abs($0 - columns[0]) < 2 }
-            check("\(Int(size))pt \(label) wrapped text aligns", aligned, "line starts: \(columns)")
+            check("\(Int(size))pt \(label) wrapped text aligns", aligned,
+                  "glyph origins: \(columns); segment bounds: \(segmentColumns(in: textView, startingAt: label))")
             if label == "Unchecked" || label == "Checked", let first = columns.first {
                 taskColumns.append(first)
             }
@@ -212,18 +313,54 @@ private func probeNarrowLists(outputDirectory: URL) throws {
         check("\(Int(size))pt checked and unchecked text align",
               taskColumns.count == 2 && abs(taskColumns[0] - taskColumns[1]) < 2,
               "first-line starts: \(taskColumns)")
+        check("\(Int(size))pt inline code does not suppress its list marker",
+              sameColor(attribute(.foregroundColor, in: textView, at: "• InlineCode") as? NSColor, NSColor(Color.orange)),
+              "the list marker remains styled when its body contains inline code")
         if size == 15 || size == 24 {
             try saveScreenshot(of: host, to: outputDirectory.appendingPathComponent("narrow-lists-\(Int(size)).png"))
         }
     }
     let beforeToggle = wrappedColumns(in: textView, startingAt: "Unchecked")
-    model.storeText(text.replacingOccurrences(of: "- [ ] Unchecked", with: "- [x] Unchecked"))
+    let clickedOn = clickCheckbox(in: textView, sample: "[ ] Unchecked")
     pump(host)
     let afterToggle = wrappedColumns(in: textView, startingAt: "Unchecked")
-    check("toggling a task keeps its wrapped text columns",
-          beforeToggle.count > 1 && beforeToggle.count == afterToggle.count
+    check("clicking a task keeps its wrapped text columns",
+          clickedOn && model.storedText.contains("- [x] Unchecked")
+            && beforeToggle.count > 1 && beforeToggle.count == afterToggle.count
             && zip(beforeToggle, afterToggle).allSatisfy { pair in abs(pair.0 - pair.1) < 2 },
-          "before: \(beforeToggle); after: \(afterToggle)")
+          "click=\(clickedOn), before: \(beforeToggle); after: \(afterToggle)")
+    let clickedOff = clickCheckbox(in: textView, sample: "[x] Unchecked")
+    pump(host)
+    let afterUntoggle = wrappedColumns(in: textView, startingAt: "Unchecked")
+    check("clicking again restores the unchecked task and its columns",
+          clickedOff && model.storedText == text && beforeToggle.count == afterUntoggle.count
+            && zip(beforeToggle, afterUntoggle).allSatisfy { pair in abs(pair.0 - pair.1) < 2 },
+          "click=\(clickedOff), after: \(afterUntoggle)")
+    window.close()
+}
+
+@MainActor
+private func saveMixedScreenshots(outputDirectory: URL) throws {
+    let model = ProbeModel()
+    let host = NSHostingView(rootView: EditorHost(model: model, width: 760, height: 1000))
+    host.frame = NSRect(x: 0, y: 0, width: 760, height: 1000)
+    let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+    window.contentView = host
+    pump(host, turns: 16)
+    guard let textView = editorTextView(in: host) else {
+        check("full mixed-note editor exists", false, "no NSTextView")
+        window.close()
+        return
+    }
+    let body = (textView.string as NSString).range(of: "English body text")
+    textView.setSelectedRange(NSRange(location: body.location, length: 0))
+    pump(host)
+    try saveScreenshot(of: host, to: outputDirectory.appendingPathComponent("mixed-markdown-note15-full.png"))
+    let emphasis = (textView.string as NSString).range(of: "**强调正文**")
+    textView.setSelectedRange(NSRange(location: emphasis.location + 3, length: 0))
+    pump(host)
+    try saveScreenshot(of: host, to: outputDirectory.appendingPathComponent("mixed-markdown-note15-editing.png"))
     window.close()
 }
 
@@ -286,6 +423,10 @@ private func runProbe(outputDirectory: URL) throws {
                 && abs(headingSize - size * 2) < 0.1
                 && abs(codeSize - (size * 0.85).rounded()) < 0.1,
               "body=\(bodySize), h1=\(headingSize), code=\(codeSize)")
+        let mixedHeadingSize = font(in: textView, at: "使用 `foo`")?.pointSize ?? -1
+        check("\(label)pt heading containing inline code keeps heading font",
+              abs(mixedHeadingSize - headingSize) < 0.1,
+              "mixed heading=\(mixedHeadingSize), ordinary heading=\(headingSize)")
         let bullet = attribute(.paragraphStyle, in: textView, at: "圆点项目") as? NSParagraphStyle
         let nested = attribute(.paragraphStyle, in: textView, at: "嵌套项目") as? NSParagraphStyle
         let unchecked = attribute(.paragraphStyle, in: textView, at: "待办任务") as? NSParagraphStyle
@@ -302,6 +443,7 @@ private func runProbe(outputDirectory: URL) throws {
     let screenshot = outputDirectory.appendingPathComponent("mixed-markdown-note24.png")
     try saveScreenshot(of: host, to: screenshot)
     print("SCREENSHOT  \(screenshot.path)")
+    try saveMixedScreenshots(outputDirectory: outputDirectory)
     try probeNarrowLists(outputDirectory: outputDirectory)
 
     let orange = NSColor(Color.orange)
@@ -341,6 +483,9 @@ private func runProbe(outputDirectory: URL) throws {
             && sameColor(color("**强调正文**", offset: 6), orange)
             && sameColor(color("强调正文"), bodyColor),
           "both delimiters are orange without recoloring their content")
+    activate("# 使用 `foo` 的说明", offset: 3)
+    check("heading with inline code keeps its orange marker",
+          sameColor(color("# 使用 `foo` 的说明"), orange), "mixed heading source")
     activate("`inline code`", offset: 3)
     check("active code delimiters use timer orange",
           sameColor(color("`inline code`"), orange)
