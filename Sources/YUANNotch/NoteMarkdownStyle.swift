@@ -26,7 +26,7 @@ enum NoteMarkdownStyle {
         return MarkdownEditorConfiguration(
             theme: theme,
             services: services,
-            lists: ListStyle(indentPerLevel: fontSize * 0.75, extraLineHeight: 1, bulletFontScale: 2.0, markerSpacingEm: 0.15),
+            lists: ListStyle(indentPerLevel: fontSize * 0.4, extraLineHeight: 1, bulletFontScale: 2.6, markerSpacingEm: 0.3),
             imageEmbed: ImageEmbedStyle(fallbackMaxWidth: 440, paragraphSpacing: 6, imageGap: 6),
             checkbox: CheckboxStyle(sizeFromFontHeightFactor: 1.0, sizeFromMarkerWidthFactor: 1.0),
             link: LinkStyle(activeLinkAlpha: 1, incompleteLinkAlpha: 1),
