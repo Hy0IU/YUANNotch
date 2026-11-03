@@ -324,25 +324,24 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             let baseFont = textView.baseFont
             let font = HeadingHelpers.listMarkerFont(baseFont: baseFont, configuration: configuration.lists)
             let slotWidth = HeadingHelpers.listMarkerSlotWidth(font: baseFont, configuration: configuration)
-            let attributes: [NSAttributedString.Key: Any] = [
-                NSAttributedString.Key(kCTFontAttributeName as String): font,
-                NSAttributedString.Key(kCTForegroundColorAttributeName as String): configuration.theme.listMarker.cgColor
-            ]
-            let ink = HeadingHelpers.markerInkBounds(character, font: font)
+            guard let marker = HeadingHelpers.markerGlyphAndInk(character, font: font) else { return }
+            let ink = marker.bounds
             let size = HeadingHelpers.checkboxSize(font: baseFont, configuration: configuration.checkbox)
             let scale = textView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
             let centerX = HeadingHelpers.listMarkerCenterX(origin: position.x, slotWidth: slotWidth, checkboxSize: size, scale: scale)
             let x = centerX - ink.midX
             let baseline = position.baselineY - HeadingHelpers.markerBaselineOffset(
-                glyph: glyph, baseFont: baseFont, scaledFont: font
+                character: character, baseFont: baseFont, scaledInk: ink
             )
-            let line = CTLineCreateWithAttributedString(NSAttributedString(string: glyph, attributes: attributes))
             context.saveGState()
+            context.setFillColor(configuration.theme.listMarker.cgColor)
             context.translateBy(x: x, y: baseline)
             context.scaleBy(x: 1, y: -1)
             context.textMatrix = .identity
             context.textPosition = .zero
-            CTLineDraw(line, context)
+            var glyphID = marker.glyph
+            var glyphPosition = CGPoint.zero
+            CTFontDrawGlyphs(font as CTFont, &glyphID, &glyphPosition, 1, context)
             context.restoreGState()
         }
     }

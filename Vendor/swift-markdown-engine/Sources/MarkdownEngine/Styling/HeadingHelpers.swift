@@ -43,35 +43,19 @@ enum HeadingHelpers {
         (text as NSString).size(withAttributes: [.font: font]).width
     }
 
-    /// Baseline offset that makes `glyph` drawn in `scaledFont` sit where the
-    /// same glyph drawn in `baseFont` does.
-    ///
-    /// A font's own vertical metrics scale with its point size, and so does
-    /// the glyph's ink box — which grows upward from the baseline. Drawing a
-    /// marker glyph larger therefore lifts it as well as enlarging it, by the
-    /// distance its ink centre travelled. Measuring that distance is the only
-    /// way to enlarge a glyph in place: a constant would be wrong at any other
-    /// font size.
-    static func markerBaselineOffset(
-        glyph: String,
-        baseFont: NSFont,
-        scaledFont: NSFont
-    ) -> CGFloat {
-        inkCenterAboveBaseline(glyph: glyph, font: baseFont)
-            - inkCenterAboveBaseline(glyph: glyph, font: scaledFont)
+    /// Return a marker's glyph and its ink bounds in the same font mapping.
+    static func markerGlyphAndInk(_ character: UniChar, font: NSFont) -> (glyph: CGGlyph, bounds: CGRect)? {
+        var character = character
+        var glyph: CGGlyph = 0
+        let ctFont = font as CTFont
+        guard CTFontGetGlyphsForCharacters(ctFont, &character, &glyph, 1) else { return nil }
+        let bounds = CTFontGetBoundingRectsForGlyphs(ctFont, .horizontal, &glyph, nil, 1)
+        return (glyph, bounds)
     }
 
-    /// Distance from the baseline to the centre of `glyph`'s ink box, in
-    /// points. Zero when the font cannot map the character, which leaves the
-    /// glyph where the font puts it rather than shifting it on a guess.
-    private static func inkCenterAboveBaseline(glyph: String, font: NSFont) -> CGFloat {
-        let utf16 = Array(glyph.utf16)
-        guard !utf16.isEmpty else { return 0 }
-        let ctFont = font as CTFont
-        var glyphs = [CGGlyph](repeating: 0, count: utf16.count)
-        guard CTFontGetGlyphsForCharacters(ctFont, utf16, &glyphs, utf16.count) else { return 0 }
-        let ink = CTFontGetBoundingRectsForGlyphs(ctFont, .horizontal, glyphs, nil, 1)
-        return ink.origin.y + ink.height / 2
+    /// Keep the scaled glyph's ink center at the body-sized glyph's height.
+    static func markerBaselineOffset(character: UniChar, baseFont: NSFont, scaledInk: CGRect) -> CGFloat {
+        (markerGlyphAndInk(character, font: baseFont)?.bounds.midY ?? 0) - scaledInk.midY
     }
 
     /// Air between a task item's square and its text. Not part of the square's
@@ -115,11 +99,7 @@ enum HeadingHelpers {
     }
 
     static func markerInkBounds(_ character: UniChar, font: NSFont) -> CGRect {
-        var character = character
-        var glyph: CGGlyph = 0
-        let ctFont = font as CTFont
-        guard CTFontGetGlyphsForCharacters(ctFont, &character, &glyph, 1) else { return .zero }
-        return CTFontGetBoundingRectsForGlyphs(ctFont, .horizontal, &glyph, nil, 1)
+        markerGlyphAndInk(character, font: font)?.bounds ?? .zero
     }
 
     static func listMarkerSlotWidth(font: NSFont, configuration: MarkdownEditorConfiguration) -> CGFloat {

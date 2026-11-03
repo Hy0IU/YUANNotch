@@ -232,28 +232,27 @@ private func wrappedColumns(in textView: NSTextView, startingAt sample: String) 
     return columns
 }
 
-/// Locate the visible orange checkbox in a cached rendering, then click its
-/// pixel bounds' center rather than a source-character hit-test position.
+/// Bounds of the orange marker actually rasterized on this line, in host-view
+/// coordinates. The scan is limited to the marker column, before the text.
 @MainActor
-private func clickCheckbox(in textView: NSTextView, sample: String) -> Bool {
-    guard let window = textView.window, let host = window.contentView,
+private func renderedMarkerBounds(in textView: NSTextView, label: String) -> (bounds: NSRect, scaleX: CGFloat)? {
+    guard let host = textView.window?.contentView,
           let manager = textView.textLayoutManager,
-          let content = manager.textContentManager as? NSTextContentStorage else { return false }
-    let sampleRange = (textView.string as NSString).range(of: sample)
+          let content = manager.textContentManager as? NSTextContentStorage else { return nil }
+    let sampleRange = (textView.string as NSString).range(of: label)
     guard sampleRange.location != NSNotFound,
           let location = content.location(content.documentRange.location, offsetBy: sampleRange.location),
-          let end = content.location(location, offsetBy: 3),
-          let range = NSTextRange(location: location, end: end) else { return false }
+          let end = content.location(location, offsetBy: 1),
+          let range = NSTextRange(location: location, end: end) else { return nil }
     textView.scrollRangeToVisible(sampleRange)
     pump(host)
     manager.ensureLayout(for: range)
-    guard let fragment = manager.textLayoutFragment(for: location) else { return false }
+    guard let fragment = manager.textLayoutFragment(for: location) else { return nil }
     let fragmentStart = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
     guard let line = fragment.textLineFragments.first(where: {
         NSLocationInRange(sampleRange.location - fragmentStart, $0.characterRange)
-    }) else { return false }
-    let label = (sample as NSString).substring(from: 4)
-    guard let bodyX = wrappedColumns(in: textView, startingAt: label).first else { return false }
+    }) else { return nil }
+    guard let bodyX = wrappedColumns(in: textView, startingAt: label).first else { return nil }
     let row = NSRect(
         x: textView.textContainerOrigin.x,
         y: textView.textContainerOrigin.y + fragment.layoutFragmentFrame.minY + line.typographicBounds.minY,
@@ -261,9 +260,9 @@ private func clickCheckbox(in textView: NSTextView, sample: String) -> Bool {
         height: line.typographicBounds.height
     )
     let visibleRow = textView.convert(row, to: host).intersection(host.bounds)
-    guard !visibleRow.isEmpty else { return false }
+    guard !visibleRow.isEmpty else { return nil }
     for view in descendants(of: host) { view.needsDisplay = true }
-    guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return false }
+    guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
     host.cacheDisplay(in: host.bounds, to: bitmap)
     let sx = CGFloat(bitmap.pixelsWide) / host.bounds.width
     let sy = CGFloat(bitmap.pixelsHigh) / host.bounds.height
@@ -272,7 +271,7 @@ private func clickCheckbox(in textView: NSTextView, sample: String) -> Bool {
     let maxX = min(bitmap.pixelsWide, Int(ceil(visibleRow.maxX * sx)))
     let minY = max(0, Int(floor(top * sy)))
     let maxY = min(bitmap.pixelsHigh, Int(ceil((top + visibleRow.height) * sy)))
-    guard minX < maxX, minY < maxY else { return false }
+    guard minX < maxX, minY < maxY else { return nil }
     var left = maxX, right = minX, upper = maxY, lower = minY
     for y in minY..<maxY {
         for x in minX..<maxX {
@@ -283,11 +282,23 @@ private func clickCheckbox(in textView: NSTextView, sample: String) -> Bool {
             upper = min(upper, y); lower = max(lower, y)
         }
     }
-    guard left <= right, upper <= lower else { return false }
-    let x = (CGFloat(left + right + 1) / 2) / sx
-    let topY = (CGFloat(upper + lower + 1) / 2) / sy
-    let y = host.isFlipped ? topY : host.bounds.height - topY
-    let pointInWindow = host.convert(NSPoint(x: x, y: y), to: nil)
+    guard left <= right, upper <= lower else { return nil }
+    let x = CGFloat(left) / sx
+    let topY = CGFloat(upper) / sy
+    let width = CGFloat(right - left + 1) / sx
+    let height = CGFloat(lower - upper + 1) / sy
+    let y = host.isFlipped ? topY : host.bounds.height - topY - height
+    return (NSRect(x: x, y: y, width: width, height: height), sx)
+}
+
+/// Click the center of the rendered checkbox, not a source-character position.
+@MainActor
+private func clickCheckbox(in textView: NSTextView, sample: String) -> Bool {
+    guard (textView.string as NSString).range(of: sample).location != NSNotFound,
+          let window = textView.window, let host = window.contentView else { return false }
+    let label = (sample as NSString).substring(from: 4)
+    guard let marker = renderedMarkerBounds(in: textView, label: label) else { return false }
+    let pointInWindow = host.convert(NSPoint(x: marker.bounds.midX, y: marker.bounds.midY), to: nil)
     guard let event = NSEvent.mouseEvent(
         with: .leftMouseDown, location: pointInWindow, modifierFlags: [], timestamp: 0,
         windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
@@ -367,6 +378,17 @@ private func probeNarrowLists(outputDirectory: URL) throws {
               "root=\(rootStart ?? -1), nested=\(nestedStart ?? -1)")
         if size == 15 || size == 24 {
             try saveScreenshot(of: host, to: outputDirectory.appendingPathComponent("narrow-lists-\(Int(size)).png"))
+        }
+        for labels in [
+            ["RootBullet", "RootOpen", "RootDone"],
+            ["NestedBullet", "NestedOpen", "NestedDone"]
+        ] {
+            let markers = labels.compactMap { renderedMarkerBounds(in: textView, label: $0) }
+            let aligned = markers.count == labels.count && markers.dropFirst().allSatisfy {
+                abs($0.bounds.midX - markers[0].bounds.midX) * $0.scaleX <= 1
+            }
+            check("\(Int(size))pt \(labels.joined(separator: "/")) share a rendered marker center",
+                  aligned, "pixel centers: \(markers.map { $0.bounds.midX * $0.scaleX })")
         }
         for (label, checkedSource) in [
             ("Unchecked", "- [x] Unchecked"),
