@@ -58,6 +58,11 @@ extension MarkdownStyler {
                 )
             }
             attrs.append((line.markerGlyph, markerAttrs))
+            if let spacing = MarkdownLists.markerSpacing(
+                for: line, in: ctx.nsText, font: ctx.baseFont, style: ctx.configuration.lists
+            ) {
+                attrs.append((spacing.range, [.kern: spacing.width]))
+            }
         }
         return attrs
     }

@@ -23,6 +23,7 @@ xcrun swiftc -swift-version 5 \
   -I "$MODULE_DIR" \
   -o "$EXECUTABLE" \
   "$SCRIPT_DIR/main.swift" \
+  "$ROOT_DIR/Sources/YUANNotch/NoteMarkdownStyle.swift" \
   "${ENGINE_OBJECTS[@]}"
 
 echo ""

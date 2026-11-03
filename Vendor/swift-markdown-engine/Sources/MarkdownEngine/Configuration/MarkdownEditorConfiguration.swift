@@ -224,6 +224,9 @@ public struct ListStyle: Sendable {
     /// body size. Ordered numbers are never scaled — a number spells the
     /// item's position and is read as text.
     public var bulletFontScale: CGFloat
+    /// Additional space after a list glyph, in ems. Applies to a space
+    /// separator; tabs and task squares use their own layout.
+    public var markerSpacingEm: CGFloat
 
     public init(
         helpersEnabled: Bool = true,
@@ -231,7 +234,8 @@ public struct ListStyle: Sendable {
         indentPerLevel: CGFloat = 27.5,
         maximumNestingLevel: Int = 3,
         extraLineHeight: CGFloat = 2,
-        bulletFontScale: CGFloat = 1
+        bulletFontScale: CGFloat = 1,
+        markerSpacingEm: CGFloat = 0
     ) {
         self.helpersEnabled = helpersEnabled
         self.autoClosePairsEnabled = autoClosePairsEnabled
@@ -239,6 +243,7 @@ public struct ListStyle: Sendable {
         self.maximumNestingLevel = maximumNestingLevel
         self.extraLineHeight = extraLineHeight
         self.bulletFontScale = bulletFontScale
+        self.markerSpacingEm = markerSpacingEm
     }
 
     public static let `default` = ListStyle()

@@ -48,7 +48,9 @@ extension MarkdownStyler {
             attrs.append((token.range, [NSAttributedString.Key.spellingState: 0]))
             let nodeName = ctx.nsText.substring(with: token.contentRange)
             let linkID = wikiLinkIDProvider(token.range)
-            var contentAttributes: [NSAttributedString.Key: Any] = [:]
+            var contentAttributes: [NSAttributedString.Key: Any] = [
+                .foregroundColor: ctx.configuration.theme.link
+            ]
             if let linkID {
                 contentAttributes[.wikiLinkID] = linkID
             }

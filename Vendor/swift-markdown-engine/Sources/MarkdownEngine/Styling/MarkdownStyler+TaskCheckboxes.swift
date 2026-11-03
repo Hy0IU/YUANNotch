@@ -77,11 +77,8 @@ extension MarkdownStyler {
                     ]))
                 }
 
-                // The item text lands on the same column whether the box is
-                // ticked or not: that column is the `[ ]` slot's, so the space
-                // behind the brackets absorbs whatever the source's own brackets
-                // add or save. A fixed amount of air here instead would leave a
-                // ticked item's text a fraction of a point off an unticked one's.
+                // Absorb the source brackets' different advances into the
+                // following space, keeping checked and unchecked text aligned.
                 let afterCheckboxIndex = checkboxRange.location + checkboxRange.length
                 if afterCheckboxIndex < ctx.nsText.length {
                     let spaceRange = NSRange(location: afterCheckboxIndex, length: 1)
