@@ -28,7 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MarkdownEditorConfiguration.contentInsets`.
 
 ### Fixed
-- Task squares derive their text column from the drawn square size and gap.
+- Unordered list glyphs and task checkboxes share a centered marker slot and
+  text origin at each nesting level, including wrapped lines.
+- Enlarged unordered markers are painted independently of text metrics, so
+  they no longer shift text baselines or line height.
+- Checkbox hit-testing uses the same visible rectangle as rendering.
 - Hidden ordered task markers and repeated separator spaces retain checkbox
   text alignment.
 - Emphasis and block-quote markers honor the theme's secondary-marker color;

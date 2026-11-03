@@ -253,11 +253,10 @@ private func renderedMarkerBounds(in textView: NSTextView, label: String) -> (bo
     guard let bodyX = wrappedColumns(in: textView, startingAt: label).first else { return nil }
 
     func markerRow() -> NSRect? {
-        guard let fragment = manager.textLayoutFragment(for: location) else { return nil }
-        let fragmentStart = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
-        guard let line = fragment.textLineFragments.first(where: {
-            NSLocationInRange(sampleRange.location - fragmentStart, $0.characterRange)
-        }) else { return nil }
+        // A long first word can wrap below the marker; scan the paragraph's
+        // first rendered line, not the line containing that word.
+        guard let fragment = manager.textLayoutFragment(for: location),
+              let line = fragment.textLineFragments.first else { return nil }
         return NSRect(
             x: textView.textContainerOrigin.x,
             y: textView.textContainerOrigin.y + fragment.layoutFragmentFrame.minY + line.typographicBounds.minY,

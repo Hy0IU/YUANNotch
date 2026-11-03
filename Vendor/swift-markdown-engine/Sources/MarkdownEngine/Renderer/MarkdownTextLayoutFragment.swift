@@ -431,9 +431,9 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         }
         return hit
     }
-    /// Left edge of a task square: the item's marker column, i.e. the column of
-    /// the line's first non-whitespace character. The `[ ]` run's own position
-    /// can't be used — see the call site.
+    /// Origin of the shared marker slot, at the first non-whitespace source
+    /// character. The checkbox is centered within that slot; its hidden
+    /// bracket run cannot supply a reliable x position after kern adjustment.
     private func markerColumnX(forCheckboxAt index: Int, in storage: NSTextStorage, point: CGPoint) -> CGFloat? {
         let nsText = storage.string as NSString
         guard index >= 0, index < nsText.length else { return nil }
