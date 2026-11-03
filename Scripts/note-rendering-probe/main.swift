@@ -239,27 +239,45 @@ private func renderedMarkerBounds(in textView: NSTextView, label: String) -> (bo
     guard let host = textView.window?.contentView,
           let manager = textView.textLayoutManager,
           let content = manager.textContentManager as? NSTextContentStorage else { return nil }
-    let sampleRange = (textView.string as NSString).range(of: label)
+    let text = textView.string as NSString
+    let sampleRange = text.range(of: label)
     guard sampleRange.location != NSNotFound,
-          let location = content.location(content.documentRange.location, offsetBy: sampleRange.location),
-          let end = content.location(location, offsetBy: 1),
-          let range = NSTextRange(location: location, end: end) else { return nil }
-    textView.scrollRangeToVisible(sampleRange)
+          let location = content.location(content.documentRange.location, offsetBy: sampleRange.location) else { return nil }
+    let paragraph = text.paragraphRange(for: sampleRange)
+    guard let paragraphEnd = content.location(content.documentRange.location, offsetBy: NSMaxRange(paragraph)),
+          let layoutRange = NSTextRange(location: content.documentRange.location, end: paragraphEnd) else { return nil }
+    // Resolve preceding fragments too: otherwise the target's vertical origin
+    // can still be estimated when a distant paragraph is scrolled into view.
+    manager.ensureLayout(for: layoutRange)
     pump(host)
-    manager.ensureLayout(for: range)
-    guard let fragment = manager.textLayoutFragment(for: location) else { return nil }
-    let fragmentStart = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
-    guard let line = fragment.textLineFragments.first(where: {
-        NSLocationInRange(sampleRange.location - fragmentStart, $0.characterRange)
-    }) else { return nil }
     guard let bodyX = wrappedColumns(in: textView, startingAt: label).first else { return nil }
-    let row = NSRect(
-        x: textView.textContainerOrigin.x,
-        y: textView.textContainerOrigin.y + fragment.layoutFragmentFrame.minY + line.typographicBounds.minY,
-        width: max(0, bodyX - 2),
-        height: line.typographicBounds.height
-    )
-    let visibleRow = textView.convert(row, to: host).intersection(host.bounds)
+
+    func markerRow() -> NSRect? {
+        guard let fragment = manager.textLayoutFragment(for: location) else { return nil }
+        let fragmentStart = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
+        guard let line = fragment.textLineFragments.first(where: {
+            NSLocationInRange(sampleRange.location - fragmentStart, $0.characterRange)
+        }) else { return nil }
+        return NSRect(
+            x: textView.textContainerOrigin.x,
+            y: textView.textContainerOrigin.y + fragment.layoutFragmentFrame.minY + line.typographicBounds.minY,
+            width: max(0, bodyX - 2),
+            height: line.typographicBounds.height
+        )
+    }
+
+    guard let row = markerRow() else { return nil }
+    textView.scrollToVisible(row)
+    pump(host)
+    // Scrolling can update the viewport's fragments, so scan the final row,
+    // not the fragment captured before scrolling.
+    guard let scrolledRow = markerRow() else { return nil }
+    if !textView.visibleRect.contains(scrolledRow) {
+        textView.scrollToVisible(scrolledRow)
+        pump(host)
+    }
+    guard let finalRow = markerRow() else { return nil }
+    let visibleRow = textView.convert(finalRow, to: host).intersection(host.bounds)
     guard !visibleRow.isEmpty else { return nil }
     for view in descendants(of: host) { view.needsDisplay = true }
     guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
