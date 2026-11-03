@@ -2,24 +2,11 @@
 //  MarkdownStyler+ListMarkers.swift
 //  MarkdownEngine
 //
-//  Colors a list line's marker glyph (`-`, `•`, `1.`) and, for a bullet,
-//  draws it larger than the body font.
-//
-//  Which runs are markers comes from `MarkdownLists.listLines`, the same
-//  recognition the hanging indent is derived from — so the glyph this paints
-//  is by construction the glyph the indent was measured against.
-//
-//  Growing the glyph is done by giving it a larger font, which also grows the
-//  run's advance and would push the item's text off the column the paragraph
-//  style puts every list item's text on. A negative kern of exactly that
-//  growth cancels it: the glyph ends up larger on screen while the run keeps
-//  the width the indent was measured from. The font's own metrics move the
-//  glyph upward as it scales, so `HeadingHelpers.markerBaselineOffset` returns
-//  it to the height the body-size glyph sat at.
-//
-//  A task item is skipped: its square replaces the whole marker zone (see
-//  `MarkdownStyler+TaskCheckboxes`), so coloring the glyph would paint a
-//  character the user is not meant to see.
+//  Unordered glyphs are drawn in the shared list-marker slot by the layout
+//  fragment. Their source characters keep body-font metrics, so a large
+//  marker cannot alter line height or move the text column.
+//  Ordered numbers remain normal text and retain their full source width.
+//  Task squares use the same slot instead of drawing their source glyph.
 //
 
 import AppKit
@@ -30,38 +17,33 @@ extension MarkdownStyler {
     static func styleListMarkers(_ ctx: StylingContext) -> [StyledRange] {
         var attrs: [StyledRange] = []
         guard ctx.configuration.lists.helpersEnabled else { return attrs }
+        let lines = MarkdownLists.listLines(in: ctx.text, range: ctx.fullRange)
+        guard !lines.isEmpty else { return attrs }
+        let textOffset = HeadingHelpers.listTextOffset(font: ctx.baseFont, configuration: ctx.configuration)
 
-        for line in MarkdownLists.listLines(in: ctx.text, range: ctx.fullRange) {
+        for line in lines {
             if line.isTaskItem { continue }
             if MarkdownDetection.isInsideCodeBlock(range: line.markerGlyph, codeTokens: ctx.codeTokens) { continue }
             let glyph = ctx.nsText.substring(with: line.markerGlyph)
             guard !glyph.isEmpty else { continue }
 
-            var markerAttrs: [NSAttributedString.Key: Any] = [
-                .foregroundColor: ctx.configuration.theme.listMarker
-            ]
-            // Only a bullet grows. An ordered marker opens with a digit; the
-            // digits spell the item's position and are read as text, so they
-            // keep the size the surrounding text is set in.
-            if glyph.first?.isNumber != true, ctx.configuration.lists.bulletFontScale > 1 {
-                let scaledFont = NSFont(
-                    descriptor: ctx.baseFont.fontDescriptor,
-                    size: ctx.baseFont.pointSize * ctx.configuration.lists.bulletFontScale
-                ) ?? NSFont.systemFont(ofSize: ctx.baseFont.pointSize * ctx.configuration.lists.bulletFontScale)
-                markerAttrs[.font] = scaledFont
-                markerAttrs[.kern] = HeadingHelpers.textWidth(glyph, font: ctx.baseFont)
-                    - HeadingHelpers.textWidth(glyph, font: scaledFont)
-                markerAttrs[.baselineOffset] = HeadingHelpers.markerBaselineOffset(
-                    glyph: glyph,
-                    baseFont: ctx.baseFont,
-                    scaledFont: scaledFont
-                )
-            }
-            attrs.append((line.markerGlyph, markerAttrs))
-            if let spacing = MarkdownLists.markerSpacing(
-                for: line, in: ctx.nsText, font: ctx.baseFont, style: ctx.configuration.lists
-            ) {
-                attrs.append((spacing.range, [.kern: spacing.width]))
+            if glyph.first?.isNumber == true {
+                attrs.append((line.markerGlyph, [.foregroundColor: ctx.configuration.theme.listMarker]))
+                if let spacing = MarkdownLists.markerSpacing(
+                    for: line, in: ctx.nsText, font: ctx.baseFont, style: ctx.configuration.lists
+                ) {
+                    attrs.append((spacing.range, [.kern: spacing.width]))
+                }
+            } else {
+                attrs.append((line.markerGlyph, [
+                    .foregroundColor: NSColor.clear,
+                    .listMarkerGlyph: glyph
+                ]))
+                if let adjustment = MarkdownLists.unorderedMarkerAdjustment(
+                    for: line, in: ctx.nsText, font: ctx.baseFont, textOffset: textOffset
+                ) {
+                    attrs.append((adjustment.range, [.kern: adjustment.width]))
+                }
             }
         }
         return attrs

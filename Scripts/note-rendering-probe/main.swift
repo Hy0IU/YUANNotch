@@ -232,52 +232,68 @@ private func wrappedColumns(in textView: NSTextView, startingAt sample: String) 
     return columns
 }
 
-/// Send a real mouse-down to a point that the editor's TextKit hit test maps
-/// into the checkbox, exercising the same local restyle as an actual click.
+/// Locate the visible orange checkbox in a cached rendering, then click its
+/// pixel bounds' center rather than a source-character hit-test position.
 @MainActor
 private func clickCheckbox(in textView: NSTextView, sample: String) -> Bool {
-    guard let window = textView.window,
+    guard let window = textView.window, let host = window.contentView,
           let manager = textView.textLayoutManager,
           let content = manager.textContentManager as? NSTextContentStorage else { return false }
-    let text = textView.string as NSString
-    let sampleRange = text.range(of: sample)
+    let sampleRange = (textView.string as NSString).range(of: sample)
     guard sampleRange.location != NSNotFound,
           let location = content.location(content.documentRange.location, offsetBy: sampleRange.location),
           let end = content.location(location, offsetBy: 3),
           let range = NSTextRange(location: location, end: end) else { return false }
+    textView.scrollRangeToVisible(sampleRange)
+    pump(host)
     manager.ensureLayout(for: range)
     guard let fragment = manager.textLayoutFragment(for: location) else { return false }
     let fragmentStart = content.offset(from: content.documentRange.location, to: fragment.rangeInElement.location)
-    let checkboxRange = NSRange(location: sampleRange.location, length: 3)
-    var lineY: CGFloat = 0
-    for line in fragment.textLineFragments {
-        if NSLocationInRange(sampleRange.location - fragmentStart, line.characterRange) {
-            let y = line.typographicBounds.height / 2
-            let paragraph = textView.textStorage?.attribute(.paragraphStyle, at: sampleRange.location, effectiveRange: nil) as? NSParagraphStyle
-            let width = max(textView.font?.pointSize ?? 24, paragraph?.headIndent ?? 0)
-            for step in 0...Int(ceil(width * 2)) {
-                let x = CGFloat(step) / 2
-                let pointInLine = CGPoint(x: x - line.glyphOrigin.x, y: y)
-                let index = fragmentStart + line.characterRange.location + line.characterIndex(for: pointInLine)
-                guard NSLocationInRange(index, checkboxRange),
-                      textView.textStorage?.attribute(.taskCheckbox, at: index, effectiveRange: nil) != nil else { continue }
-                let pointInView = CGPoint(
-                    x: fragment.layoutFragmentFrame.minX + x + textView.textContainerOrigin.x,
-                    y: fragment.layoutFragmentFrame.minY + lineY + y + textView.textContainerOrigin.y
-                )
-                let pointInWindow = textView.convert(pointInView, to: nil)
-                guard let event = NSEvent.mouseEvent(
-                    with: .leftMouseDown, location: pointInWindow, modifierFlags: [], timestamp: 0,
-                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
-                ) else { return false }
-                textView.mouseDown(with: event)
-                return true
-            }
-            return false
+    guard let line = fragment.textLineFragments.first(where: {
+        NSLocationInRange(sampleRange.location - fragmentStart, $0.characterRange)
+    }) else { return false }
+    let label = (sample as NSString).substring(from: 4)
+    guard let bodyX = wrappedColumns(in: textView, startingAt: label).first else { return false }
+    let row = NSRect(
+        x: textView.textContainerOrigin.x,
+        y: textView.textContainerOrigin.y + fragment.layoutFragmentFrame.minY + line.typographicBounds.minY,
+        width: max(0, bodyX - 2),
+        height: line.typographicBounds.height
+    )
+    let visibleRow = textView.convert(row, to: host).intersection(host.bounds)
+    guard !visibleRow.isEmpty else { return false }
+    for view in descendants(of: host) { view.needsDisplay = true }
+    guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return false }
+    host.cacheDisplay(in: host.bounds, to: bitmap)
+    let sx = CGFloat(bitmap.pixelsWide) / host.bounds.width
+    let sy = CGFloat(bitmap.pixelsHigh) / host.bounds.height
+    let top = host.isFlipped ? visibleRow.minY : host.bounds.height - visibleRow.maxY
+    let minX = max(0, Int(floor(visibleRow.minX * sx)))
+    let maxX = min(bitmap.pixelsWide, Int(ceil(visibleRow.maxX * sx)))
+    let minY = max(0, Int(floor(top * sy)))
+    let maxY = min(bitmap.pixelsHigh, Int(ceil((top + visibleRow.height) * sy)))
+    guard minX < maxX, minY < maxY else { return false }
+    var left = maxX, right = minX, upper = maxY, lower = minY
+    for y in minY..<maxY {
+        for x in minX..<maxX {
+            guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                  color.redComponent > 0.5, color.redComponent > color.greenComponent * 1.15,
+                  color.greenComponent > color.blueComponent * 1.3 else { continue }
+            left = min(left, x); right = max(right, x)
+            upper = min(upper, y); lower = max(lower, y)
         }
-        lineY += line.typographicBounds.height
     }
-    return false
+    guard left <= right, upper <= lower else { return false }
+    let x = (CGFloat(left + right + 1) / 2) / sx
+    let topY = (CGFloat(upper + lower + 1) / 2) / sy
+    let y = host.isFlipped ? topY : host.bounds.height - topY
+    let pointInWindow = host.convert(NSPoint(x: x, y: y), to: nil)
+    guard let event = NSEvent.mouseEvent(
+        with: .leftMouseDown, location: pointInWindow, modifierFlags: [], timestamp: 0,
+        windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+    ) else { return false }
+    textView.mouseDown(with: event)
+    return true
 }
 
 @MainActor
@@ -290,7 +306,9 @@ private func probeNarrowLists(outputDirectory: URL) throws {
         ("-   [ ] ", "WideSpace"), ("• ", "InlineCode"),
         ("\t• ", "RootBullet"), ("\t1. ", "RootOrdered"),
         ("\t• [ ] ", "RootOpen"), ("\t• [x] ", "RootDone"),
-        ("\t\t• ", "NestedBullet")
+        ("\t\t• ", "NestedBullet"), ("\t\t• [ ] ", "NestedOpen"), ("\t\t• [X] ", "NestedDone"),
+        ("  • [ ] ", "SpacedOpen"), ("  • [x] ", "SpacedDone"),
+        ("•   ", "BulletWide"), ("• [ ]   ", "TaskWide")
     ]
     let text = examples.map { prefix, label in
         "\(prefix)\(label) words \(label == "InlineCode" ? "`foo` " : "")wrap across multiple lines in this deliberately narrow editor column for alignment checks."
@@ -330,43 +348,49 @@ private func probeNarrowLists(outputDirectory: URL) throws {
         check("\(Int(size))pt indented checked and unchecked text align",
               rootTaskColumns.count == 2 && abs(rootTaskColumns[0] - rootTaskColumns[1]) < 2,
               "first-line starts: \(rootTaskColumns)")
+        for labels in [
+            ["Bullet", "Unchecked", "Checked"],
+            ["RootBullet", "RootOpen", "RootDone"],
+            ["NestedBullet", "NestedOpen", "NestedDone"],
+            ["Spaced", "SpacedOpen", "SpacedDone"],
+            ["BulletWide", "TaskWide"]
+        ] {
+            let starts = labels.compactMap { wrappedColumns(in: textView, startingAt: $0).first }
+            check("\(Int(size))pt \(labels.joined(separator: "/")) share a text column",
+                  starts.count == labels.count && starts.dropFirst().allSatisfy { abs($0 - starts[0]) < 1 },
+                  "first glyph origins: \(starts)")
+        }
         let rootStart = wrappedColumns(in: textView, startingAt: "RootBullet").first
         let nestedStart = wrappedColumns(in: textView, startingAt: "NestedBullet").first
         check("\(Int(size))pt two tabs remain nested",
               rootStart.map { root in nestedStart.map { $0 > root } ?? false } ?? false,
               "root=\(rootStart ?? -1), nested=\(nestedStart ?? -1)")
-        check("\(Int(size))pt inline code does not suppress its list marker",
-              sameColor(attribute(.foregroundColor, in: textView, at: "• InlineCode") as? NSColor, NSColor(Color.orange)),
-              "the list marker remains styled when its body contains inline code")
         if size == 15 || size == 24 {
             try saveScreenshot(of: host, to: outputDirectory.appendingPathComponent("narrow-lists-\(Int(size)).png"))
         }
+        for (label, checkedSource) in [
+            ("Unchecked", "- [x] Unchecked"),
+            ("RootOpen", "\t• [x] RootOpen"),
+            ("NestedOpen", "\t\t• [x] NestedOpen")
+        ] {
+            let before = wrappedColumns(in: textView, startingAt: label)
+            let clickedOn = clickCheckbox(in: textView, sample: "[ ] \(label)")
+            pump(host)
+            let after = wrappedColumns(in: textView, startingAt: label)
+            check("\(Int(size))pt clicking \(label) at its visible center keeps its text columns",
+                  clickedOn && model.storedText.contains(checkedSource)
+                    && before.count > 1 && before.count == after.count
+                    && zip(before, after).allSatisfy { pair in abs(pair.0 - pair.1) < 1 },
+                  "click=\(clickedOn), before: \(before); after: \(after)")
+            let clickedOff = clickCheckbox(in: textView, sample: "[x] \(label)")
+            pump(host)
+            let restored = wrappedColumns(in: textView, startingAt: label)
+            check("\(Int(size))pt clicking \(label) again restores its state and text columns",
+                  clickedOff && model.storedText == text && before.count == restored.count
+                    && zip(before, restored).allSatisfy { pair in abs(pair.0 - pair.1) < 1 },
+                  "click=\(clickedOff), after: \(restored)")
+        }
     }
-    let beforeToggle = wrappedColumns(in: textView, startingAt: "Unchecked")
-    let clickedOn = clickCheckbox(in: textView, sample: "[ ] Unchecked")
-    pump(host)
-    let afterToggle = wrappedColumns(in: textView, startingAt: "Unchecked")
-    check("clicking a task keeps its wrapped text columns",
-          clickedOn && model.storedText.contains("- [x] Unchecked")
-            && beforeToggle.count > 1 && beforeToggle.count == afterToggle.count
-            && zip(beforeToggle, afterToggle).allSatisfy { pair in abs(pair.0 - pair.1) < 2 },
-          "click=\(clickedOn), before: \(beforeToggle); after: \(afterToggle)")
-    let clickedOff = clickCheckbox(in: textView, sample: "[x] Unchecked")
-    pump(host)
-    let afterUntoggle = wrappedColumns(in: textView, startingAt: "Unchecked")
-    check("clicking again restores the unchecked task and its columns",
-          clickedOff && model.storedText == text && beforeToggle.count == afterUntoggle.count
-            && zip(beforeToggle, afterUntoggle).allSatisfy { pair in abs(pair.0 - pair.1) < 2 },
-          "click=\(clickedOff), after: \(afterUntoggle)")
-    let rootBefore = wrappedColumns(in: textView, startingAt: "RootOpen")
-    let rootClicked = clickCheckbox(in: textView, sample: "[ ] RootOpen")
-    pump(host)
-    let rootAfter = wrappedColumns(in: textView, startingAt: "RootOpen")
-    check("clicking an indented task keeps its wrapped text columns",
-          rootClicked && model.storedText.contains("\t• [x] RootOpen")
-            && rootBefore.count > 1 && rootBefore.count == rootAfter.count
-            && zip(rootBefore, rootAfter).allSatisfy { pair in abs(pair.0 - pair.1) < 2 },
-          "click=\(rootClicked), before: \(rootBefore); after: \(rootAfter)")
     window.close()
 }
 
@@ -379,7 +403,10 @@ private func saveListLegibilityScreenshots(outputDirectory: URL) throws {
         "\t1. 有序步骤 Ordered step",
         "\t• [ ] 待处理 Open task",
         "\t• [x] 已完成 Completed task",
-        "\t\t• 嵌套项目 Nested item"
+        "\t\t• 嵌套项目 Nested item",
+        "\t\t• [ ] 嵌套待办 Nested task",
+        "\t\t• [x] 嵌套完成 Nested completed",
+        "\t• 含有 `code` 的列表项 Inline code"
     ].joined(separator: "\n")
     let model = ProbeModel(text: text)
     let host = NSHostingView(rootView: EditorHost(
@@ -404,6 +431,28 @@ private func saveListLegibilityScreenshots(outputDirectory: URL) throws {
         print("SCREENSHOT  \(screenshot.path)")
     }
     window.close()
+    let alignmentHost = NSHostingView(rootView: EditorHost(
+        model: model, width: 622, height: 520,
+        backgroundColor: Color(red: 0.06, green: 0.06, blue: 0.07)
+    ))
+    alignmentHost.frame = NSRect(x: 0, y: 0, width: 622, height: 520)
+    let alignmentWindow = NSWindow(contentRect: alignmentHost.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    alignmentWindow.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+    alignmentWindow.contentView = alignmentHost
+    pump(alignmentHost, turns: 16)
+    for size in [CGFloat(15), 12, 24] {
+        model.fontSize = size
+        pump(alignmentHost)
+        if let scrollView = editorTextView(in: alignmentHost)?.enclosingScrollView {
+            scrollView.contentView.scroll(to: .zero)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            pump(alignmentHost)
+        }
+        let screenshot = outputDirectory.appendingPathComponent("list-alignment-\(Int(size)).png")
+        try saveScreenshot(of: alignmentHost, to: screenshot)
+        print("SCREENSHOT  \(screenshot.path)")
+    }
+    alignmentWindow.close()
 }
 
 @MainActor
@@ -530,11 +579,10 @@ private func runProbe(outputDirectory: URL) throws {
             && sameColor(color("> code literal"), bodyColor)
             && !sameColor(bodyColor, orange),
           "ordinary text and Markdown-looking code are not syntax markers")
-    check("list, ordered and quote markers use timer orange",
-          sameColor(color("• 圆点项目"), orange)
-            && sameColor(color("1. 有序项目"), orange)
+    check("ordered and quote markers use timer orange",
+          sameColor(color("1. 有序项目"), orange)
             && sameColor(color("> 引用正文"), orange),
-          "list and quote glyphs share the timer's semantic color")
+          "ordered and quote glyphs share the timer's semantic color")
     let ruleColor = attribute(.strikethroughColor, in: textView, at: "---") as? NSColor
     check("horizontal rule uses timer orange", sameColor(ruleColor, orange), "rule stroke")
     check("wiki and incomplete links use timer orange",

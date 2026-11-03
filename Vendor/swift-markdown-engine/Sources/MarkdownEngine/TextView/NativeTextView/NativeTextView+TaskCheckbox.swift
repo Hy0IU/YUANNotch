@@ -22,7 +22,9 @@ extension NativeTextView {
             y: localPoint.y - textContainerOrigin.y
         )
         var fraction: CGFloat = 0
-        let index = bridge.characterIndex(
+        let visibleCheckbox = (textLayoutManager?.textLayoutFragment(for: containerPoint) as? MarkdownTextLayoutFragment)?
+            .taskCheckboxRange(at: containerPoint)
+        let index = visibleCheckbox?.location ?? bridge.characterIndex(
             for: containerPoint,
             in: textContainer,
             fractionOfDistanceBetweenInsertionPoints: &fraction

@@ -107,15 +107,42 @@ enum HeadingHelpers {
         )
     }
 
-    /// Width of the drawn square and its gap to the item text. The list
-    /// handler and the styler share this measurement so wrapping and toggling
-    /// both keep the text in the same column.
-    static func checkboxMarkerWidth(
-        font: NSFont,
-        configuration: CheckboxStyle = .default
-    ) -> CGFloat {
-        checkboxSize(font: font, configuration: configuration)
-            + textWidth(" ", font: font)
-            + checkboxExtraSpacing(font: font, configuration: configuration)
+    /// All unordered and task markers share this slot. Its width covers both
+    /// the checkbox and the ink of either supported unordered glyph.
+    static func listMarkerFont(baseFont: NSFont, configuration: ListStyle) -> NSFont {
+        let size = baseFont.pointSize * max(1, configuration.bulletFontScale)
+        return NSFont(descriptor: baseFont.fontDescriptor, size: size) ?? NSFont.systemFont(ofSize: size)
+    }
+
+    static func markerInkBounds(_ character: UniChar, font: NSFont) -> CGRect {
+        var character = character
+        var glyph: CGGlyph = 0
+        let ctFont = font as CTFont
+        guard CTFontGetGlyphsForCharacters(ctFont, &character, &glyph, 1) else { return .zero }
+        return CTFontGetBoundingRectsForGlyphs(ctFont, .horizontal, &glyph, nil, 1)
+    }
+
+    static func listMarkerSlotWidth(font: NSFont, configuration: MarkdownEditorConfiguration) -> CGFloat {
+        let markerFont = listMarkerFont(baseFont: font, configuration: configuration.lists)
+        let bulletWidth = markerInkBounds(0x2022, font: markerFont).width
+        let dashWidth = markerInkBounds(0x002D, font: markerFont).width
+        return max(checkboxSize(font: font, configuration: configuration.checkbox), ceil(max(bulletWidth, dashWidth)))
+    }
+
+    /// Share the checkbox's pixel-aligned center with the drawn glyph.
+    static func listMarkerCenterX(origin: CGFloat, slotWidth: CGFloat, checkboxSize: CGFloat, scale: CGFloat) -> CGFloat {
+        let left = origin + (slotWidth - checkboxSize) / 2
+        return (left * scale).rounded(.toNearestOrAwayFromZero) / scale + checkboxSize / 2
+    }
+
+    /// The text column is measured once for both the hanging indent and the
+    /// source runs that precede the text; wide separators retain their excess.
+    static func listTextOffset(font: NSFont, configuration: MarkdownEditorConfiguration) -> CGFloat {
+        let gap = max(
+            font.pointSize * configuration.lists.markerSpacingEm,
+            checkboxExtraSpacing(font: font, configuration: configuration.checkbox)
+        )
+        return listMarkerSlotWidth(font: font, configuration: configuration)
+            + textWidth(" ", font: font) + gap
     }
 }

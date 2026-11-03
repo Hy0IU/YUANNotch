@@ -25,6 +25,8 @@ extension MarkdownStyler {
     static func styleTaskCheckboxes(_ ctx: StylingContext) -> [StyledRange] {
         var attrs: [StyledRange] = []
         let taskMatches = MarkdownStyler.taskListRegex.matches(in: ctx.text, options: [], range: ctx.fullRange)
+        guard !taskMatches.isEmpty else { return attrs }
+        let textColumn = HeadingHelpers.listTextOffset(font: ctx.baseFont, configuration: ctx.configuration)
         for match in taskMatches {
             let markerRange = match.range(at: 2)
             let spacerRange = match.range(at: 3)
@@ -89,10 +91,6 @@ extension MarkdownStyler {
                 if afterCheckboxIndex < ctx.nsText.length {
                     let spaceRange = NSRange(location: afterCheckboxIndex, length: 1)
                     if ctx.nsText.substring(with: spaceRange) == " " {
-                        let textColumn = HeadingHelpers.checkboxMarkerWidth(
-                            font: ctx.baseFont,
-                            configuration: ctx.configuration.checkbox
-                        )
                         let bracketsWidth = HeadingHelpers.textWidth(checkboxText, font: ctx.baseFont)
                         let spaceWidth = HeadingHelpers.textWidth(" ", font: ctx.baseFont)
                         attrs.append((spaceRange, [.kern: textColumn - bracketsWidth - spaceWidth]))
