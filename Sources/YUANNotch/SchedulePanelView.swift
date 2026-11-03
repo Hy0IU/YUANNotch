@@ -454,13 +454,14 @@ private struct ScheduleEntryBar: View {
     let calendar: Calendar
 
     private var tint: Color { source?.color.scheduleColor ?? .gray }
+    private var isReminder: Bool { entry.kind == .reminders }
 
     var body: some View {
         HStack(spacing: 0) {
             Rectangle().fill(tint.opacity(0.9)).frame(width: 3)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: isReminder ? 2 : 3) {
                 Text(entry.title.isEmpty ? "Untitled" : entry.title)
-                    .appText(.body, weight: .medium)
+                    .appText(isReminder ? .secondary : .body, weight: isReminder ? .regular : .medium)
                     .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -489,7 +490,7 @@ private struct ScheduleEntryBar: View {
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 6)
+            .padding(.vertical, isReminder ? 4 : 6)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(tint.opacity(0.085))

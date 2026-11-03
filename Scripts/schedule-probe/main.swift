@@ -157,9 +157,9 @@ private struct ScheduleProbe {
         var displayEntries = [
             ScheduleEntry(id: "meeting", sourceID: "events", kind: .calendar, title: "Research group meeting",
                           start: offset(0, hour: 14), end: offset(0, hour: 15), isAllDay: false, location: "Room 302"),
-            ScheduleEntry(id: "deadline", sourceID: "tasks", kind: .reminders, title: "Submit experiment notes",
+            ScheduleEntry(id: "deadline", sourceID: "tasks", kind: .reminders, title: "整理本周的项目资料并发送给同事确认",
                           start: offset(0, hour: 18), end: nil, isAllDay: false, location: nil),
-            ScheduleEntry(id: "idea", sourceID: "ideas", kind: .reminders, title: "Review the contrastive learning idea",
+            ScheduleEntry(id: "idea", sourceID: "ideas", kind: .reminders, title: "核对会议材料",
                           start: today, end: nil, isAllDay: true, location: nil),
             ScheduleEntry(id: "multi", sourceID: "events", kind: .calendar, title: "Workshop · all-day multi-day event",
                           start: offset(1), end: offset(3), isAllDay: true, location: nil),
@@ -168,7 +168,7 @@ private struct ScheduleProbe {
         ]
         for index in 0..<12 {
             displayEntries.append(ScheduleEntry(id: "dense-\(index)", sourceID: "tasks", kind: .reminders,
-                                                title: "Follow up on task \(index + 1)", start: offset(2, hour: 9 + index),
+                                                title: index % 3 == 0 ? "整理本周待办事项并确认各项任务的完成情况" : "跟进项目任务 \(index + 1)", start: offset(2, hour: 9 + index),
                                                 end: nil, isAllDay: false, location: nil))
         }
         let displayStore = ScheduleStore(service: FixtureService(calendarAccess: .fullAccess, reminderAccess: .fullAccess,
