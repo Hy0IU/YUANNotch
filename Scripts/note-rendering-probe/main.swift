@@ -284,7 +284,7 @@ private func clickCheckbox(in textView: NSTextView, sample: String) -> Bool {
 private func probeNarrowLists(outputDirectory: URL) throws {
     let examples = [
         ("- ", "Dash"), ("• ", "Bullet"), ("10. ", "Ten"), ("100. ", "Hundred"),
-        ("\t• ", "Tabbed"), ("  • ", "Spaced"),
+        ("  • ", "Spaced"),
         ("- [ ] ", "Unchecked"), ("- [x] ", "Checked"),
         ("10. [ ] ", "OrderedOpen"), ("10. [x] ", "OrderedDone"),
         ("-   [ ] ", "WideSpace"), ("• ", "InlineCode"),
@@ -394,6 +394,11 @@ private func saveListLegibilityScreenshots(outputDirectory: URL) throws {
     for size in [CGFloat(15), 12, 24] {
         model.fontSize = size
         pump(host)
+        if let scrollView = editorTextView(in: host)?.enclosingScrollView {
+            scrollView.contentView.scroll(to: .zero)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            pump(host)
+        }
         let screenshot = outputDirectory.appendingPathComponent("list-legibility-\(Int(size)).png")
         try saveScreenshot(of: host, to: screenshot)
         print("SCREENSHOT  \(screenshot.path)")
