@@ -151,6 +151,29 @@ struct MarkdownLists {
         return (NSRange(location: location, length: 1), font.pointSize * style.markerSpacingEm)
     }
 
+    /// Extra advance placed on the first space after an unordered marker.
+    /// Later spaces remain as written; ordered markers retain their own width.
+    static func unorderedMarkerAdjustment(
+        for line: ListLine, in text: NSString, font: NSFont, textOffset: CGFloat
+    ) -> (range: NSRange, width: CGFloat)? {
+        let location = NSMaxRange(line.markerGlyph)
+        guard !line.isTaskItem, location < NSMaxRange(line.markerZone),
+              text.character(at: location) == 0x20 else { return nil }
+        let glyph = text.substring(with: line.markerGlyph)
+        guard glyph.first?.isNumber != true else { return nil }
+        return (NSRange(location: location, length: 1),
+                textOffset - HeadingHelpers.textWidth(glyph, font: font) - HeadingHelpers.textWidth(" ", font: font))
+    }
+
+    static func taskTrailingExtraWidth(for line: ListLine, in text: NSString, font: NSFont) -> CGFloat {
+        let marker = text.substring(with: line.markerZone) as NSString
+        let bracket = marker.range(of: "]", options: .backwards)
+        let start = NSMaxRange(bracket)
+        guard bracket.location != NSNotFound, start < marker.length, marker.character(at: start) == 0x20 else { return 0 }
+        let trailing = marker.substring(from: start)
+        return HeadingHelpers.textWidth(trailing, font: font) - HeadingHelpers.textWidth(" ", font: font)
+    }
+
     // MARK: - Paragraph Attributes for List Styling
 
     static func paragraphAttributes(
@@ -165,12 +188,15 @@ struct MarkdownLists {
     ) -> [(range: NSRange, attributes: [NSAttributedString.Key: Any])] {
         var attributesList: [(range: NSRange, attributes: [NSAttributedString.Key: Any])] = []
         guard listsEnabled else { return attributesList }
+        let lines = listLines(in: text, range: fullRange)
+        guard !lines.isEmpty else { return attributesList }
 
         let indentPerLevel = configuration.lists.indentPerLevel
         let extraLineHeight = configuration.lists.extraLineHeight
         let spaceWidth = (" " as NSString).size(withAttributes: [.font: baseFont]).width
+        let textOffset = HeadingHelpers.listTextOffset(font: baseFont, configuration: configuration)
 
-        for line in listLines(in: text, range: fullRange) {
+        for line in lines {
             let ps = NSMutableParagraphStyle()
             ps.minimumLineHeight = defaultLineHeight + extraLineHeight
             ps.maximumLineHeight = defaultLineHeight + extraLineHeight
@@ -189,10 +215,17 @@ struct MarkdownLists {
             // marker here would put the hanging indent one whole marker past
             // the text it exists to align with, and measuring the brackets
             // would move it again on every tick.
-            let markerWidth = line.isTaskItem
-                ? HeadingHelpers.checkboxMarkerWidth(font: baseFont, configuration: configuration.checkbox)
-                : nsText.substring(with: line.markerZone).size(withAttributes: [.font: baseFont]).width
+            let markerWidth: CGFloat
+            if line.isTaskItem {
+                markerWidth = textOffset + taskTrailingExtraWidth(for: line, in: nsText, font: baseFont)
+            } else if let adjustment = unorderedMarkerAdjustment(for: line, in: nsText, font: baseFont, textOffset: textOffset) {
+                let extraStart = NSMaxRange(adjustment.range)
+                let extraRange = NSRange(location: extraStart, length: NSMaxRange(line.markerZone) - extraStart)
+                markerWidth = textOffset + HeadingHelpers.textWidth(nsText.substring(with: extraRange), font: baseFont)
+            } else {
+                markerWidth = HeadingHelpers.textWidth(nsText.substring(with: line.markerZone), font: baseFont)
                     + (markerSpacing(for: line, in: nsText, font: baseFont, style: configuration.lists)?.width ?? 0)
+            }
 
             ps.tabStops = []
             ps.defaultTabInterval = indentPerLevel

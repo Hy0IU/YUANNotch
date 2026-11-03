@@ -9,6 +9,7 @@
 //  via NSTextLayoutFragment instead of NSLayoutManager glyph overrides.
 
 import AppKit
+import CoreText
 
 // MARK: - Custom attribute keys for rendering overlays
 
@@ -17,6 +18,7 @@ extension NSAttributedString.Key {
     static let latexBounds = NSAttributedString.Key("LatexImageBounds")
     static let latexIsBlock = NSAttributedString.Key("LatexIsBlock")
     static let latexBlockOffsetY = NSAttributedString.Key("LatexBlockOffsetY")
+    static let listMarkerGlyph = NSAttributedString.Key("ListMarkerGlyph")
 }
 
 final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
@@ -58,6 +60,7 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
         // 3. Normal text
         super.draw(at: point, in: context)
+        drawListMarkers(at: point, in: context)
 
         // 4. Task checkboxes (on top of hidden [ ]/[x] markers)
         drawTaskCheckboxes(at: point, in: context)
@@ -309,6 +312,40 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         }
     }
 
+    // MARK: - Unordered list markers
+
+    private func drawListMarkers(at point: CGPoint, in context: CGContext) {
+        guard let storage = textStorage, let range = fragmentNSRange,
+              let textView = textLayoutManager?.textContainer?.textView as? NativeTextView else { return }
+        storage.enumerateAttribute(.listMarkerGlyph, in: range, options: []) { [weak self] value, markerRange, _ in
+            guard let self, let glyph = value as? String, let character = glyph.utf16.first,
+                  let position = self.drawPosition(forDocumentCharAt: markerRange.location, point: point) else { return }
+            let configuration = textView.configuration
+            let baseFont = textView.baseFont
+            let font = HeadingHelpers.listMarkerFont(baseFont: baseFont, configuration: configuration.lists)
+            let slotWidth = HeadingHelpers.listMarkerSlotWidth(font: baseFont, configuration: configuration)
+            guard let marker = HeadingHelpers.markerGlyphAndInk(character, font: font) else { return }
+            let ink = marker.bounds
+            let size = HeadingHelpers.checkboxSize(font: baseFont, configuration: configuration.checkbox)
+            let scale = textView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+            let centerX = HeadingHelpers.listMarkerCenterX(origin: position.x, slotWidth: slotWidth, checkboxSize: size, scale: scale)
+            let x = centerX - ink.midX
+            let baseline = position.baselineY - HeadingHelpers.markerBaselineOffset(
+                character: character, baseFont: baseFont, scaledInk: ink
+            )
+            context.saveGState()
+            context.setFillColor(configuration.theme.listMarker.cgColor)
+            context.translateBy(x: x, y: baseline)
+            context.scaleBy(x: 1, y: -1)
+            context.textMatrix = .identity
+            context.textPosition = .zero
+            var glyphID = marker.glyph
+            var glyphPosition = CGPoint.zero
+            CTFontDrawGlyphs(font as CTFont, &glyphID, &glyphPosition, 1, context)
+            context.restoreGState()
+        }
+    }
+
     // MARK: - Task List Checkboxes
 
     private func drawTaskCheckboxes(at point: CGPoint, in context: CGContext) {
@@ -328,34 +365,9 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             if selectionRanges.contains(where: { NSIntersectionRange($0, attrRange).length > 0 }) { return }
 
             let isChecked = (value as? Bool) ?? false
-            guard let pos = drawPosition(forDocumentCharAt: attrRange.location, point: point) else { return }
-            // The square stands on the item's marker column — the column the
-            // `[ ]` run has been collapsed onto (see `MarkdownStyler+TaskCheckboxes`).
-            // Measuring that run's own position instead would push the square
-            // ~2pt right of it: the marker ahead of it carries a negative kern,
-            // and TextKit reports the character right after such a run at only
-            // half the kern's offset.
-            let boxX = markerColumnX(forCheckboxAt: attrRange.location, in: ts, point: point) ?? pos.x
-
-            let font = (ts.attribute(.font, at: attrRange.location, effectiveRange: nil) as? NSFont)
-                ?? (textLayoutManager?.textContainer?.textView?.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize))
-            let ascent = max(0, font.ascender)
-            let descent = max(0, -font.descender)
+            guard let boxRect = self.taskCheckboxRect(at: attrRange.location, point: point) else { return }
+            let size = boxRect.width
             let configuration = (textLayoutManager?.textContainer?.textView as? NativeTextView)?.configuration ?? .default
-            // The square's size and the item text's column are one piece of
-            // geometry: `HeadingHelpers` owns both, so the drawn box and the
-            // hanging indent cannot drift apart.
-            let size = HeadingHelpers.checkboxSize(font: font, configuration: configuration.checkbox)
-            let centerY = pos.baselineY + (descent - ascent) / 2
-            let boxY = centerY - size / 2
-
-            let scale = textLayoutManager?.textContainer?.textView?.window?.backingScaleFactor
-                ?? NSScreen.main?.backingScaleFactor ?? 2.0
-            func alignToPixel(_ value: CGFloat) -> CGFloat {
-                (value * scale).rounded(.toNearestOrAwayFromZero) / scale
-            }
-            let boxRect = CGRect(x: alignToPixel(boxX), y: alignToPixel(boxY), width: size, height: size)
-            guard !boxRect.isEmpty, !boxRect.isNull else { return }
 
             let checkboxPath = NSBezierPath(
                 roundedRect: boxRect,
@@ -385,9 +397,43 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             }
         }
     }
-    /// Left edge of a task square: the item's marker column, i.e. the column of
-    /// the line's first non-whitespace character. The `[ ]` run's own position
-    /// can't be used — see the call site.
+
+    /// Shared by rendering and mouse hit-testing, in the coordinate system
+    /// selected by `point` (draw origin or layout-fragment origin).
+    func taskCheckboxRect(at index: Int, point: CGPoint) -> CGRect? {
+        guard let storage = textStorage,
+              let position = drawPosition(forDocumentCharAt: index, point: point),
+              let markerX = markerColumnX(forCheckboxAt: index, in: storage, point: point),
+              let textView = textLayoutManager?.textContainer?.textView as? NativeTextView else { return nil }
+        let font = textView.baseFont
+        let configuration = textView.configuration
+        let size = HeadingHelpers.checkboxSize(font: font, configuration: configuration.checkbox)
+        let slot = HeadingHelpers.listMarkerSlotWidth(font: font, configuration: configuration)
+        let scale = textView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let centerX = HeadingHelpers.listMarkerCenterX(origin: markerX, slotWidth: slot, checkboxSize: size, scale: scale)
+        let centerY = position.baselineY + (max(0, -font.descender) - max(0, font.ascender)) / 2
+        let x = centerX - size / 2
+        func alignToPixel(_ value: CGFloat) -> CGFloat {
+            (value * scale).rounded(.toNearestOrAwayFromZero) / scale
+        }
+        return CGRect(x: alignToPixel(x), y: alignToPixel(centerY - size / 2), width: size, height: size)
+    }
+
+    func taskCheckboxRange(at point: CGPoint) -> NSRange? {
+        guard let storage = textStorage, let range = fragmentNSRange else { return nil }
+        var hit: NSRange?
+        storage.enumerateAttribute(.taskCheckbox, in: range, options: []) { value, checkboxRange, stop in
+            guard value != nil,
+                  let rect = self.taskCheckboxRect(at: checkboxRange.location, point: self.layoutFragmentFrame.origin),
+                  rect.contains(point) else { return }
+            hit = checkboxRange
+            stop.pointee = true
+        }
+        return hit
+    }
+    /// Origin of the shared marker slot, at the first non-whitespace source
+    /// character. The checkbox is centered within that slot; its hidden
+    /// bracket run cannot supply a reliable x position after kern adjustment.
     private func markerColumnX(forCheckboxAt index: Int, in storage: NSTextStorage, point: CGPoint) -> CGFloat? {
         let nsText = storage.string as NSString
         guard index >= 0, index < nsText.length else { return nil }
