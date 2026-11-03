@@ -134,10 +134,10 @@ bash Scripts/toolbar-layout-probe.sh
 
 ## 制作发布安装包
 
-当前版本为 **1.0.1**，构建号为 **14**。发布脚本默认生成 DMG 和 SHA-256 校验文件，放在 `.release/`，不会替换 `/Applications` 中正在使用的应用。传入计划发布的版本号和递增构建号，例如：
+当前版本为 **1.0.2**，构建号为 **15**。发布脚本默认生成 DMG 和 SHA-256 校验文件，放在 `.release/`，不会替换 `/Applications` 中正在使用的应用。传入计划发布的版本号和递增构建号，例如：
 
 ```bash
-bash Scripts/make-release.sh 1.0.1 14
+bash Scripts/make-release.sh 1.0.2 15
 ```
 
 DMG 内含应用、Applications 链接和安装引导背景，挂载时会请求 Finder 打开安装窗口。布局工具直接生成镜像元数据，不需要控制 Finder，也不需要安装额外依赖。脚本同时生成 `*-preview.png` 合成效果图，便于检查设计；它不是 Finder 实际截图。
@@ -145,7 +145,7 @@ DMG 内含应用、Applications 链接和安装引导背景，挂载时会请求
 如需同时保留 ZIP 下载，设置 `INCLUDE_ZIP=1`：
 
 ```bash
-INCLUDE_ZIP=1 bash Scripts/make-release.sh 1.0.1 14
+INCLUDE_ZIP=1 bash Scripts/make-release.sh 1.0.2 15
 ```
 
 正式分发时，使用有效的 Developer ID Application 证书和已经配置好的 `notarytool` 钥匙串配置：
@@ -153,7 +153,7 @@ INCLUDE_ZIP=1 bash Scripts/make-release.sh 1.0.1 14
 ```bash
 SIGN_IDENTITY='Developer ID Application: …' \
 NOTARY_PROFILE='your-notary-profile' \
-bash Scripts/make-release.sh 1.0.1 14
+bash Scripts/make-release.sh 1.0.2 15
 ```
 
 脚本会签名应用和 DMG，等待 Apple 公证、附加并验证公证票据，最后计算校验值；任一步骤失败都会停止。仅设置 `SIGN_IDENTITY` 不会自动公证。启用 ZIP 时，也会公证并附加 ZIP 内应用的票据。
@@ -161,8 +161,8 @@ bash Scripts/make-release.sh 1.0.1 14
 发布前可校验压缩镜像、应用签名、Finder 布局、重新挂载后的背景引用和自动打开标记：
 
 ```bash
-bash Scripts/dmg-probe.sh .release/YUANNotch-1.0.1.dmg
-(cd .release && shasum -a 256 -c YUANNotch-1.0.1.dmg.sha256)
+bash Scripts/dmg-probe.sh .release/YUANNotch-1.0.2.dmg
+(cd .release && shasum -a 256 -c YUANNotch-1.0.2.dmg.sha256)
 ```
 
 最后在目标 macOS 上双击 DMG，检查 Finder 实际显示和拖拽安装，再将 DMG 与校验文件上传到对应的 GitHub Release。
