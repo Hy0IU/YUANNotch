@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Task squares derive their text column from the drawn square size and gap.
+- Hidden ordered task markers and repeated separator spaces retain checkbox
+  text alignment.
 - Emphasis and block-quote markers honor the theme's secondary-marker color;
   wiki links and AppKit-drawn links honor the configured link color.
 - Heading, block-quote and horizontal-rule styling leave fenced code untouched.

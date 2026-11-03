@@ -131,6 +131,11 @@ private func sameColor(_ actual: NSColor?, _ expected: NSColor) -> Bool {
 
 @MainActor
 private func saveScreenshot(of host: NSView, to url: URL) throws {
+    // A reused offscreen host may only have the edited line invalidated.
+    // Redraw the whole view tree rather than caching a partial dirty region.
+    for view in descendants(of: host) {
+        view.needsDisplay = true
+    }
     guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
         throw NSError(domain: "NoteRenderingProbe", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not allocate screenshot bitmap"])
     }
