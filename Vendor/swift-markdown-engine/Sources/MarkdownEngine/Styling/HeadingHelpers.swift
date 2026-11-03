@@ -86,11 +86,9 @@ enum HeadingHelpers {
         )
     }
 
-    /// The `[ ]` slot a task item's square stands in for. Both the square's size
-    /// and the column the item text starts at are measured from this slot —
-    /// never from the brackets the source actually spells, because those are
-    /// collapsed to zero advance and never drawn. Letting them reach the layout
-    /// would move the text beside them every time an item is ticked.
+    /// A stable slot for sizing the square, independent of whether the source
+    /// spells `[ ]` or `[x]`. The styler compensates for the actual brackets'
+    /// advance so both states leave the item text in the same column.
     static let checkboxSlot = "[ ]"
 
     /// Side of a task square, in points: bounded by the line's font height and
@@ -109,17 +107,14 @@ enum HeadingHelpers {
         )
     }
 
-    /// Width of a task item's marker zone, from the item's marker column to the
-    /// column its text starts at: the `[ ]` slot the square stands in for, the
-    /// space behind it, and the air between square and text. The list handler
-    /// takes the hanging indent from it and the styler the advance behind the
-    /// brackets — deriving it once is what keeps a ticked and an unticked item
-    /// on the same text column.
+    /// Width of the drawn square and its gap to the item text. The list
+    /// handler and the styler share this measurement so wrapping and toggling
+    /// both keep the text in the same column.
     static func checkboxMarkerWidth(
         font: NSFont,
         configuration: CheckboxStyle = .default
     ) -> CGFloat {
-        textWidth(checkboxSlot, font: font)
+        checkboxSize(font: font, configuration: configuration)
             + textWidth(" ", font: font)
             + checkboxExtraSpacing(font: font, configuration: configuration)
     }

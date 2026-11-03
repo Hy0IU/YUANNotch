@@ -37,6 +37,10 @@ extension MarkdownStyler {
         pattern: #"^([ \t]*)([-•]|\d+\.)([ \t]+)(\[[ xX]\])(?=[ \t])"#,
         options: [.anchorsMatchLines]
     )
+    static let blockQuotePrefixRegex = try! NSRegularExpression(
+        pattern: #"^[ ]{0,3}>[ \t]*(?:>[ \t]*)*"#,
+        options: [.anchorsMatchLines]
+    )
 }
 
 // MARK: - Styling Context
@@ -168,6 +172,7 @@ enum MarkdownStyler {
         result += styleInlineCode(ctx)
         result += styleBlockLatex(ctx)
         result += styleInlineLatex(ctx)
+        result += styleBlockQuoteMarkers(ctx)
         result += styleHorizontalRules(ctx)
         result += styleIncompleteLinkBrackets(ctx)
         // Before the task checkboxes, whose marker and spacer are painted
@@ -327,13 +332,25 @@ extension MarkdownStyler {
 
 extension MarkdownStyler {
 
-    // MARK: Horizontal Rules ---
+    // MARK: Block Quote Markers
+    static func styleBlockQuoteMarkers(_ ctx: StylingContext) -> [StyledRange] {
+        var attrs: [StyledRange] = []
+        for match in blockQuotePrefixRegex.matches(in: ctx.text, range: ctx.fullRange) {
+            if MarkdownDetection.isInsideCodeBlock(range: match.range, codeTokens: ctx.codeTokens) { continue }
+            for index in match.range.location..<NSMaxRange(match.range) where ctx.nsText.character(at: index) == 0x3E {
+                attrs.append((NSRange(location: index, length: 1), [.foregroundColor: ctx.configuration.theme.mutedText]))
+            }
+        }
+        return attrs
+    }
 
+    // MARK: Horizontal Rules ---
     static func styleHorizontalRules(_ ctx: StylingContext) -> [StyledRange] {
         var attrs: [StyledRange] = []
         let hrPattern = "^[ \\t]*-{3,}[ \\t]*$"
         if let hrRegex = try? NSRegularExpression(pattern: hrPattern, options: [.anchorsMatchLines]) {
             for hrMatch in hrRegex.matches(in: ctx.text, range: ctx.fullRange) {
+                if MarkdownDetection.isInsideCodeBlock(range: hrMatch.range, codeTokens: ctx.codeTokens) { continue }
                 attrs.append((hrMatch.range, [.foregroundColor: NSColor.clear]))
                 attrs.append((hrMatch.range, [
                     .strikethroughStyle: NSUnderlineStyle.thick.rawValue,

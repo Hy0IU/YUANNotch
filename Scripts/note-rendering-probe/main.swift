@@ -12,9 +12,20 @@ private let fixture = """
 - 普通列表项 A regular list item
 - [ ] 待办任务 An unchecked task
 - [x] 已完成任务 A checked task
+• 圆点项目 Bullet item with enough words to wrap across a narrow editor when its font size increases.
+1. 有序项目 Ordered item
+	• 嵌套项目 Nested item
+
+> 引用正文 Quote body
+---
+**强调正文** and `inline code` and [link label](https://example.com)
+[[missing page]] and https://example.org
+[unfinished]
+
 
 ```swift
 let answer = 42
+> code literal
 print("字体大小会随设置变化")
 ```
 """
@@ -22,8 +33,12 @@ print("字体大小会随设置变化")
 @MainActor
 private final class ProbeModel: ObservableObject {
     @Published var fontSize: CGFloat = 15
-    @Published private(set) var storedText = fixture
+    @Published private(set) var storedText: String
     private(set) var bindingSetterCalls = 0
+
+    init(text: String = fixture) {
+        storedText = text
+    }
 
     var textBinding: Binding<String> {
         Binding(
@@ -44,17 +59,19 @@ private final class ProbeModel: ObservableObject {
 
 private struct EditorHost: View {
     @ObservedObject var model: ProbeModel
+    var width: CGFloat = 760
+    var height: CGFloat = 560
 
     var body: some View {
         NativeTextViewWrapper(
             text: model.textBinding,
-            configuration: .default,
+            configuration: NoteMarkdownStyle.configuration(fontSize: model.fontSize),
             fontName: "SF Pro",
             fontSize: model.fontSize,
             documentId: "stable-note-rendering-probe-document",
             isEditable: true
         )
-        .frame(width: 760, height: 560)
+        .frame(width: width, height: height)
         .background(Color.black)
     }
 }
@@ -94,6 +111,22 @@ private func font(in textView: NSTextView, at sample: String) -> NSFont? {
 }
 
 @MainActor
+private func attribute(_ key: NSAttributedString.Key, in textView: NSTextView, at sample: String, offset: Int = 0) -> Any? {
+    let range = (textView.string as NSString).range(of: sample)
+    guard range.location != NSNotFound, offset >= 0, offset < range.length else { return nil }
+    return textView.textStorage?.attribute(key, at: range.location + offset, effectiveRange: nil)
+}
+
+private func sameColor(_ actual: NSColor?, _ expected: NSColor) -> Bool {
+    guard let actual = actual?.usingColorSpace(.deviceRGB),
+          let expected = expected.usingColorSpace(.deviceRGB) else { return false }
+    return abs(actual.redComponent - expected.redComponent) < 0.01
+        && abs(actual.greenComponent - expected.greenComponent) < 0.01
+        && abs(actual.blueComponent - expected.blueComponent) < 0.01
+        && abs(actual.alphaComponent - expected.alphaComponent) < 0.01
+}
+
+@MainActor
 private func saveScreenshot(of host: NSView, to url: URL) throws {
     guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
         throw NSError(domain: "NoteRenderingProbe", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not allocate screenshot bitmap"])
@@ -113,6 +146,85 @@ private func check(_ label: String, _ passed: Bool, _ detail: String) {
     print("\(passed ? "PASS" : "FAIL")  \(label)")
     print("      \(detail)")
     if !passed { failures += 1 }
+}
+
+/// Measure actual TextKit segments, excluding the marker, on every wrapped line.
+@MainActor
+private func wrappedColumns(in textView: NSTextView, startingAt sample: String) -> [CGFloat] {
+    guard let manager = textView.textLayoutManager,
+          let content = manager.textContentManager as? NSTextContentStorage else { return [] }
+    let text = textView.string as NSString
+    let sampleRange = text.range(of: sample)
+    guard sampleRange.location != NSNotFound else { return [] }
+    let line = text.lineRange(for: sampleRange)
+    let endOffset = NSMaxRange(line) - (text.substring(with: line).hasSuffix("\n") ? 1 : 0)
+    guard let start = content.location(content.documentRange.location, offsetBy: sampleRange.location),
+          let end = content.location(content.documentRange.location, offsetBy: endOffset),
+          let range = NSTextRange(location: start, end: end) else { return [] }
+    manager.ensureLayout(for: range)
+    var lines: [(y: CGFloat, x: CGFloat)] = []
+    manager.enumerateTextSegments(in: range, type: .standard, options: []) { _, rect, _, _ in
+        guard !rect.isEmpty else { return true }
+        if let index = lines.firstIndex(where: { abs($0.y - rect.minY) < 1 }) {
+            lines[index].x = min(lines[index].x, rect.minX)
+        } else {
+            lines.append((rect.minY, rect.minX))
+        }
+        return true
+    }
+    return lines.sorted { $0.y < $1.y }.map(\.x)
+}
+
+@MainActor
+private func probeNarrowLists(outputDirectory: URL) throws {
+    let examples = [
+        ("- ", "Dash"), ("• ", "Bullet"), ("10. ", "Ten"), ("100. ", "Hundred"),
+        ("\t• ", "Tabbed"), ("  • ", "Spaced"),
+        ("- [ ] ", "Unchecked"), ("- [x] ", "Checked")
+    ]
+    let text = examples.map { prefix, label in
+        "\(prefix)\(label) words wrap across multiple lines in this deliberately narrow editor column for alignment checks."
+    }.joined(separator: "\n")
+    let model = ProbeModel(text: text)
+    let host = NSHostingView(rootView: EditorHost(model: model, width: 220, height: 1500))
+    host.frame = NSRect(x: 0, y: 0, width: 220, height: 1500)
+    let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+    window.contentView = host
+    pump(host, turns: 16)
+    guard let textView = editorTextView(in: host) else {
+        check("narrow list editor exists", false, "no NSTextView")
+        window.close()
+        return
+    }
+    for size in [CGFloat(12), 15, 24] {
+        model.fontSize = size
+        pump(host)
+        var taskColumns: [CGFloat] = []
+        for (_, label) in examples {
+            let columns = wrappedColumns(in: textView, startingAt: label)
+            let aligned = columns.count > 1 && columns.dropFirst().allSatisfy { abs($0 - columns[0]) < 2 }
+            check("\(Int(size))pt \(label) wrapped text aligns", aligned, "line starts: \(columns)")
+            if label == "Unchecked" || label == "Checked", let first = columns.first {
+                taskColumns.append(first)
+            }
+        }
+        check("\(Int(size))pt checked and unchecked text align",
+              taskColumns.count == 2 && abs(taskColumns[0] - taskColumns[1]) < 2,
+              "first-line starts: \(taskColumns)")
+        if size == 15 || size == 24 {
+            try saveScreenshot(of: host, to: outputDirectory.appendingPathComponent("narrow-lists-\(Int(size)).png"))
+        }
+    }
+    let beforeToggle = wrappedColumns(in: textView, startingAt: "Unchecked")
+    model.storeText(text.replacingOccurrences(of: "- [ ] Unchecked", with: "- [x] Unchecked"))
+    pump(host)
+    let afterToggle = wrappedColumns(in: textView, startingAt: "Unchecked")
+    check("toggling a task keeps its wrapped text columns",
+          beforeToggle.count > 1 && beforeToggle.count == afterToggle.count
+            && zip(beforeToggle, afterToggle).allSatisfy { pair in abs(pair.0 - pair.1) < 2 },
+          "before: \(beforeToggle); after: \(afterToggle)")
+    window.close()
 }
 
 @MainActor
@@ -146,6 +258,7 @@ private func runProbe(outputDirectory: URL) throws {
     model.resetBindingSetterCount()
 
     let fontCases: [(CGFloat, String)] = [(12, "12"), (15, "15"), (24, "24")]
+    var previousNestingOffset: CGFloat = 0
     for (size, label) in fontCases {
         model.fontSize = size
         pump(host)
@@ -173,11 +286,72 @@ private func runProbe(outputDirectory: URL) throws {
                 && abs(headingSize - size * 2) < 0.1
                 && abs(codeSize - (size * 0.85).rounded()) < 0.1,
               "body=\(bodySize), h1=\(headingSize), code=\(codeSize)")
+        let bullet = attribute(.paragraphStyle, in: textView, at: "圆点项目") as? NSParagraphStyle
+        let nested = attribute(.paragraphStyle, in: textView, at: "嵌套项目") as? NSParagraphStyle
+        let unchecked = attribute(.paragraphStyle, in: textView, at: "待办任务") as? NSParagraphStyle
+        let checked = attribute(.paragraphStyle, in: textView, at: "已完成任务") as? NSParagraphStyle
+        let nestingOffset = (nested?.headIndent ?? 0) - (bullet?.headIndent ?? 0)
+        check("\(label)pt nested and task wrapping columns",
+              bullet != nil && nested != nil && unchecked != nil && checked != nil
+                && nestingOffset > previousNestingOffset
+                && abs((unchecked?.headIndent ?? 0) - (checked?.headIndent ?? 0)) < 0.1,
+              "nested offset=\(nestingOffset), task indents=\(unchecked?.headIndent ?? -1)/\(checked?.headIndent ?? -1)")
+        previousNestingOffset = nestingOffset
     }
 
     let screenshot = outputDirectory.appendingPathComponent("mixed-markdown-note24.png")
     try saveScreenshot(of: host, to: screenshot)
     print("SCREENSHOT  \(screenshot.path)")
+    try probeNarrowLists(outputDirectory: outputDirectory)
+
+    let orange = NSColor(Color.orange)
+    let bodyColor = NoteMarkdownStyle.configuration(fontSize: model.fontSize).theme.bodyText
+    func color(_ sample: String, offset: Int = 0) -> NSColor? {
+        attribute(.foregroundColor, in: textView, at: sample, offset: offset) as? NSColor
+    }
+    func activate(_ sample: String, offset: Int) {
+        let range = (textView.string as NSString).range(of: sample)
+        guard range.location != NSNotFound else { return }
+        textView.setSelectedRange(NSRange(location: range.location + offset, length: 0))
+        pump(host)
+    }
+    check("body and code content stay readable",
+          sameColor(color("中文正文与 English body text"), bodyColor)
+            && sameColor(color("> code literal"), bodyColor)
+            && !sameColor(bodyColor, orange),
+          "ordinary text and Markdown-looking code are not syntax markers")
+    check("list, ordered and quote markers use timer orange",
+          sameColor(color("• 圆点项目"), orange)
+            && sameColor(color("1. 有序项目"), orange)
+            && sameColor(color("> 引用正文"), orange),
+          "list and quote glyphs share the timer's semantic color")
+    let ruleColor = attribute(.strikethroughColor, in: textView, at: "---") as? NSColor
+    check("horizontal rule uses timer orange", sameColor(ruleColor, orange), "rule stroke")
+    check("wiki and incomplete links use timer orange",
+          sameColor(color("missing page"), orange)
+            && sameColor(color("[unfinished]"), orange)
+            && attribute(.link, in: textView, at: "https://example.org") != nil
+            && sameColor(textView.linkTextAttributes[.foregroundColor] as? NSColor, orange),
+          "wiki and incomplete links are colored; detected URLs use AppKit link drawing")
+    activate("# 混合标题", offset: 3)
+    check("active heading marker uses timer orange", sameColor(color("# 混合标题"), orange), "heading source")
+    activate("**强调正文**", offset: 3)
+    check("active emphasis markers use timer orange",
+          sameColor(color("**强调正文**"), orange)
+            && sameColor(color("**强调正文**", offset: 6), orange)
+            && sameColor(color("强调正文"), bodyColor),
+          "both delimiters are orange without recoloring their content")
+    activate("`inline code`", offset: 3)
+    check("active code delimiters use timer orange",
+          sameColor(color("`inline code`"), orange)
+            && sameColor(color("inline code"), bodyColor),
+          "code content remains body-colored")
+    activate("[link label](https://example.com)", offset: 3)
+    check("active link source uses timer orange",
+          sameColor(color("[link label](https://example.com)"), orange)
+            && sameColor(color("link label"), orange)
+            && sameColor(textView.linkTextAttributes[.foregroundColor] as? NSColor, orange),
+          "link syntax and AppKit link drawing use the same accent")
 
     // Editing via NSTextView's real insertion API should create an undo action.
     // Keep the same wrapper/document identity while its font changes, then undo

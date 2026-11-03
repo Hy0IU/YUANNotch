@@ -142,6 +142,15 @@ struct MarkdownLists {
         return lines
     }
 
+    static func markerSpacing(
+        for line: ListLine, in text: NSString, font: NSFont, style: ListStyle
+    ) -> (range: NSRange, width: CGFloat)? {
+        let location = NSMaxRange(line.markerGlyph)
+        guard !line.isTaskItem, style.markerSpacingEm > 0,
+              location < NSMaxRange(line.markerZone), text.character(at: location) == 0x20 else { return nil }
+        return (NSRange(location: location, length: 1), font.pointSize * style.markerSpacingEm)
+    }
+
     // MARK: - Paragraph Attributes for List Styling
 
     static func paragraphAttributes(
@@ -183,6 +192,7 @@ struct MarkdownLists {
             let markerWidth = line.isTaskItem
                 ? HeadingHelpers.checkboxMarkerWidth(font: baseFont, configuration: configuration.checkbox)
                 : nsText.substring(with: line.markerZone).size(withAttributes: [.font: baseFont]).width
+                    + (markerSpacing(for: line, in: nsText, font: baseFont, style: configuration.lists)?.width ?? 0)
 
             ps.tabStops = []
             ps.defaultTabInterval = indentPerLevel

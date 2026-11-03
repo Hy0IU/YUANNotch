@@ -139,6 +139,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         textView.minOverscrollPoints = configuration.overscroll.minPoints
         context.coordinator.configuration = configuration
         textView.insertionPointColor = configuration.theme.bodyText
+        textView.linkTextAttributes = [.foregroundColor: configuration.theme.link]
         textView.isEditable = isEditable
         textView.isSelectable = isEditable
         textView.isRichText = true
@@ -267,6 +268,11 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         textView.isSelectable = isEditable
         textView.insertionPointColor = isEditable ? context.coordinator.configuration.theme.bodyText : .clear
         let fontChanged = (context.coordinator.fontName != fontName) || (context.coordinator.fontSize != fontSize)
+        if fontChanged {
+            // List metrics can depend on the host's selected font size.
+            context.coordinator.configuration.lists = configuration.lists
+            (textView as? NativeTextView)?.configuration.lists = configuration.lists
+        }
         if let pendingInlineReplacement {
             if pendingInlineReplacement.documentId == documentId,
                context.coordinator.lastAppliedInlineReplacementID != pendingInlineReplacement.id {

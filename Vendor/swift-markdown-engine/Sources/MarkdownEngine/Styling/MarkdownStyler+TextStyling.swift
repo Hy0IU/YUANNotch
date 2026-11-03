@@ -18,6 +18,7 @@ extension MarkdownStyler {
         var attrs: [StyledRange] = []
         let headingTokens = ctx.tokens.filter { $0.kind == .heading }
         for token in headingTokens {
+            if MarkdownDetection.isInsideCodeBlock(range: token.range, codeTokens: ctx.codeTokens) { continue }
             let level = token.markerRanges.first?.length ?? 1
             let multiplier = ctx.configuration.headings.fontMultiplier(for: level)
             let fontSize = ctx.baseFont.pointSize * multiplier
@@ -55,6 +56,7 @@ extension MarkdownStyler {
         var traits = [UInt8](repeating: 0, count: len)
         let boldBit: UInt8 = 1
         let italicBit: UInt8 = 2
+        var attrs: [StyledRange] = []
 
         for token in ctx.tokens {
             let mask: UInt8
@@ -65,6 +67,7 @@ extension MarkdownStyler {
             default: continue
             }
             if MarkdownDetection.isInsideCodeBlock(range: token.range, codeTokens: ctx.codeTokens) { continue }
+            appendSecondaryMarkers(for: token, to: &attrs, theme: ctx.configuration.theme)
             let r = token.contentRange
             let upper = min(r.location + r.length, len)
             for i in max(r.location, 0)..<upper {
@@ -76,7 +79,6 @@ extension MarkdownStyler {
         let regularBold = boldFont(in: ctx)
         let regularBoldItalic = boldItalicFont(in: ctx)
 
-        var attrs: [StyledRange] = []
         var i = 0
         while i < len {
             let t = traits[i]
