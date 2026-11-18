@@ -16,8 +16,6 @@ struct TimeOfDay: Equatable {
         self.init(hour: parts.hour ?? 0, minute: parts.minute ?? 0)
     }
 
-    var dateComponents: DateComponents { DateComponents(hour: hour, minute: minute) }
-
     /// Read through the system locale, so a 24-hour region renders `21:00` and a
     /// 12-hour one `9:00 PM`. No time anywhere in this panel is written with a
     /// fixed format — the list rows read theirs the same way.
@@ -120,6 +118,8 @@ struct DueSelection {
 
     func resolution(now: Date, calendar: Calendar = .current) -> DueResolution {
         let today = calendar.startOfDay(for: now)
+        // Clock components are wall time, not elapsed hours since midnight:
+        // adding 09:00 to a DST-transition midnight can produce 08:00 or 10:00.
         let clock = time == .custom ? TimeOfDay(customTime, calendar: calendar) : time.preset
 
         let chosenDay: Date?
@@ -148,13 +148,13 @@ struct DueSelection {
             // A time with no date means "today at that time", which becomes
             // tomorrow once the moment has passed — and lands on tomorrow
             // outright when the time belongs to the day after today.
-            let todayInstant = calendar.date(byAdding: clock.dateComponents, to: today) ?? today
+            let todayInstant = calendar.date(bySettingHour: clock.hour, minute: clock.minute, second: 0, of: today) ?? today
             let day = todayInstant > now ? today : (calendar.date(byAdding: .day, value: 1, to: today) ?? today)
-            let instant = calendar.date(byAdding: clock.dateComponents, to: day) ?? todayInstant
+            let instant = calendar.date(bySettingHour: clock.hour, minute: clock.minute, second: 0, of: day) ?? todayInstant
             return DueResolution(day: day, instant: instant)
 
         case let (day?, clock?):
-            let instant = calendar.date(byAdding: clock.dateComponents, to: day) ?? day
+            let instant = calendar.date(bySettingHour: clock.hour, minute: clock.minute, second: 0, of: day) ?? day
             return DueResolution(day: day, instant: instant)
         }
     }

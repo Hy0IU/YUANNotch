@@ -45,7 +45,7 @@ final class NoteEditorTypographyState: ObservableObject {
         applyRequestedFontSize(value, in: textView)
     }
 
-    func applyShortcut(_ action: NoteFontSizeShortcut.Action) {
+    func applyShortcut(_ action: ContentFontSizeShortcut.Action) {
         let current = AppTypography.normalizedNoteFontSize(settingsStore.noteFontSize)
         let requested: Double
         switch action {
@@ -172,34 +172,3 @@ private struct ScrollAnchor {
     }
 }
 
-enum NoteFontSizeShortcut {
-    enum Action {
-        case decrease
-        case increase
-        case reset
-    }
-
-    static func action(for event: NSEvent) -> Action? {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard modifiers.contains(.command),
-              !modifiers.contains(.option),
-              !modifiers.contains(.control) else { return nil }
-
-        let shiftPressed = modifiers.contains(.shift)
-        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
-
-        if shiftPressed {
-            // On US keyboards, the physical equals key produces '+' with
-            // Shift. Also accept '=' here for layouts that report the
-            // unshifted character through charactersIgnoringModifiers.
-            return (event.keyCode == 24 || key == "=" || key == "+") ? .increase : nil
-        }
-
-        switch key {
-        case "=", "+": return .increase
-        case "-": return .decrease
-        case "0": return .reset
-        default: return nil
-        }
-    }
-}

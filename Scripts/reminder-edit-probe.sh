@@ -44,6 +44,7 @@ xcrun swiftc -swift-version 5 \
   "$SOURCE_DIR/NotchGeometry.swift" \
   "$SOURCE_DIR/ReminderDueEditor.swift" \
   "$SOURCE_DIR/RemindersPanelView.swift" \
+  "$SOURCE_DIR/ReminderFontSizeKeyboard.swift" \
   "$SOURCE_DIR/ReminderInputPreview.swift" \
   "$SOURCE_DIR/ReminderListCapsule.swift" \
   "$SOURCE_DIR/NotebookButtonStyles.swift"

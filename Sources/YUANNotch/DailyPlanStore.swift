@@ -312,7 +312,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
             }
             + [(DailyPlanTimeDraft.unassignedPlanID, "Other focus")]
         timeDraft = DailyPlanTimeDraft(
-            date: calendar.startOfDay(for: date),
+            day: day,
             entries: titles.map { id, title in
                 let seconds = focusedSeconds(for: id, on: date)
                 return DailyPlanTimeEntry(id: id, title: title, originalSeconds: seconds, minutes: Int(seconds / 60))
@@ -327,7 +327,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
     func commitTimeDraft(at date: Date? = nil) {
         guard let draft = timeDraft, draft.canCommit else { return }
         let date = date ?? nowProvider()
-        guard PlanDayKey(date: draft.date, calendar: calendar)
+        guard draft.day
             <= PlanDayKey(date: DailyPlanEngine.dayStart(containing: date, calendar: calendar), calendar: calendar)
         else { return }
         now = date
@@ -345,7 +345,7 @@ final class DailyPlanStore: NSObject, ObservableObject {
         let previousRecords = dayRecords
         let previousActiveSession = activeSession
         let previousPausedSessions = pausedSessions
-        let day = PlanDayKey(date: draft.date, calendar: calendar)
+        let day = draft.day
         for entry in draft.entries where entry.isChanged {
             dayRecords.removeAll { $0.planID == entry.id && $0.day == day }
             if entry.seconds > 0 {

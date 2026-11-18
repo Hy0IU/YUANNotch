@@ -616,7 +616,7 @@ private func checkInputLayout(store: ReminderStore, settings: AppSettingsStore) 
                 if let inputField = field(in: host, placeholder: "New reminder") {
                     let frame = inputField.convert(inputField.bounds, to: host)
                     check(frame.width >= 100 && frame.minX >= 0 && frame.maxX <= width && inputField.stringValue == input
-                        && inputField.font?.pointSize == typography.size(.body),
+                        && inputField.font?.pointSize == typography.reminderFontSize,
                           "\(interfaceSize.rawValue) \(name) input fits at \(Int(width))pt", "raw input is unchanged; the native field fits the panel")
                 } else { check(false, "input field rendered", "the shipping panel did not produce its compose field") }
                 let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
@@ -628,6 +628,142 @@ private func checkInputLayout(store: ReminderStore, settings: AppSettingsStore) 
     }
     print("Offscreen input previews: \(output.path)")
     store.composer.draft = ""
+}
+
+// MARK: - Reminder font shortcuts on the shipping surface
+
+private struct ReminderFontProbeSurface: View {
+    @ObservedObject var store: ReminderStore
+    @ObservedObject var settings: AppSettingsStore
+    var isDrawerExpanded = true
+
+    var body: some View {
+        RemindersPanelView(
+            store: store, settingsStore: settings, composer: store.composer,
+            size: CGSize(width: 360, height: 420), onOpenSettings: {},
+            isDrawerExpanded: isDrawerExpanded
+        )
+        .environment(\.appTypography, settings.typography)
+    }
+}
+
+@MainActor
+private func checkReminderFontSize() async {
+    let suite = "YUANNotch.ReminderFontProbe.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    let queueURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(suite).json")
+    let settings = AppSettingsStore(defaults: defaults)
+    settings.isAppleRemindersSyncEnabled = true
+    let service = StubRemindersService(reminders: [
+        ReminderSnapshot(
+            id: "font-row", externalID: nil, title: "A long reminder that wraps without changing its stored text",
+            dueDate: nil, isDueDateAllDay: false, isCompleted: false, hasAlarm: false,
+            listID: "list-1", createdDate: Date(), lastModified: nil
+        )
+    ])
+    let store = ReminderStore(
+        settingsStore: settings, service: service,
+        queueStore: ReminderQueueStore(queueURL: queueURL)
+    )
+    defer {
+        store.setPanelVisible(false)
+        defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: queueURL)
+    }
+    store.requestRefresh(reloadLists: true)
+    guard await waitUntil({ !store.items.isEmpty }) else {
+        check(false, "font probe loads a reminder", "no reminder was loaded")
+        return
+    }
+    store.composer.draft = "Keep this draft"
+    let (host, window) = makeEditHost(
+        ReminderFontProbeSurface(store: store, settings: settings), width: 360, height: 420
+    )
+    defer { window.orderOut(nil) }
+    guard let input = field(in: host, placeholder: "New reminder") else {
+        check(false, "font probe renders compose field", "missing shipping field")
+        return
+    }
+    window.makeFirstResponder(input)
+    pump(host, window)
+    guard await waitUntil({ NSApp.isActive && window.isKeyWindow && NSApp.keyWindow === window }) else {
+        check(false, "font probe activates its input window", "AppKit did not activate the test window")
+        return
+    }
+    func send(_ key: String, _ code: UInt16, flags: NSEvent.ModifierFlags = .command, target: NSWindow? = nil) {
+        let eventWindow = target ?? window
+        eventWindow.makeKey()
+        let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+            windowNumber: eventWindow.windowNumber, context: nil,
+            characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: code
+        )!
+        NSApp.postEvent(event, atStart: true)
+        while let queued = NSApp.nextEvent(
+            matching: .any, until: Date().addingTimeInterval(0.02), inMode: .default, dequeue: true
+        ) {
+            NSApp.sendEvent(queued)
+        }
+        pump(host, window, turns: 2)
+    }
+    send("+", 24, flags: [.command, .shift])
+    check(settings.reminderFontSize == 14 && input.font?.pointSize == 14
+        && store.composer.draft == "Keep this draft" && settings.noteFontSize == 15,
+          "⌘+ resizes the actual compose field without changing text or notes",
+          "size=\(settings.reminderFontSize), field=\(input.font?.pointSize ?? 0), draft=\(store.composer.draft), key=\(window.isKeyWindow)")
+    send("=", 24)
+    send("-", 27)
+    check(settings.reminderFontSize == 14, "⌘= and ⌘− share the content controls", "size=\(settings.reminderFontSize)")
+    send("0", 29)
+    check(settings.reminderFontSize == 13, "⌘0 resets reminder content", "13 pt")
+    store.beginEditing(store.items[0])
+    pump(host, window)
+    if let editor = field(in: host, placeholder: "Edit reminder") {
+        window.makeFirstResponder(editor)
+        let title = store.editingDraft
+        settings.reminderFontSize = 24
+        pump(host, window)
+        send("+", 24, flags: [.command, .shift])
+        check(editor.font?.pointSize == 24 && settings.reminderFontSize == 24 && store.editingDraft == title,
+              "editing keeps the draft and respects the upper size bound", "actual editor is 24 pt")
+        let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let preview = FileManager.default.temporaryDirectory.appendingPathComponent("yuannotch-reminder-font-24.png")
+        try! bitmap.representation(using: .png, properties: [:])!.write(to: preview)
+        print("Reminder font preview: \(preview.path)")
+        settings.reminderFontSize = 12
+        send("-", 27)
+        check(settings.reminderFontSize == 12 && editor.font?.pointSize == 12,
+              "editing respects the lower size bound", "12 pt")
+    } else {
+        check(false, "font probe renders edit field", "missing shipping editor")
+    }
+    store.cancelEditing()
+    host.rootView = AnyView(ReminderFontProbeSurface(
+        store: store, settings: settings, isDrawerExpanded: false
+    ).frame(width: 360, height: 420))
+    pump(host, window)
+    send("=", 24)
+    check(settings.reminderFontSize == 12, "a collapsed drawer ignores content shortcuts", "preference unchanged")
+    host.rootView = AnyView(ReminderFontProbeSurface(store: store, settings: settings)
+        .frame(width: 360, height: 420))
+    pump(host, window)
+    let other = NotchPanel(contentRect: NSRect(x: 0, y: 0, width: 120, height: 80),
+                           styleMask: [.borderless], backing: .buffered, defer: false)
+    other.makeKeyAndOrderFront(nil)
+    pump(host, window)
+    send("=", 24, target: other)
+    check(settings.reminderFontSize == 12, "another key window cannot resize hidden reminder content", "window-scoped monitor")
+    other.orderOut(nil)
+    window.makeKeyAndOrderFront(nil)
+    pump(host, window)
+    host.rootView = AnyView(Color.clear.frame(width: 360, height: 420))
+    pump(host, window)
+    send("=", 24)
+    check(settings.reminderFontSize == 12, "a discarded reminders view stops handling shortcuts", "preference unchanged")
+    let reloaded = AppSettingsStore(defaults: defaults)
+    check(reloaded.reminderFontSize == 12 && reloaded.noteFontSize == 15,
+          "reminder size survives reload independently of notes", "isolated preference suite")
 }
 
 // MARK: - 6 · ending the editing session saves
@@ -799,20 +935,38 @@ MainActor.assumeIsolated {
     print("")
     checkRules()
 
+    let runsApplication = CommandLine.arguments.contains("--font-ui")
+    if runsApplication { NSApp.setActivationPolicy(.accessory) }
     var done = false
     Task { @MainActor in
-        await runFlowChecks()
-        await checkDueEditing()
-        await checkNaturalLanguageCreate()
-        if !CommandLine.arguments.contains("--model-only") {
-            await checkEndOfEditingSaves()
+        if runsApplication {
+            await checkReminderFontSize()
+        } else {
+            await runFlowChecks()
+            await checkDueEditing()
+            await checkNaturalLanguageCreate()
+            if !CommandLine.arguments.contains("--model-only") {
+                await checkEndOfEditingSaves()
+            }
         }
         done = true
+        if runsApplication {
+            NSApp.stop(nil)
+            let wake = NSEvent.otherEvent(
+                with: .applicationDefined, location: .zero, modifierFlags: [],
+                timestamp: 0, windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0
+            )!
+            NSApp.postEvent(wake, atStart: true)
+        }
     }
-    // The flow's awaits need the main actor to run; pumping the run loop is what
-    // lets it, the way the app's own main loop would.
-    while !done {
-        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    if runsApplication {
+        // Key-window state requires NSApplication's lifecycle, not just a
+        // manually pumped CFRunLoop.
+        NSApp.run()
+    } else {
+        while !done {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
     }
 
     print("")

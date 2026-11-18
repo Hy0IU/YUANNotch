@@ -71,6 +71,7 @@ struct FloatingPlanProbe {
             size: FloatingPlanMetrics.compactSize
         )
         try render(compact, to: output.appendingPathComponent("compact-progress.png"))
+        let compactMask = FloatingPlanCollapseScenarios.cardAlphaMask(in: compact)
         let expanded = makeHost(
             FloatingPlanPanelView(store: store, isExpanded: true, onExpand: {}, onHide: {}),
             size: FloatingPlanMetrics.expandedSize
@@ -115,6 +116,9 @@ struct FloatingPlanProbe {
         }
         print("Rendered five retraction frames on one offscreen host; the ring is not replaced at the endpoint")
         precondition(store.activeSession == selectedSession, "Changing presentation must not reset or resume focus")
+        expanded.window!.setContentSize(FloatingPlanMetrics.expandedSize)
+        settleLayout(expanded)
+        let expandedMask = FloatingPlanCollapseScenarios.cardAlphaMask(in: expanded)
         store.togglePause(at: now)
         _ = store.refresh(at: now.addingTimeInterval(60))
         precondition(store.phaseRemaining() == 32 * 60 && store.activeSession?.isRunning == true)
@@ -122,6 +126,12 @@ struct FloatingPlanProbe {
         settleLayout(compact)
         try render(compact, to: output.appendingPathComponent("compact-progress-later.png"))
         precondition(store.phaseElapsed() == 20 * 60)
+        settleLayout(expanded)
+        precondition(FloatingPlanCollapseScenarios.cardAlphaMask(in: compact) == compactMask,
+                     "Updating the compact progress ring must not change the shadow silhouette")
+        precondition(FloatingPlanCollapseScenarios.cardAlphaMask(in: expanded) == expandedMask,
+                     "Updating countdown text and progress must not change the shadow silhouette")
+        print("PASS running/pausing and countdown/progress updates preserve both rounded shadow masks")
         print("PASS presentation changes preserve the selected timer; focus continues and pauses at 20m")
         for phase in [FocusPhase.shortBreak, .longBreak] {
             let duration = DailyPlanEngine.phaseDuration(for: plan, phase: phase)
@@ -163,6 +173,7 @@ struct FloatingPlanProbe {
         }
         try checkHourCountdowns(scratch: scratch, output: output, now: now, day: day)
         print("Offscreen previews: \(output.path)")
+        print("Native WindowServer blur/offset is not present in offscreen view bitmaps; only window configuration and source alpha masks are measured")
         print("No windows ordered front, pointer movement, clicks, keyboard input, or desktop event dispatch")
     }
 
@@ -248,6 +259,8 @@ struct FloatingPlanProbe {
         host.frame = NSRect(origin: .zero, size: size)
         host.sizingOptions = []
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isOpaque = false
+        window.backgroundColor = .clear
         window.contentView = host
         settleLayout(host)
         return host

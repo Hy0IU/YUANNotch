@@ -580,31 +580,15 @@ private struct FloatingPlanCardBackground: View {
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        shape.fill(.thickMaterial)
+        // An opaque base gives WindowServer one stable rounded-card silhouette;
+        // changing countdown glyphs and progress strokes cannot shape its shadow.
+        shape.fill(Color(red: 0.08, green: 0.08, blue: 0.10))
+            .overlay { shape.fill(.thickMaterial) }
             .overlay { shape.fill(Color(red: 0.08, green: 0.08, blue: 0.10).opacity(0.68)) }
             .overlay { shape.stroke(.white.opacity(0.045), lineWidth: 0.5) }
     }
 }
 
-private struct FloatingPlanCardShadow: View {
-    let cornerRadius: CGFloat
-
-    var body: some View {
-        Canvas { context, size in
-            // The shadow fades to transparent inside the existing window inset,
-            // so neither the window edge nor the card's clip cuts it off.
-            for step in stride(from: 20, through: 1, by: -1) {
-                let spread = CGFloat(step) * 0.25
-                let inset = FloatingPlanMetrics.edgeInset - spread
-                let rect = CGRect(origin: .zero, size: size).insetBy(dx: inset, dy: inset)
-                let path = Path(roundedRect: rect, cornerRadius: cornerRadius + spread, style: .continuous)
-                context.fill(path, with: .color(.black.opacity(0.012)))
-            }
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
 
 private struct FloatingPlanControlsBoundsKey: PreferenceKey {
     static let defaultValue: Anchor<CGRect>? = nil
@@ -708,10 +692,6 @@ struct FloatingPlanPanelView: View {
                     }
                     .frame(width: width, height: height, alignment: .topLeading)
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                    .background {
-                        FloatingPlanCardShadow(cornerRadius: cornerRadius)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                    }
                 }
             }
             .padding(metrics.edgeInset)

@@ -171,7 +171,11 @@ struct DailyPlanTimeDraft: Equatable {
     // A stable identity for manually logged time that has no recurring plan.
     static let unassignedPlanID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
 
-    let date: Date
+    /// The edited civil day must not change if the Mac changes time zones.
+    let day: PlanDayKey
+    var date: Date {
+        Calendar.autoupdatingCurrent.date(from: DateComponents(year: day.year, month: day.month, day: day.day))!
+    }
     var entries: [DailyPlanTimeEntry]
 
     var totalSeconds: TimeInterval { entries.reduce(0) { $0 + $1.seconds } }

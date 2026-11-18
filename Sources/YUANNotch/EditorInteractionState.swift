@@ -599,7 +599,7 @@ struct EditorFocusBinder: NSViewRepresentable {
                   window.isKeyWindow,
                   NSApp.keyWindow === window,
                   window.firstResponder === textView,
-                  let action = NoteFontSizeShortcut.action(for: event) else { return false }
+                  let action = ContentFontSizeShortcut.action(for: event) else { return false }
             typography?.applyShortcut(action)
             return true
         }

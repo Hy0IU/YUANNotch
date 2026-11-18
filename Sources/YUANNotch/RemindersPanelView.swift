@@ -23,6 +23,7 @@ struct RemindersPanelView: View {
     @ObservedObject var composer: ReminderComposer
     let size: CGSize
     let onOpenSettings: () -> Void
+    var isDrawerExpanded = true
 
     @State private var hoveredItemID: String?
 
@@ -79,6 +80,9 @@ struct RemindersPanelView: View {
         }
         .frame(width: size.width, height: size.height, alignment: .top)
         .background(Self.panelBackground)
+        .background {
+            ReminderFontSizeKeyboard(settingsStore: settingsStore, isEnabled: isDrawerExpanded)
+        }
         .overlay {
             if store.editingDueDraft != nil {
                 ReminderDueEditor(store: store)
@@ -308,7 +312,7 @@ struct RemindersPanelView: View {
     private var draftField: some View {
         TextField(Self.draftPlaceholder, text: $composer.draft)
             .textFieldStyle(.plain)
-            .appText(.body)
+            .font(.system(size: typography.reminderFontSize))
             .foregroundStyle(.white.opacity(0.9))
             .fieldCaretFocus(request: draftFocusRequest, placeholder: Self.draftPlaceholder)
             .onSubmit(commit)
@@ -637,7 +641,7 @@ struct RemindersPanelView: View {
             // height is asked for explicitly, or the text is laid out against the
             // row's height and folds back onto one line.
             Text(item.title)
-                .appText(.body)
+                .font(.system(size: typography.reminderFontSize))
                 .foregroundStyle(.white.opacity(isCompleting ? 0.45 : (item.syncState == .idle ? 0.88 : 0.55)))
                 .strikethrough(isCompleting, pattern: .solid, color: .white.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
@@ -720,7 +724,7 @@ struct RemindersPanelView: View {
 
             TextField(Self.editPlaceholder, text: editDraftBinding)
                 .textFieldStyle(.plain)
-                .appText(.body)
+                .font(.system(size: typography.reminderFontSize))
                 .foregroundStyle(.white.opacity(0.9))
                 // Three ways to save, one pipeline: Return, the checkmark, and
                 // this — the field ending its editing session, whatever ended it.

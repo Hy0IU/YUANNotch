@@ -246,19 +246,8 @@ extension AppleRemindersService: ScheduleServing {
         from components: DateComponents,
         calendar: Calendar = .autoupdatingCurrent
     ) -> (date: Date, isAllDay: Bool)? {
-        guard components.year != nil, components.month != nil, components.day != nil else { return nil }
-        let isAllDay = components.hour == nil && components.minute == nil
-            && components.second == nil && components.nanosecond == nil
-        var dueCalendar = components.calendar ?? calendar
-        // A date-only reminder names a civil day, not midnight in a remote
-        // zone. Keep its Y/M/D in the viewing zone instead of shifting its day.
-        // Timed reminders honor an explicit zone; nil means the current zone.
-        dueCalendar.timeZone = isAllDay ? calendar.timeZone : (components.timeZone ?? calendar.timeZone)
-        var components = components
-        components.calendar = nil
-        components.timeZone = nil
-        guard let date = dueCalendar.date(from: components) else { return nil }
-        return (isAllDay ? calendar.startOfDay(for: date) : date, isAllDay)
+        guard let date = ReminderSnapshot.date(from: components, calendar: calendar) else { return nil }
+        return (date, ReminderSnapshot.isAllDay(components))
     }
 
     nonisolated static func occurrenceID(sourceID: String, itemID: String, occurrenceDate: Date) -> String {

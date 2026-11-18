@@ -153,8 +153,25 @@ final class AppSettingsStore: ObservableObject {
         }
     }
 
+    /// Reminder content keeps its size independently of notes and controls.
+    @Published var reminderFontSize: Double {
+        didSet {
+            let normalized = reminderFontSize.isFinite
+                ? AppTypography.normalizedNoteFontSize(reminderFontSize)
+                : AppTypography.defaultReminderFontSize
+            if reminderFontSize != normalized {
+                reminderFontSize = normalized
+            }
+            defaults.set(normalized, forKey: Self.reminderFontSizeKey)
+        }
+    }
+
     var typography: AppTypography {
-        AppTypography(interfaceSize: interfaceTextSize, noteFontSize: CGFloat(noteFontSize))
+        AppTypography(
+            interfaceSize: interfaceTextSize,
+            noteFontSize: CGFloat(noteFontSize),
+            reminderFontSize: CGFloat(reminderFontSize)
+        )
     }
 
     static let defaultExpandedTopCornerRadius: Double = 10
@@ -176,6 +193,7 @@ final class AppSettingsStore: ObservableObject {
     private static let reminderSortOrderKey = "yuanNotch.appleReminders.sortOrder"
     static let interfaceTextSizeKey = "yuanNotch.typography.interfaceSize"
     static let noteFontSizeKey = "yuanNotch.typography.noteFontSize"
+    static let reminderFontSizeKey = "yuanNotch.typography.reminderFontSize"
 
     private let defaults: UserDefaults
 
@@ -231,6 +249,11 @@ final class AppSettingsStore: ObservableObject {
         let storedNoteFontSize = (defaults.object(forKey: Self.noteFontSizeKey) as? NSNumber)?.doubleValue
             ?? AppTypography.defaultNoteFontSize
         noteFontSize = AppTypography.normalizedNoteFontSize(storedNoteFontSize)
+        let storedReminderFontSize = (defaults.object(forKey: Self.reminderFontSizeKey) as? NSNumber)?.doubleValue
+            ?? AppTypography.defaultReminderFontSize
+        reminderFontSize = storedReminderFontSize.isFinite
+            ? AppTypography.normalizedNoteFontSize(storedReminderFontSize)
+            : AppTypography.defaultReminderFontSize
     }
 
     private static func loadRadius(defaults: UserDefaults, forKey key: String, fallback: Double) -> Double {

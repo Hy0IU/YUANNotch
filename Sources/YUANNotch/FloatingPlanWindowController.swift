@@ -39,8 +39,7 @@ final class FloatingPlanWindowController: NSObject {
         panel.allowsKeyboardFocus = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        // A changing timer must not become part of AppKit's cached shadow mask.
-        panel.hasShadow = false
+        panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.level = .floating
         panel.isMovable = true
@@ -97,7 +96,7 @@ final class FloatingPlanWindowController: NSObject {
                 width: size.width, height: size.height
             )
         }
-        panel.setFrame(frame, display: true)
+        setFrame(frame)
         panel.orderFrontRegardless()
         presentation.isVisible = true
     }
@@ -121,7 +120,7 @@ final class FloatingPlanWindowController: NSObject {
         anchorsRight = panel.frame.midX >= (screen?.visibleFrame.midX ?? panel.frame.midX)
         let frame = resizedFrame(to: FloatingPlanMetrics.expandedSize)
         presentation.isExpanded = true
-        panel.setFrame(frame, display: true)
+        setFrame(frame)
     }
 
     /// A validated exit starts one uninterrupted contraction. Global button
@@ -161,7 +160,7 @@ final class FloatingPlanWindowController: NSObject {
         collapseTimer?.invalidate()
         collapseTimer = nil
         if wasCollapsing, presentation.isVisible, isExpanded {
-            panel.setFrame(collapseStartFrame, display: true)
+            setFrame(collapseStartFrame)
         }
     }
 
@@ -185,7 +184,7 @@ final class FloatingPlanWindowController: NSObject {
         let frame = FloatingPlanMetrics.collapseFrame(
             from: collapseStartFrame, to: collapseEndFrame, progress: progress
         )
-        panel.setFrame(frame, display: true)
+        setFrame(frame)
         if progress >= 1 {
             collapseTimer?.invalidate()
             collapseTimer = nil
@@ -241,6 +240,15 @@ final class FloatingPlanWindowController: NSObject {
             guard let self, !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
             self.pointerDidExit()
         }
+    }
+
+    private func setFrame(_ frame: NSRect) {
+        panel.setFrame(frame, display: true)
+        // Refresh the native mask only after SwiftUI has drawn the resized,
+        // opaque card silhouette, never from a stale timer/ring-only frame.
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+        panel.invalidateShadow()
     }
 
     private func resizedFrame(to size: CGSize) -> NSRect {

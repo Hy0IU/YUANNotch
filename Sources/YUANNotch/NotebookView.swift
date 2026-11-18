@@ -209,7 +209,8 @@ private struct NotebookViewContent: View {
                                 settingsStore: settingsStore,
                                 composer: reminderStore.composer,
                                 size: editorSize,
-                                onOpenSettings: onOpenSettings
+                                onOpenSettings: onOpenSettings,
+                                isDrawerExpanded: drawerState.isExpanded
                             )
                         case .schedule:
                             SchedulePanelView(

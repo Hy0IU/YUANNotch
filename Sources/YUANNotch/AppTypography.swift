@@ -71,9 +71,11 @@ enum AppTextStyle: Sendable {
 struct AppTypography: Equatable, Sendable {
     static let defaultNoteFontSize: Double = 15
     static let noteFontSizeRange: ClosedRange<Double> = 12...24
+    static let defaultReminderFontSize: Double = 13
 
     var interfaceSize: InterfaceTextSize = .standard
     var noteFontSize: CGFloat = CGFloat(defaultNoteFontSize)
+    var reminderFontSize: CGFloat = CGFloat(defaultReminderFontSize)
 
     func size(_ style: AppTextStyle) -> CGFloat {
         style.baseSize + interfaceSize.pointOffset
@@ -103,6 +105,38 @@ struct AppTypography: Equatable, Sendable {
     static func normalizedNoteFontSize(_ value: Double) -> Double {
         guard value.isFinite else { return defaultNoteFontSize }
         return min(max(value.rounded(), noteFontSizeRange.lowerBound), noteFontSizeRange.upperBound)
+    }
+}
+
+enum ContentFontSizeShortcut {
+    enum Action {
+        case decrease
+        case increase
+        case reset
+    }
+
+    static func action(for event: NSEvent) -> Action? {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers.contains(.command),
+              !modifiers.contains(.option),
+              !modifiers.contains(.control) else { return nil }
+
+        let shiftPressed = modifiers.contains(.shift)
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+
+        if shiftPressed {
+            // On US keyboards, the physical equals key produces '+' with
+            // Shift. Also accept '=' here for layouts that report the
+            // unshifted character through charactersIgnoringModifiers.
+            return (event.keyCode == 24 || key == "=" || key == "+") ? .increase : nil
+        }
+
+        switch key {
+        case "=", "+": return .increase
+        case "-": return .decrease
+        case "0": return .reset
+        default: return nil
+        }
     }
 }
 

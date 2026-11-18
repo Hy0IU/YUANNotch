@@ -110,7 +110,7 @@ struct NoteFontProbe {
                 timestamp: 0, windowNumber: 0, context: nil, characters: key,
                 charactersIgnoringModifiers: key, isARepeat: false, keyCode: code)!
             let actual: String
-            switch NoteFontSizeShortcut.action(for: event) {
+            switch ContentFontSizeShortcut.action(for: event) {
             case .increase?: actual = "increase"
             case .decrease?: actual = "decrease"
             case .reset?: actual = "reset"

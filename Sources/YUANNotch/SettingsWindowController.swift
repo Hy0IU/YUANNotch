@@ -385,6 +385,15 @@ private struct AppearanceSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
 
+                ValueSliderRow(
+                    title: "Reminder text size:",
+                    value: $settingsStore.reminderFontSize,
+                    range: AppTypography.noteFontSizeRange,
+                    step: 1,
+                    unit: "pt",
+                    decimals: 0
+                )
+
                 LabeledContent("Interface preview") {
                     Text("Settings and controls")
                         .appText(.body)
@@ -395,13 +404,13 @@ private struct AppearanceSettingsView: View {
                         .font(.system(size: settingsStore.typography.noteFontSize))
                 }
 
-                Text("Note shortcuts: ⌘+ / ⌘− / ⌘0")
+                Text("Note and reminder shortcuts: ⌘+ / ⌘− / ⌘0")
                     .appText(.secondary)
             } header: {
                 Text("Text")
                     .appText(.sectionTitle)
             } footer: {
-                Text("Changes apply immediately. Note text size is independent of interface text size.")
+                Text("Changes apply immediately. Notes and reminders have independent content sizes; controls use interface text size.")
                     .appText(.secondary)
             }
         }

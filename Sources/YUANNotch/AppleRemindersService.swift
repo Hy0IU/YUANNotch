@@ -557,17 +557,20 @@ extension ReminderSnapshot {
     static func isAllDay(_ components: DateComponents?) -> Bool {
         guard let components else { return false }
         return components.hour == nil && components.minute == nil
+            && components.second == nil && components.nanosecond == nil
     }
 
-    /// `EKReminder` carries `dueDateComponents`, not a `Date`. Components
-    /// written by other clients may have no time zone, in which case they are
-    /// interpreted in the current one — the same rule used when writing.
-    static func date(from components: DateComponents?) -> Date? {
-        guard let components else { return nil }
-        var calendar = Calendar.current
-        if let timeZone = components.timeZone {
-            calendar.timeZone = timeZone
-        }
-        return calendar.date(from: components)
+    /// Date-only values name a civil day in the viewing zone. Timed values
+    /// honor an explicit zone; otherwise their clock floats in the viewing zone.
+    static func date(from components: DateComponents?, calendar: Calendar = .autoupdatingCurrent) -> Date? {
+        guard var components, components.year != nil, components.month != nil, components.day != nil else { return nil }
+        let allDay = isAllDay(components)
+        var dueCalendar = components.calendar ?? calendar
+        dueCalendar.timeZone = allDay ? calendar.timeZone : (components.timeZone ?? calendar.timeZone)
+        // Do not let embedded Calendar/TimeZone values override the projection.
+        components.calendar = nil
+        components.timeZone = nil
+        guard let date = dueCalendar.date(from: components) else { return nil }
+        return allDay ? calendar.startOfDay(for: date) : date
     }
 }
