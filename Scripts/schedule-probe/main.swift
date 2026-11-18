@@ -183,11 +183,34 @@ private struct ScheduleProbe {
             }
         }
         let navigationSize = CGSize(width: 520, height: 370)
-        let navigationHost = makeHost(
-            SchedulePanelView(store: displayStore, size: navigationSize, isDrawerExpanded: true, onOpenSettings: {}),
-            size: navigationSize
-        )
-        await settle(navigationHost)
+        let navigationHost = makeHost(Color.clear, size: navigationSize)
+        let schedule = AnyView(SchedulePanelView(
+            store: displayStore, size: navigationSize, isDrawerExpanded: true, onOpenSettings: {}
+        ).preferredColorScheme(.dark))
+        for visit in 1...2 {
+            navigationHost.rootView = schedule
+            navigationHost.layoutSubtreeIfNeeded()
+            try render(navigationHost, at: output.appendingPathComponent("schedule-entry-\(visit)-first.png"))
+            guard let scroll = horizontalScrollView(in: navigationHost), let document = scroll.documentView else {
+                preconditionFailure("The first Schedule frame must contain its day strip")
+            }
+            let initialX = scroll.contentView.bounds.minX
+            let centeredX = (document.bounds.width - scroll.contentView.bounds.width) / 2
+            precondition(abs(initialX - centeredX) < 1,
+                         "Visit \(visit) starts at \(initialX), not today's center \(centeredX)")
+            await settle(navigationHost)
+            precondition(abs(scroll.contentView.bounds.minX - initialX) < 1,
+                         "Visit \(visit) moved after its first frame")
+            if visit == 1 {
+                scroll.contentView.scroll(to: CGPoint(x: initialX + 450, y: 0))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                await settle(navigationHost)
+                navigationHost.rootView = AnyView(Color.clear)
+                navigationHost.layoutSubtreeIfNeeded()
+                await settle(navigationHost)
+            }
+        }
+        print("PASS both Schedule visits show today centered in the first rendered frame without a later jump")
         try render(navigationHost, at: output.appendingPathComponent("schedule-refresh-before.png"))
         let manualRefresh = Task { await displayStore.refreshManually() }
         try await Task.sleep(for: .milliseconds(120))

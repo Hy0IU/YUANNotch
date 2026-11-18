@@ -15,7 +15,7 @@ struct SchedulePanelView: View {
     @State private var showsSources = false
     @State private var firstDayOffset = -30
     @State private var lastDayOffset = 30
-    @State private var hasPositioned = false
+    @State private var isPrependingDays = false
 
     private static let background = Color(red: 0.06, green: 0.06, blue: 0.07)
 
@@ -45,10 +45,6 @@ struct SchedulePanelView: View {
             .onAppear {
                 isMounted = true
                 store.setVisible(isDrawerExpanded)
-                DispatchQueue.main.async {
-                    proxy.scrollTo(focusedDay ?? today, anchor: .center)
-                    DispatchQueue.main.async { hasPositioned = true }
-                }
             }
             .onChange(of: focusedDay) { _, day in
                 guard let day else { return }
@@ -57,11 +53,11 @@ struct SchedulePanelView: View {
                 if offset <= firstDayOffset + 8 {
                     // Prepending changes document coordinates; preserve the
                     // visible date before accepting its new measured position.
-                    hasPositioned = false
+                    isPrependingDays = true
                     firstDayOffset -= 30
                     DispatchQueue.main.async {
                         proxy.scrollTo(day, anchor: .center)
-                        DispatchQueue.main.async { hasPositioned = true }
+                        DispatchQueue.main.async { isPrependingDays = false }
                     }
                 }
             }
@@ -279,13 +275,16 @@ struct SchedulePanelView: View {
             .padding(.horizontal, max(12, (size.width - columnWidth) / 2))
             .padding(.vertical, 10)
         }
+        // The initial date window is symmetric around today. Anchor it
+        // during layout so no earlier date is drawn before today appears.
+        .defaultScrollAnchor(.center)
         .coordinateSpace(name: "scheduleViewport")
         .onPreferenceChange(ScheduleDayPositionPreference.self) { positions in
             guard let nearest = positions.min(by: {
                 abs($0.value - size.width / 2) < abs($1.value - size.width / 2)
             })?.key else { return }
             Task { @MainActor in
-                guard hasPositioned, focusedDay != nearest else { return }
+                guard !isPrependingDays, focusedDay != nearest else { return }
                 focusedDay = nearest
             }
         }
