@@ -1021,7 +1021,7 @@ private struct AboutSettingsView: View {
     /// `APP_VERSION` default, which is the source of truth the packaged app is
     /// stamped from; bump the two together.
     private var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.2"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
     }
 
     var body: some View {
