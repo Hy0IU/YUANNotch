@@ -144,6 +144,9 @@ final class DrawerFileDropHostingView<Content: View>: FirstMouseHostingView<Cont
     /// it did not originate from the shelf itself). Internal shelf-item
     /// drags keep flowing to their own reorder targets.
     var isFileDragActive: (() -> Bool)?
+    /// Unlike the hit-test predicate this stays valid after mouse-up, when
+    /// AppKit asks the destination to perform the drop.
+    var canAcceptFileDrop: (() -> Bool)?
     var onFileDragTargeted: ((Bool) -> Void)?
     var onFilesDropped: (([URL]) -> Bool)?
 
@@ -205,12 +208,12 @@ final class DrawerFileDropHostingView<Content: View>: FirstMouseHostingView<Cont
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let urls = FileDropPasteboardReader.fileURLs(from: sender.draggingPasteboard)
         FileDragDiagnostics.log("drawer performDragOperation urls=\(urls.count)")
-        guard !urls.isEmpty else { return false }
+        guard canAcceptFileDrop?() == true, !urls.isEmpty else { return false }
         return onFilesDropped?(urls) ?? false
     }
 
     private func supportsFileURLs(_ pasteboard: NSPasteboard) -> Bool {
-        pasteboard.availableType(from: [.fileURL]) != nil
+        canAcceptFileDrop?() == true && pasteboard.availableType(from: [.fileURL]) != nil
     }
 
     private func setFileDragTargeted(_ isTargeted: Bool) {

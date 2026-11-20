@@ -411,12 +411,11 @@ final class EditorInteractionState: ObservableObject {
     }
 
     private func refreshTextView(searchingIn rootView: NSView?) {
-        guard let rootView,
-              let freshTextView = rootView.firstDescendant(ofType: NSTextView.self) else {
-            return
-        }
-
-        textView = freshTextView
+        guard let rootView else { return }
+        // A drawer may contain the assistant's prompt or a reminder field.
+        // Neither is the note: selection restoration, delayed focus and resize
+        // refreshes must only ever operate on an editor bound by the notebook.
+        textView = rootView.firstDescendant(ofType: EditorFocusBinder.Anchor.self)?.textView
     }
 
     private func resetDragState() {
@@ -443,14 +442,18 @@ struct EditorFocusBinder: NSViewRepresentable {
     let typography: NoteEditorTypographyState
     let documentId: String
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
+    final class Anchor: NSView {
+        weak var textView: NSTextView?
+    }
+
+    func makeNSView(context: Context) -> Anchor {
+        let view = Anchor(frame: .zero)
         typography.prepareForDocument(documentId)
         context.coordinator.bind(from: view, state: state, typography: typography, documentId: documentId)
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
+    func updateNSView(_ view: Anchor, context: Context) {
         typography.prepareForDocument(documentId)
         context.coordinator.bind(from: view, state: state, typography: typography, documentId: documentId)
     }
@@ -459,7 +462,8 @@ struct EditorFocusBinder: NSViewRepresentable {
         Coordinator()
     }
 
-    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+    static func dismantleNSView(_ nsView: Anchor, coordinator: Coordinator) {
+        nsView.textView = nil
         coordinator.unbind()
     }
 
@@ -475,7 +479,7 @@ struct EditorFocusBinder: NSViewRepresentable {
         private var bindGeneration = 0
         private var isActive = true
 
-        func bind(from view: NSView, state: EditorInteractionState, typography: NoteEditorTypographyState, documentId: String) {
+        func bind(from view: Anchor, state: EditorInteractionState, typography: NoteEditorTypographyState, documentId: String) {
             isActive = true
             bindGeneration += 1
             let generation = bindGeneration
@@ -488,6 +492,7 @@ struct EditorFocusBinder: NSViewRepresentable {
                 let textView = container?.firstDescendant(ofType: NSTextView.self)
                     ?? view.firstAncestorDescendant(ofType: NSTextView.self)
                 guard let textView else { return }
+                view.textView = textView
 
                 if self.boundTextView !== textView {
                     self.unbind()

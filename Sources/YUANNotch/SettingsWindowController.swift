@@ -11,6 +11,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let noteStore: NoteStore
     private let onCheckForUpdates: () -> Void
     private let launchAtLoginManager = LaunchAtLoginManager()
+    private let navigation = SettingsNavigation()
 
     init(
         settingsStore: AppSettingsStore,
@@ -53,7 +54,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 notesLibrary: notesLibrary,
                 noteStore: noteStore,
                 launchAtLoginManager: launchAtLoginManager,
-                onCheckForUpdates: onCheckForUpdates
+                onCheckForUpdates: onCheckForUpdates,
+                navigation: navigation
             )
         )
     }
@@ -62,7 +64,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) is not supported")
     }
 
-    func show() {
+    func show(assistant: Bool) {
+        if assistant { navigation.selection = .assistant }
         guard let window else { return }
 
         // Re-assert regular window semantics: the notch panels live at
@@ -123,6 +126,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case notes
     case fileShelf
     case integrations
+    case assistant
     case about
 
     var id: String { rawValue }
@@ -135,6 +139,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .notes: return "Notes"
         case .fileShelf: return "File Shelf"
         case .integrations: return "Integrations"
+        case .assistant: return "AI Assistant"
         case .about: return "About"
         }
     }
@@ -147,6 +152,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .notes: return "doc.text"
         case .fileShelf: return "tray.full"
         case .integrations: return "checklist"
+        case .assistant: return "sparkles"
         case .about: return "info.circle"
         }
     }
@@ -159,12 +165,18 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .notes: return .teal
         case .fileShelf: return .orange
         case .integrations: return .green
+        case .assistant: return .cyan
         case .about: return .gray
         }
     }
 }
 
-struct SettingsView: View {
+@MainActor
+private final class SettingsNavigation: ObservableObject {
+    @Published var selection: SettingsTab = .appearance
+}
+
+private struct SettingsView: View {
     @ObservedObject var settingsStore: AppSettingsStore
     @ObservedObject var reminderStore: ReminderStore
     @ObservedObject var scheduleStore: ScheduleStore
@@ -172,11 +184,11 @@ struct SettingsView: View {
     let noteStore: NoteStore
     @ObservedObject var launchAtLoginManager: LaunchAtLoginManager
     let onCheckForUpdates: () -> Void
-    @State private var selection: SettingsTab = .appearance
+    @ObservedObject var navigation: SettingsNavigation
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selection) {
+            List(selection: $navigation.selection) {
                 ForEach(SettingsTab.allCases) { tab in
                     NavigationLink(value: tab) {
                         sidebarRow(for: tab)
@@ -187,7 +199,7 @@ struct SettingsView: View {
             .toolbar(removing: .sidebarToggle)
             .navigationSplitViewColumnWidth(min: 180, ideal: 190, max: 220)
         } detail: {
-            detailView(for: selection)
+            detailView(for: navigation.selection)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationSplitViewStyle(.balanced)
@@ -245,6 +257,8 @@ struct SettingsView: View {
                 settingsStore: settingsStore, reminderStore: reminderStore,
                 scheduleStore: scheduleStore
             )
+        case .assistant:
+            AssistantSettingsView()
         case .about:
             AboutSettingsView(onCheckForUpdates: onCheckForUpdates)
         }

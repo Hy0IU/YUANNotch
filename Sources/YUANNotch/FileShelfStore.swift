@@ -7,6 +7,8 @@ final class NotebookWorkspaceState: ObservableObject {
     @Published var isDraggingShelfItem = false
     @Published var isPreviewingShelfItem = false
     @Published var isFileShelfCollapsed = false
+    /// Presentation only; opening the assistant never writes the selected drawer mode.
+    @Published var isAssistantPresented = false
     /// Set while an external file drag is in progress.
     ///
     /// The drawer has to show the notes surface then — the file shelf lives
@@ -20,6 +22,10 @@ final class NotebookWorkspaceState: ObservableObject {
     /// accepted rather than here: the user has just used the notes side, so the
     /// mode is changed for real at that point.
     @Published var fileDragForcesNotesMode = false
+
+    /// A file drag that opens the compact notch can still borrow Notes. If it
+    /// is cancelled the assistant (including its draft) becomes visible again.
+    var showsAssistant: Bool { isAssistantPresented && !fileDragForcesNotesMode }
 
     /// The surface the drawer should show after session-scoped overrides.
     ///
@@ -44,6 +50,7 @@ final class NotebookWorkspaceState: ObservableObject {
     /// host view and the notebook's SwiftUI target — and a rule written twice is
     /// a rule that drifts.
     func commitLandedFileDrop(to drawerMode: inout DrawerMode) {
+        isAssistantPresented = false
         fileDragForcesNotesMode = false
         drawerMode = .notes
     }

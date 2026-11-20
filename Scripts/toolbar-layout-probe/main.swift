@@ -22,8 +22,8 @@ import SwiftUI
 //      dot — so a row can always show at least one tab and can never overrun.
 //   2. rendered (real views): the strip's own NSView is exactly as wide as
 //      NotebookToolbarLayout says — a squeeze would make it narrower — it sits
-//      where the pager's chrome puts it, and the pager, the mode toggle, "Clear"
-//      and the settings button do not intersect one another at any tab count.
+//      where the pager's chrome puts it, and the pager, the mode toggle, "Clear",
+//      the assistant and the settings button do not intersect at any tab count.
 //   3. rendered: at every interface text size, the widths NotebookToolbarLayout
 //      reserves for the mode toggle cover every labelled and icon-only selection.
 //   4. the wheel: one notch slides the strip exactly one dot, the ends clamp, and
@@ -294,8 +294,8 @@ private func checkArithmetic() {
             : firstBad
     )
 
-    // Non-notes surfaces have no pager and no "Clear": the toggle and settings
-    // button must fit, falling back to icons if a future label grows too wide.
+    // Non-notes surfaces have no pager and no "Clear": the toggle and both
+    // global buttons must fit, falling back to icons if labels grow too wide.
     var standaloneBad = ""
     for interfaceSize in interfaceSizes {
         let typography = AppTypography(interfaceSize: interfaceSize)
@@ -307,10 +307,9 @@ private func checkArithmetic() {
                     : NotebookToolbarLayout.modeToggleIconWidth
                 let total = NotebookToolbarLayout.itemSpacing
                     + toggle
-                    + NotebookToolbarLayout.itemSpacing
-                    + NotebookToolbarLayout.iconButton
+                    + 2 * (NotebookToolbarLayout.itemSpacing + NotebookToolbarLayout.iconButton)
                 if total > drawer.width + 0.001 {
-                    standaloneBad = "\(interfaceSize.title), \(drawer.label), \(mode.title): toggle + settings = \(fmt(total)) of \(fmt(drawer.width))"
+                    standaloneBad = "\(interfaceSize.title), \(drawer.label), \(mode.title): toggle + assistant + settings = \(fmt(total)) of \(fmt(drawer.width))"
                 }
             }
         }
@@ -319,7 +318,7 @@ private func checkArithmetic() {
         "standalone mode rows fit every drawer width",
         standaloneBad.isEmpty,
         standaloneBad.isEmpty
-            ? "3 interface sizes x 6 drawer cases x 3 modes: toggle and settings stay inside the row"
+            ? "3 interface sizes x 6 drawer cases x 3 modes: toggle, assistant and settings stay inside the row"
             : standaloneBad
     )
 }
@@ -354,6 +353,8 @@ private func checkRenderedRow() {
                     workspaceState: workspace,
                     editorInteractionState: interaction,
                     layout: layout,
+                    focusAssistantOnAppear: false,
+                    onOpenAssistant: {},
                     onOpenSettings: {}
                 ),
                 width: drawer.width
@@ -414,7 +415,7 @@ private func checkRenderedRow() {
             }
 
             // Nothing drawn in the row may sit on anything else.
-            let parts = ["pager", "modeToggle", "clear", "settings"].compactMap { name -> (String, CGRect)? in
+            let parts = ["pager", "modeToggle", "clear", "assistant", "settings"].compactMap { name -> (String, CGRect)? in
                 frames[name].map { (name, $0) }
             }
             for i in parts.indices {
@@ -454,12 +455,12 @@ private func checkRenderedRow() {
             if frames["pager"] != nil || frames["clear"] != nil {
                 badOverlap = "\(drawer.label), \(mode.title): a notes-only control was rendered"
             }
-            guard let toggle = frames["modeToggle"], let settings = frames["settings"] else {
-                badOverlap = "\(drawer.label), \(mode.title): toggle or settings is missing"
+            guard let toggle = frames["modeToggle"], let assistant = frames["assistant"], let settings = frames["settings"] else {
+                badOverlap = "\(drawer.label), \(mode.title): toggle, assistant or settings is missing"
                 continue
             }
-            let hit = toggle.intersection(settings)
-            if (!hit.isNull && hit.width > 0.5) || settings.maxX > drawer.width + 0.5 {
+            if toggle.minX < -0.5 || toggle.maxX > assistant.minX + 0.5
+                || assistant.maxX > settings.minX + 0.5 || settings.maxX > drawer.width + 0.5 {
                 badOverlap = "\(drawer.label), \(mode.title): standalone controls overlap or leave the row"
             }
         }
@@ -512,6 +513,7 @@ private struct ProbeRow: View {
             if layout.isNotesMode {
                 Measured(name: "clear") { ProbeIconButton(systemName: "trash") }
             }
+            Measured(name: "assistant") { ProbeIconButton(systemName: "sparkles") }
             Measured(name: "settings") { ProbeIconButton(systemName: "gearshape") }
         }
         .frame(height: DrawerMetrics.toolbarHeight, alignment: .center)
@@ -552,6 +554,8 @@ private func checkTypographyRows() {
                             workspaceState: workspace,
                             editorInteractionState: interaction,
                             layout: layout,
+                            focusAssistantOnAppear: false,
+                            onOpenAssistant: {},
                             onOpenSettings: {}
                         ),
                         width: drawer.width,
@@ -578,7 +582,7 @@ private func checkTypographyRows() {
                         }
                     }
 
-                    let parts = ["pager", "modeToggle", "clear", "settings"].compactMap { name -> (String, CGRect)? in
+                    let parts = ["pager", "modeToggle", "clear", "assistant", "settings"].compactMap { name -> (String, CGRect)? in
                         frames[name].map { (name, $0) }
                     }
                     for i in parts.indices {

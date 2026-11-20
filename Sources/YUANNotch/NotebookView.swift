@@ -68,6 +68,7 @@ private struct NotebookViewContent: View {
     let layout: NotchLayout
     let onOpenSettings: () -> Void
     let onToggleFloatingPlan: () -> Void
+    @State private var restoreAssistantFocus = false
 
     /// The drawer's effective mode. A file drag temporarily borrows Notes
     /// without replacing the user's persisted choice.
@@ -76,8 +77,12 @@ private struct NotebookViewContent: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            drawer
+        Group {
+            if workspaceState.showsAssistant {
+                drawer
+            } else {
+                drawerWithFileDrop
+            }
         }
         // Fill the panel and center the drawer inside it, so the collapse
         // animation always converges to the panel's center even if the panel
@@ -89,17 +94,12 @@ private struct NotebookViewContent: View {
                 transaction.disablesAnimations = true
             }
         }
-        // The drop action and the reveal signal both live here — this is the
-        // only path AppKit actually delivers file drags to (its drag
-        // destination resolution does not honour a hitTest override on the
-        // hosting view, so an NSView-level claim never fires).
-        //
-        // Targeting is deliberately *reveal-only*: `false` does not retract
-        // the shelf. SwiftUI reports `false` for every moment the drag is
-        // over the editor, whose NSTextView accepts file drops itself, and
-        // retracting on it made the shelf bounce up and down. The retract
-        // happens in the controller once the drag session has really ended.
-        .dropDestination(for: URL.self) { urls, _ in
+    }
+
+    private var drawerWithFileDrop: some View {
+        // Keep the full drawer a file destination while showing notebook modes;
+        // don't even advertise a shelf drop while showing the assistant.
+        drawer.dropDestination(for: URL.self) { urls, _ in
             FileDragDiagnostics.log(
                 """
                 dropDestination action urls=\(urls.count) \
@@ -111,9 +111,8 @@ private struct NotebookViewContent: View {
                 workspaceState.isShelfDropTargeted = false
                 return false
             }
-            // G1: the shelf only exists on the notes surface, so a drop while
-            // the drawer shows reminders is refused rather than swallowed.
-            guard effectiveMode == .notes else {
+            // The assistant never turns a pasted or dropped URL into a shelf item.
+            guard !workspaceState.showsAssistant, effectiveMode == .notes else {
                 workspaceState.isShelfDropTargeted = false
                 return false
             }
@@ -189,6 +188,41 @@ private struct NotebookViewContent: View {
     }
 
     private var expandedContent: some View {
+        Group {
+            if workspaceState.showsAssistant {
+                // Only the visible display should mount an input that requests focus.
+                if drawerState.isExpanded {
+                    AssistantPanelView(
+                        scheduleStore: scheduleStore,
+                        dailyPlanStore: dailyPlanStore,
+                        onBack: closeAssistant,
+                        onOpenSettings: onOpenSettings
+                    )
+                    .onExitCommand(perform: closeAssistant)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
+            } else {
+                notebookContent
+            }
+        }
+        .padding(.top, toolbarTopPadding)
+        .padding(.horizontal, contentHorizontalPadding)
+        .padding(.bottom, contentBottomPadding)
+    }
+
+    private func openAssistant() {
+        restoreAssistantFocus = false
+        workspaceState.isShelfDropTargeted = false
+        workspaceState.fileDragForcesNotesMode = false
+        workspaceState.isAssistantPresented = true
+    }
+
+    private func closeAssistant() {
+        restoreAssistantFocus = true
+        workspaceState.isAssistantPresented = false
+    }
+
+    private var notebookContent: some View {
         ZStack(alignment: .topTrailing) {
             VStack(spacing: 12) {
                 NotebookToolbar(
@@ -197,6 +231,8 @@ private struct NotebookViewContent: View {
                     workspaceState: workspaceState,
                     editorInteractionState: editorInteractionState,
                     layout: toolbarLayout,
+                    focusAssistantOnAppear: restoreAssistantFocus && drawerState.isExpanded,
+                    onOpenAssistant: openAssistant,
                     onOpenSettings: onOpenSettings
                 )
 
@@ -264,9 +300,6 @@ private struct NotebookViewContent: View {
                 .animation(shelfAnimation, value: isFileShelfVisible)
             }
         }
-        .padding(.top, toolbarTopPadding)
-        .padding(.horizontal, contentHorizontalPadding)
-        .padding(.bottom, contentBottomPadding)
         .onAppear {
             editorInteractionState.onSelectionChange = { [weak store] range in
                 guard let store else { return }

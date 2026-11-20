@@ -644,14 +644,17 @@ final class NotchPanelController: NSObject {
         // Claim external file drags only when the shelf can actually accept
         // them, and never claim drags that originate from the shelf itself
         // (dragging chips out writes file URLs to the drag pasteboard too).
-        host.isFileDragActive = { [weak self] in
+        host.canAcceptFileDrop = { [weak self] in
             guard let self else { return false }
             return self.settingsStore.isFileShelfEnabled
-                && self.isFileDragInProgress()
+                && !self.workspaceState.showsAssistant
                 && !self.workspaceState.isDraggingShelfItem
         }
+        host.isFileDragActive = { [weak host, weak self] in
+            host?.canAcceptFileDrop?() == true && self?.isFileDragInProgress() == true
+        }
         host.onFileDragTargeted = { [weak self] targeted in
-            guard let self, targeted else { return }
+            guard let self, targeted, !self.workspaceState.showsAssistant else { return }
             // Reveal-only, for the same reason as the SwiftUI callback: the
             // show/hide decision must not flap with the cursor position.
             FileDragDiagnostics.log("drawer drag entered -> reveal shelf")
@@ -675,7 +678,8 @@ final class NotchPanelController: NSObject {
         // surface. During an external drag the session override has already
         // forced that surface, so this only rejects drops made while the user
         // is deliberately looking at another surface.
-        guard workspaceState.effectiveMode(persistedMode: settingsStore.drawerMode) == .notes else {
+        guard settingsStore.isFileShelfEnabled, !workspaceState.showsAssistant,
+              workspaceState.effectiveMode(persistedMode: settingsStore.drawerMode) == .notes else {
             FileDragDiagnostics.log("panel receiveDroppedFiles rejected: non-notes surface")
             return false
         }
@@ -684,7 +688,7 @@ final class NotchPanelController: NSObject {
         FileDragDiagnostics.log(
             "panel receiveDroppedFiles accepted=\(accepted) items=\(fileShelfStore.items.count)"
         )
-        guard settingsStore.isFileShelfEnabled, accepted else { return false }
+        guard accepted else { return false }
 
         // A drop that landed is the user saying which surface they are working
         // on: they have just put a file into a shelf that only exists on the
@@ -868,7 +872,10 @@ final class NotchPanelController: NSObject {
     /// grace period so travelling from the notch down to the shelf does not
     /// blink it, while parking the drag over the editor does dismiss it.
     private func updateShelfReveal(at now: TimeInterval) {
-        guard !workspaceState.isPreviewingShelfItem else { return }
+        // Do not let a drag elsewhere on the desktop replace the assistant or
+        // reveal a hidden shelf underneath it. A compact-notch drag has its own
+        // explicit Notes override in expand(animated:).
+        guard !workspaceState.showsAssistant, !workspaceState.isPreviewingShelfItem else { return }
 
         let isFileDrag = settingsStore.isFileShelfEnabled && isFileDragInProgress()
         if isFileDrag,
@@ -946,13 +953,14 @@ final class NotchPanelController: NSObject {
     /// drop callback — never while the compact panel is still the active
     /// drag destination.
     private func finishFileDragRevealIfNeeded() {
+        // Leaving the compact panel is not the end of a drag: the expanded
+        // shelf must remain the drop target until the mouse is actually up.
+        // A cancelled drag returns to the assistant or the user's chosen mode.
+        if workspaceState.fileDragForcesNotesMode, !isFileDragInProgress() {
+            workspaceState.fileDragForcesNotesMode = false
+        }
         guard isRevealedForFileDrag else { return }
         isRevealedForFileDrag = false
-        // G3: the drag is over, so the session override goes away and the
-        // drawer shows the persisted mode. After a drop that landed that mode
-        // is already notes — `receiveDroppedFiles` changed it; after a
-        // cancelled drag it is whatever the user had chosen.
-        workspaceState.fileDragForcesNotesMode = false
         guard isExpanded else { return }
         FileDragDiagnostics.log("file-drag reveal finished: compact panel stands down")
         hotPanelForScreen(drawerScreen)?.orderOut(nil)
@@ -1595,11 +1603,12 @@ final class NotchPanelController: NSObject {
     }
 
     func openSettings() {
+        let fromAssistant = isExpanded && workspaceState.showsAssistant
         cancelCollapse()
         if isExpanded {
             collapse(animated: true)
         }
-        settingsWindowController.show()
+        settingsWindowController.show(assistant: fromAssistant)
     }
 
     private func hotFrame(for layout: NotchLayout, screen: NSScreen?) -> NSRect {

@@ -15,7 +15,11 @@ struct NotebookToolbar: View {
     @ObservedObject var workspaceState: NotebookWorkspaceState
     let editorInteractionState: EditorInteractionState
     let layout: NotebookToolbarLayout
+    let focusAssistantOnAppear: Bool
+    let onOpenAssistant: () -> Void
     let onOpenSettings: () -> Void
+    @FocusState private var assistantFocused: Bool
+    @AccessibilityFocusState private var assistantAccessibilityFocused: Bool
 
     var body: some View {
         HStack(alignment: .center, spacing: NotebookToolbarLayout.itemSpacing) {
@@ -50,6 +54,22 @@ struct NotebookToolbar: View {
                 }
                 .buttonStyle(DarkIconButtonStyle())
                 .help("Clear")
+            }
+
+            Button(action: onOpenAssistant) {
+                Image(systemName: "sparkles")
+                    .frame(width: NotebookToolbarLayout.iconButton, height: NotebookToolbarLayout.iconButton)
+            }
+            .buttonStyle(DarkIconButtonStyle())
+            .help("Planning Assistant")
+            .accessibilityLabel("Planning Assistant")
+            .focused($assistantFocused)
+            .accessibilityFocused($assistantAccessibilityFocused)
+            .onAppear {
+                if focusAssistantOnAppear {
+                    assistantFocused = true
+                    assistantAccessibilityFocused = true
+                }
             }
 
             Button(action: onOpenSettings) {

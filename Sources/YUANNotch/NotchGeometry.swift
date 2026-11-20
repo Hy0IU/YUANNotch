@@ -269,7 +269,7 @@ struct NotebookToolbarLayout: Equatable {
         )
         var reserve = itemSpacing + toggle
         if showsClearButton { reserve += itemSpacing + iconButton }
-        reserve += itemSpacing + iconButton
+        reserve += 2 * (itemSpacing + iconButton) // Assistant and Settings
         return reserve + pagerTrailingGap
     }
 
@@ -284,7 +284,7 @@ struct NotebookToolbarLayout: Equatable {
     }
 
     private static func standaloneWidthWithLabels(typography: AppTypography) -> CGFloat {
-        itemSpacing + labelledModeToggleWidth(for: typography) + itemSpacing + iconButton
+        itemSpacing + labelledModeToggleWidth(for: typography) + 2 * (itemSpacing + iconButton)
     }
 
     /// Width of the dot row when nothing constrains it.
